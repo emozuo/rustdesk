@@ -2095,6 +2095,11 @@ dependencies = [
 [[package]]
 name = "ddpro-dec"
 version = "0.1.0"
+dependencies = [
+ "bindgen 0.72.1",
+ "ddpro-media",
+ "hwcodec",
+]
 
 [[package]]
 name = "ddpro-enc"

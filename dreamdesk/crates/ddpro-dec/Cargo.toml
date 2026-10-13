@@ -4,4 +4,15 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
-[dependencies]
+# 解码复用 RustDesk 已经带着的 FFmpeg（vcpkg 编的 7.1.1，含 HEVC 解码和 VAAPI 硬件加速），不新增依赖：
+# - 链接由 hwcodec 提供，和 RustDesk 的硬件编解码同一份 FFmpeg，这里不再自己链接一次；
+# - libva 由 FFmpeg 在运行时加载（RustDesk 给 FFmpeg 打的 dlopen 补丁），函数表从设备上下文里取，不直接链接 libva；
+# - 接口绑定在编译时按头文件生成（和 hwcodec 一样要求 libclang），FFmpeg 升级时绑定跟着变，不会对不上。
+[target.'cfg(target_os = "linux")'.dependencies]
+hwcodec = { git = "https://github.com/rustdesk-org/hwcodec" }
+
+[target.'cfg(target_os = "linux")'.build-dependencies]
+bindgen = "0.72"
+
+[dev-dependencies]
+ddpro-media = { path = "../ddpro-media" }
