@@ -71,7 +71,11 @@ pub fn on_message(data: &[u8]) -> Option<Message> {
     wrap(answer.reply)
 }
 
-/// 本机此刻能编的格式。编码器探测在第 3 步接入，在那之前如实报「未探测」。
+/// 本机此刻能编的格式。做不到时把原因写日志（被控端这边看得到为什么），能力里如实报「没有」。
 fn encode_caps() -> FormatCaps {
-    FormatCaps::default()
+    let (caps, why) = ddpro::encoder_caps();
+    if let Some(why) = why {
+        throttled_log!(PEER_LOG_INTERVAL, warn, "ddpro: pro encoding unavailable here: {why}");
+    }
+    caps
 }

@@ -2099,6 +2099,10 @@ version = "0.1.0"
 [[package]]
 name = "ddpro-enc"
 version = "0.1.0"
+dependencies = [
+ "scrap",
+ "windows 0.61.1",
+]
 
 [[package]]
 name = "ddpro-media"

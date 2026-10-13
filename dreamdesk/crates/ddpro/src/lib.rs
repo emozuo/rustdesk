@@ -91,6 +91,21 @@ pub fn answer_hello(hello: &Hello, encode: &FormatCaps) -> Answer {
         ));
     }
 
+    let supports = |caps: &FormatCaps, (chroma, depth): (Chroma, u32)| {
+        caps.formats
+            .iter()
+            .any(|f| f.chroma.enum_value() == Ok(chroma) && f.bit_depth == depth)
+    };
+    // 已经探测过、明确做不到的一方先判：不必等另一方探测完才拒绝
+    for (side, caps) in [("encoder", encode), ("decoder", &*hello.decode)] {
+        if caps.checked && !PRO_PREFERENCE.into_iter().any(|want| supports(caps, want)) {
+            return answer(reject(
+                reject::Reason::NO_COMMON_FORMAT,
+                format!("the {side} cannot do 4:4:4 (has: {})", describe_caps(caps)),
+            ));
+        }
+    }
+
     let unchecked: Vec<&'static str> = [
         (!encode.checked).then_some("encoder"),
         (!hello.decode.checked).then_some("decoder"),
@@ -106,11 +121,6 @@ pub fn answer_hello(hello: &Hello, encode: &FormatCaps) -> Answer {
         };
     }
 
-    let supports = |caps: &FormatCaps, (chroma, depth): (Chroma, u32)| {
-        caps.formats
-            .iter()
-            .any(|f| f.chroma.enum_value() == Ok(chroma) && f.bit_depth == depth)
-    };
     match PRO_PREFERENCE
         .into_iter()
         .find(|&want| supports(encode, want) && supports(&hello.decode, want))
@@ -132,6 +142,28 @@ pub fn answer_hello(hello: &Hello, encode: &FormatCaps) -> Answer {
                 describe_caps(&hello.decode)
             ),
         )),
+    }
+}
+
+/// 被控端此刻能编的格式（问显卡驱动，每次请求时现查：编码会话占用是实时状态）。
+/// 探测不成功也算「已探测、能编的为空」，不当作「未探测」；第二个值是做不到的原因，给日志用。
+pub fn encoder_caps() -> (FormatCaps, Option<String>) {
+    let mut caps = FormatCaps {
+        checked: true,
+        ..Default::default()
+    };
+    match ddpro_enc::probe_nvidia() {
+        // 编码器目前只实现了 8bit；10bit 等 P1 做 HDR 时再报
+        Ok(c) if c.yuv444_8bit => {
+            caps.formats.push(VideoFormat {
+                chroma: Chroma::CHROMA_444.into(),
+                bit_depth: 8,
+                ..Default::default()
+            });
+            (caps, None)
+        }
+        Ok(_) => (caps, Some("this GPU cannot encode HEVC 4:4:4".to_owned())),
+        Err(e) => (caps, Some(e.to_string())),
     }
 }
 

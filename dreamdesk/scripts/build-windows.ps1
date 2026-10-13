@@ -5,9 +5,11 @@
 # 改名和打安装包在这里做。
 #
 # 前置：VS、Flutter 3.24.5、Python 3、Rust、vcpkg（见仓库根的 BUILD-DEPLOY.md）。
-# 用法：powershell -File dreamdesk\scripts\build-windows.ps1 [-BuildPyFlags '--hwcodec','--vram']
+# 用法：powershell -File dreamdesk\scripts\build-windows.ps1
+# 默认 --hwcodec --vram：和官方 Windows x64 发布版的构建参数一致（.github/workflows/flutter-build.yml），
+# 通用模式因此和官方原版一样；专业模式的采集要用 vram 带来的「直接输出显卡纹理」。
 param(
-  [string[]] $BuildPyFlags = @()
+  [string[]] $BuildPyFlags = @('--hwcodec', '--vram')
 )
 # 外部程序（cargo、flutter、python）把进度写到 stderr，PowerShell 5.1 在 Stop 下会把它当致命错误；
 # 所以全局用 Continue，外部程序只看退出码（Invoke-Checked），文件操作各自 -ErrorAction Stop。

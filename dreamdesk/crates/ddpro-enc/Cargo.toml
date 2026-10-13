@@ -4,4 +4,17 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
-[dependencies]
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_System_LibraryLoader",
+] }
+
+# 验证工具（examples/capture_encode.rs）用 RustDesk 的采集模块拿真实桌面画面。
+# 采集直接输出显卡纹理绑在 scrap 的 vram 功能上（官方 Windows x64 发布版本来就开着它）
+[target.'cfg(windows)'.dev-dependencies]
+scrap = { path = "../../../libs/scrap", features = ["vram"] }
