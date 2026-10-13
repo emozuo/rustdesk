@@ -2748,6 +2748,11 @@ async fn test_bind_ipv6() -> ResultType<SocketAddr> {
 }
 
 pub async fn test_ipv6() -> Option<tokio::task::JoinHandle<()>> {
+    // The product build must not reach the internet; this probe asks hard-coded public STUN
+    // servers, and IPv6 punching is forced off there anyway (see ddpro::brand).
+    if cfg!(feature = "dd-brand") {
+        return None;
+    }
     {
         // One look and one claim of the minute, under one lock: two connections arriving
         // together would otherwise both find it over and both probe.

@@ -1786,6 +1786,7 @@ class _NetworkState extends State<_Network> with AutomaticKeepAliveClientMixin {
       Widget? trailing,
       bool showTooltip = false,
       String tooltipMessage = '',
+      bool fixed = false,
     }) {
       final titleWidget = showTooltip
           ? Row(
@@ -1822,7 +1823,7 @@ class _NetworkState extends State<_Network> with AutomaticKeepAliveClientMixin {
       return ListTile(
         leading: Icon(icon, color: _accentColor),
         title: titleWidget,
-        enabled: !locked,
+        enabled: !locked && !fixed,
         onTap: onTap,
         trailing: trailing,
         shape: RoundedRectangleBorder(
@@ -1867,6 +1868,8 @@ class _NetworkState extends State<_Network> with AutomaticKeepAliveClientMixin {
                   icon: Icons.dns_outlined,
                   title: 'ID/Relay Server',
                   onTap: () => showServerSettings(gFFI.dialogManager, setState),
+                  // Pre-set by the build (e.g. an intranet-only product): saving would be dropped.
+                  fixed: isOptionFixed('custom-rendezvous-server'),
                 ),
               if (!hideProxy && !hideServer) divider,
               if (!hideProxy)
