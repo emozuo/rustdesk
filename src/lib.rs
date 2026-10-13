@@ -78,5 +78,5 @@ pub mod virtual_display_manager;
 
 mod kcp_stream;
 
-#[cfg(feature = "dd-pro")]
+#[cfg(any(feature = "dd-pro", feature = "dd-brand"))]
 mod ddpro;

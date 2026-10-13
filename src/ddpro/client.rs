@@ -1,6 +1,6 @@
 //! 主控端：看名片、发请求、读答复。
 
-use super::PEER_LOG_INTERVAL;
+use super::wire::{wrap, PEER_LOG_INTERVAL};
 use base::message_proto::{Message, PeerInfo};
 use ddpro::{dd_pro, DisplayCaps, FormatCaps};
 use hbb_common::{log, throttled_log};
@@ -25,7 +25,7 @@ pub fn on_peer_info(pi: &PeerInfo, is_remote_desktop: bool) -> Option<Message> {
         return None;
     }
     log::info!("ddpro: the peer offers pro protocol v{peer_version}, requesting a pro session");
-    super::wrap(ddpro::hello(decode_caps(), display_caps()))
+    wrap(ddpro::hello(decode_caps(), display_caps()))
 }
 
 /// 处理被控端的答复。

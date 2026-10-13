@@ -47,6 +47,7 @@ unix-file-copy-paste = [
 ]
 screencapturekit = ["cpal/screencapturekit"]
 dd-pro = ["dep:ddpro"]
+dd-brand = []
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

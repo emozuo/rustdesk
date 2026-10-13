@@ -1,6 +1,6 @@
 //! 被控端：递名片、答复主控端的请求。
 
-use super::PEER_LOG_INTERVAL;
+use super::wire::{wrap, PEER_LOG_INTERVAL};
 use base::message_proto::Message;
 use ddpro::{dd_pro, reject, FormatCaps};
 use hbb_common::throttled_log;
@@ -24,7 +24,7 @@ pub fn on_message(data: &[u8]) -> Option<Message> {
                 warn,
                 "ddpro: malformed pro protocol message from the controller: {err}"
             );
-            return super::wrap(reject(reject::Reason::MALFORMED, err.to_string()));
+            return wrap(reject(reject::Reason::MALFORMED, err.to_string()));
         }
     };
     if let Some(mismatch) = ddpro::version_mismatch(msg.version) {
@@ -33,7 +33,7 @@ pub fn on_message(data: &[u8]) -> Option<Message> {
             error,
             "ddpro: refusing the controller's request: {mismatch}"
         );
-        return super::wrap(reject(reject::Reason::VERSION_MISMATCH, mismatch));
+        return wrap(reject(reject::Reason::VERSION_MISMATCH, mismatch));
     }
     let Some(dd_pro::Union::Hello(hello)) = msg.union else {
         throttled_log!(
@@ -68,7 +68,7 @@ pub fn on_message(data: &[u8]) -> Option<Message> {
         ),
         _ => {}
     }
-    super::wrap(answer.reply)
+    wrap(answer.reply)
 }
 
 /// 本机此刻能编的格式。编码器探测在第 3 步接入，在那之前如实报「未探测」。
