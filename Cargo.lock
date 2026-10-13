@@ -2081,6 +2081,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "ddpro"
+version = "0.1.0"
+dependencies = [
+ "ddpro-dec",
+ "ddpro-enc",
+ "ddpro-media",
+ "ddpro-view",
+]
+
+[[package]]
+name = "ddpro-dec"
+version = "0.1.0"
+
+[[package]]
+name = "ddpro-enc"
+version = "0.1.0"
+
+[[package]]
+name = "ddpro-media"
+version = "0.1.0"
+
+[[package]]
+name = "ddpro-view"
+version = "0.1.0"
+
+[[package]]
 name = "debug-helper"
 version = "0.3.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7100,6 +7126,7 @@ dependencies = [
  "dasp",
  "dbus",
  "dbus-crossroads",
+ "ddpro",
  "default-net",
  "dispatch",
  "docopt",

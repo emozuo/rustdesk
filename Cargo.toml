@@ -46,6 +46,7 @@ unix-file-copy-paste = [
     "clipboard/unix-file-copy-paste",
 ]
 screencapturekit = ["cpal/screencapturekit"]
+dd-pro = ["dep:ddpro"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -54,6 +55,7 @@ async-trait = "0.1"
 scrap = { path = "libs/scrap", features = ["wayland"] }
 hbb_common = { path = "libs/hbb_common", features = ["webrtc"] }
 base = { path = "libs/base" }
+ddpro = { path = "dreamdesk/crates/ddpro", optional = true }
 serde_derive = "1.0"
 serde = "1.0"
 serde_json = "1.0"

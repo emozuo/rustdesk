@@ -1,0 +1,11 @@
+[package]
+name = "ddpro"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+ddpro-media = { path = "../ddpro-media" }
+ddpro-enc = { path = "../ddpro-enc" }
+ddpro-dec = { path = "../ddpro-dec" }
+ddpro-view = { path = "../ddpro-view" }
