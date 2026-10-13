@@ -15,7 +15,7 @@ pub use ddpro_media as media;
 use protobuf::Message as _;
 
 /// 专业协议版本。两端必须完全一致，不一致就拒绝。
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 /// 被控端名片在 RustDesk「平台附加信息」里的键，值是 [`PROTOCOL_VERSION`]。
 pub const NAME_CARD_KEY: &str = "ddpro";

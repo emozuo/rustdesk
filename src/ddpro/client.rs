@@ -9,7 +9,7 @@ use crate::client::Data;
 use base::message_proto::{Message, PeerInfo};
 use ddpro::{
     dd_pro,
-    media::{Event, Receiver},
+    media::{Event, Ledger, Receiver},
     Chroma, DisplayCaps, FormatCaps, MediaChannel, VideoFormat,
 };
 use hbb_common::{log, throttled_log, tokio::sync::mpsc::UnboundedSender};
@@ -23,6 +23,8 @@ const DIAG_RECEIVE_ONLY: &str = "DDPRO_DIAG_RECEIVE_ONLY";
 const DIAG_DUMP: &str = "DDPRO_DIAG_DUMP";
 /// 诊断用的故意丢包（千分比），验证丢包恢复
 const DIAG_DROP: &str = "DDPRO_DIAG_DROP_PERMILLE";
+/// 诊断用：每帧的分段延迟写成 CSV（微秒）
+const DIAG_LATENCY: &str = "DDPRO_DIAG_LATENCY";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const STATS_INTERVAL: Duration = Duration::from_secs(5);
 
@@ -120,13 +122,12 @@ fn start_receiver(media: &MediaChannel, sender: UnboundedSender<Data>) {
             }
         };
         log::info!("ddpro: pro channel open from {peer} (diagnostic drop {drop}‰)");
-        let mut dump = std::env::var(DIAG_DUMP).ok().and_then(|p| match std::fs::File::create(&p) {
-            Ok(f) => Some(f),
-            Err(e) => {
-                log::warn!("ddpro: cannot create {DIAG_DUMP} file {p}: {e}");
-                None
-            }
-        });
+        let mut dump = diag_file(DIAG_DUMP);
+        let mut csv = diag_file(DIAG_LATENCY);
+        if let Some(f) = csv.as_mut() {
+            writeln!(f, "rtp_ts,encode_us,send_us,net_us,spread_us,total_us").ok();
+        }
+        let mut ledger = Ledger::default();
         let mut last_stats = Instant::now();
         let mut loss_at: Option<Instant> = None;
         let end = loop {
@@ -135,12 +136,27 @@ fn start_receiver(media: &MediaChannel, sender: UnboundedSender<Data>) {
                 break "session closed".to_owned();
             }
             match r.recv() {
-                Ok(Event::Frame { data, .. }) => {
+                Ok(Event::Frame {
+                    data,
+                    timestamp,
+                    times,
+                }) => {
                     if let Some(t) = loss_at.take() {
                         log::info!(
                             "ddpro: pro video recovered {:.1} ms after the loss",
                             t.elapsed().as_secs_f64() * 1000.0
                         );
+                    }
+                    // 第 5 步之前主控端只收不解，账只记到「末包到达」
+                    let timed = times.and_then(|t| Some((t.transport_stages()?, t.last_arrival - t.captured_at()?)));
+                    if let Some((stages, total)) = timed {
+                        ledger.add_frame(&stages, total);
+                        if let Some(f) = csv.as_mut() {
+                            let [a, b, c, d] = stages.map(|(_, us)| us);
+                            if writeln!(f, "{timestamp},{a},{b},{c},{d},{total}").is_err() {
+                                csv = None;
+                            }
+                        }
                     }
                     if let Some(f) = dump.as_mut() {
                         if let Err(e) = f.write_all(&data) {
@@ -165,10 +181,25 @@ fn start_receiver(media: &MediaChannel, sender: UnboundedSender<Data>) {
             if last_stats.elapsed() >= STATS_INTERVAL {
                 last_stats = Instant::now();
                 log::info!("ddpro: pro video {:?}", r.stats);
+                let clock = r.clock().map_or("no clock sync yet".to_owned(), |c| {
+                    format!(
+                        "clock rtt {:.2} ms offset {:.2} ms",
+                        c.rtt_us as f64 / 1000.0,
+                        c.offset_us as f64 / 1000.0
+                    )
+                });
+                log::info!("ddpro: pro video latency {}; {clock}", ledger.take());
             }
         };
         log::info!("ddpro: pro channel closed ({end}); totals {:?}", r.stats);
     });
+}
+
+fn diag_file(var: &str) -> Option<std::fs::File> {
+    let path = std::env::var(var).ok()?;
+    std::fs::File::create(&path)
+        .map_err(|e| log::warn!("ddpro: cannot create {var} file {path}: {e}"))
+        .ok()
 }
 
 fn format_444_8bit() -> FormatCaps {

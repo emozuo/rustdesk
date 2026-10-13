@@ -12,7 +12,7 @@ use crate::server::{
 };
 use ddpro::{
     enc::{Config, Encoder},
-    media::{Keys, Listener},
+    media::{Keys, Listener, Stamp},
     MediaChannel,
 };
 use hbb_common::{anyhow::anyhow, bail, log, ResultType};
@@ -239,16 +239,24 @@ fn stream(ps: &ProService, session: &Session, listener: Listener) -> ResultType<
     let interval = Duration::from_secs_f64(1.0 / FPS as f64);
     let first = Instant::now();
     let mut i: u64 = 0;
+    // 分段延迟只记新采集到的画面：第一帧在通道建立前就取了（含等主控端打招呼的时间），
+    // 没有新画面时编码器重复上一帧，这两种都不带时间
+    let mut captured = None;
     while ps.ok() {
         if i > 0 {
             let tick = first + interval * i as u32;
             let wait = tick.saturating_duration_since(Instant::now()).max(Duration::from_millis(1));
             src = next_texture(&mut cap, wait)?;
+            captured = src.map(|_| Instant::now());
         }
         let force = session.keyframe.swap(false, Ordering::AcqRel);
         let f = enc.encode(src, force).map_err(|e| anyhow!("{e}"))?;
+        let stamp = captured.map(|captured| Stamp {
+            captured,
+            encoded: Instant::now(),
+        });
         let ts = (i * 90_000 / FPS as u64) as u32;
-        sender.send_frame(&f.data, ts).map_err(|e| anyhow!("{e}"))?;
+        sender.send_frame(&f.data, ts, stamp).map_err(|e| anyhow!("{e}"))?;
         if let Some(d) = dump.as_mut() {
             if std::io::Write::write_all(d, &f.data).is_err() {
                 dump = None;

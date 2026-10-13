@@ -4,11 +4,16 @@
 //! 发「打招呼」包（带令牌、同样加密），被控端认准第一个带对令牌的来源地址，之后把画面发到那里。主控端先发
 //! 是因为 RustDesk 安装时防火墙按程序放行入站，被控端收得到；主控端主动外发，它那边不用开口子。
 //!
-//! 主控端每半秒发一次心跳；被控端 3 秒收不到心跳就认为通道断了，主控端 3 秒收不到画面同理。
+//! 主控端每 0.1 秒发一次心跳，心跳同时是授时探测：被控端收到立即回「收到 / 回包时刻」，主控端据此对时钟
+//! （[`crate::timing::ClockSync`]）。被控端 3 秒收不到心跳就认为通道断了，主控端 3 秒收不到画面同理。
+//! 被控端在每帧首包的包头扩展里带上这一帧的采集 / 编码 / 发出时间，主控端据此记分段延迟。
 //! 丢包不重传：主控端发现序号断档就丢掉残帧、等关键帧，并通过 [`Event::Loss`] 让调用方经 RustDesk
 //! 原连接请求关键帧。
 
-use crate::hevc::{self, DepacketizeError, Depacketizer};
+use crate::{
+    hevc::{self, DepacketizeError, Depacketizer},
+    timing::{ClockEstimate, ClockSync, FrameTimes, SenderStamp, EXT_ID, EXT_OVERHEAD},
+};
 use bytes::Bytes;
 use rand::Rng;
 use rtp::{header::Header, packet::Packet};
@@ -17,6 +22,11 @@ use std::{
     collections::VecDeque,
     io::{self, ErrorKind},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket},
+    sync::{
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc,
+    },
+    thread::JoinHandle,
     time::{Duration, Instant},
 };
 use webrtc_srtp::{context::Context, protection_profile::ProtectionProfile};
@@ -30,11 +40,17 @@ const RTP_PAYLOAD_MAX: usize = UDP_PAYLOAD - RTP_HEADER - SRTP_GCM_TAG;
 const PT_VIDEO: u8 = 96;
 const PT_CONTROL: u8 = 127;
 const CTRL_HELLO: u8 = 1;
+/// 主控端 → 被控端：心跳，带主控端发出时刻（授时探测）
 const CTRL_KEEPALIVE: u8 = 2;
-pub const KEEPALIVE_INTERVAL: Duration = Duration::from_millis(500);
+/// 被控端 → 主控端：授时回包，带心跳里的时刻和被控端收到、回包的时刻
+const CTRL_TIME_ECHO: u8 = 3;
+/// 心跳也是授时探测，所以比「判断对方还在」需要的密得多：授时只取最近 2 秒里最好的样本
+pub const KEEPALIVE_INTERVAL: Duration = Duration::from_millis(100);
 pub const PEER_TIMEOUT: Duration = Duration::from_secs(3);
 /// 关键帧一下子几十个包，系统默认的 UDP 缓冲（Windows 上很小）收慢一点就溢出
 const SOCKET_BUFFER: usize = 8 << 20;
+/// 被控端收心跳的线程多久看一次「该停了」
+const CONTROL_POLL: Duration = Duration::from_millis(100);
 /// 等关键帧期间，隔这么久还没等到就再要一次（上一次请求或关键帧本身可能也丢了）
 const LOSS_REPEAT: Duration = Duration::from_millis(200);
 /// 等关键帧期间又出现新的包间隙（多半是补发的关键帧也丢了片）：最快隔这么久再要一次，
@@ -62,6 +78,12 @@ impl Keys {
             ssrc_media,
             ssrc_control: ssrc_media ^ 1,
         }
+    }
+
+    /// 被控端回授时包用的 SSRC。两个方向共用一把密钥，SRTP 的加密初始向量由 SSRC 和序号决定，
+    /// 所以每条发送流必须有自己的 SSRC——同一把密钥下初始向量重复，AES-GCM 的保密和防篡改都会失效。
+    fn ssrc_reply(&self) -> u32 {
+        self.ssrc_media ^ 2
     }
 }
 
@@ -151,12 +173,35 @@ fn is_timeout(e: &io::Error) -> bool {
     )
 }
 
+fn micros(d: Duration) -> i64 {
+    i64::try_from(d.as_micros()).unwrap_or(i64::MAX)
+}
+
+fn micros_u32(d: Duration) -> u32 {
+    u32::try_from(d.as_micros()).unwrap_or(u32::MAX)
+}
+
+fn read_i64(b: &[u8]) -> Option<i64> {
+    Some(i64::from_le_bytes(b.try_into().ok()?))
+}
+
+/// 主控端发来的控制包：校验类型、SSRC、令牌，返回（种类，令牌之后的内容）。
+fn control<'a>(p: &'a Packet, keys: &Keys) -> Option<(u8, &'a [u8])> {
+    let head = 1 + keys.token.len();
+    let ok = p.header.payload_type == PT_CONTROL
+        && p.header.ssrc == keys.ssrc_control
+        && p.payload.len() >= head
+        && p.payload[1..head] == keys.token;
+    ok.then(|| (p.payload[0], &p.payload[head..]))
+}
+
 // ------------------------------------------------------------------ 被控端
 
 /// 被控端：开好端口，等主控端来打招呼。
 pub struct Listener {
     sock: UdpSocket,
     keys: Keys,
+    epoch: Instant,
 }
 
 impl Listener {
@@ -165,6 +210,7 @@ impl Listener {
         Ok(Self {
             sock: udp((ip, 0).into())?,
             keys,
+            epoch: Instant::now(),
         })
     }
 
@@ -172,10 +218,15 @@ impl Listener {
         self.sock.local_addr()
     }
 
+    /// 被控端时间轴的零点：带给主控端的时间都是从这一刻算起的微秒数。
+    pub fn epoch(&self) -> Instant {
+        self.epoch
+    }
+
     pub fn accept(self, timeout: Duration) -> Result<Sender, Error> {
         let mut dec = srtp(&self.keys)?;
         let deadline = Instant::now() + timeout;
-        self.sock.set_read_timeout(Some(Duration::from_millis(100)))?;
+        self.sock.set_read_timeout(Some(CONTROL_POLL))?;
         let mut buf = vec![0u8; 2048];
         loop {
             if Instant::now() >= deadline {
@@ -186,32 +237,12 @@ impl Listener {
                 Err(e) if is_timeout(&e) => continue,
                 Err(e) => return Err(e.into()),
             };
-            if let Some(p) = open(&mut dec, &buf[..n]) {
-                if control(&p, &self.keys) == Some(CTRL_HELLO) {
-                    self.sock.set_nonblocking(true)?;
-                    return Ok(Sender {
-                        sock: self.sock,
-                        peer: from,
-                        enc: srtp(&self.keys)?,
-                        dec,
-                        keys: self.keys,
-                        seq: rand::thread_rng().gen(),
-                        last_peer: Instant::now(),
-                        buf,
-                        stats: SendStats::default(),
-                    });
-                }
+            let hello = open(&mut dec, &buf[..n]).is_some_and(|p| matches!(control(&p, &self.keys), Some((CTRL_HELLO, _))));
+            if hello {
+                return Sender::start(self, from, dec);
             }
         }
     }
-}
-
-fn control(p: &Packet, keys: &Keys) -> Option<u8> {
-    let ok = p.header.payload_type == PT_CONTROL
-        && p.header.ssrc == keys.ssrc_control
-        && p.payload.len() == 1 + keys.token.len()
-        && p.payload[1..] == keys.token;
-    ok.then(|| p.payload[0])
 }
 
 #[derive(Debug, Default, Clone)]
@@ -221,36 +252,97 @@ pub struct SendStats {
     pub bytes: u64,
 }
 
+/// 被控端一帧的时间：拿到画面、编码完成的时刻。首包发出时刻由 [`Sender::send_frame`] 自己记。
+#[derive(Debug, Clone, Copy)]
+pub struct Stamp {
+    pub captured: Instant,
+    pub encoded: Instant,
+}
+
 /// 被控端：往认准的主控端地址发画面。
+///
+/// 心跳由单独的线程收：收到立刻回授时包，回包里「收到时刻」才是包真正到达的时间。要是等发画面的循环
+/// 每帧顺手去读，读到时可能已在缓冲里躺了大半帧，授时会被拖偏好几毫秒。
 pub struct Sender {
     sock: UdpSocket,
     peer: SocketAddr,
     enc: Context,
-    dec: Context,
     keys: Keys,
     seq: u16,
-    last_peer: Instant,
-    buf: Vec<u8>,
+    epoch: Instant,
+    /// 最近一次收到主控端控制包的时刻（距 `epoch` 的微秒），由收心跳的线程更新
+    last_peer_us: Arc<AtomicU64>,
+    stop: Arc<AtomicBool>,
+    control: Option<JoinHandle<()>>,
     pub stats: SendStats,
 }
 
 impl Sender {
+    fn start(listener: Listener, peer: SocketAddr, dec: Context) -> Result<Self, Error> {
+        let Listener { sock, keys, epoch } = listener;
+        let last_peer_us = Arc::new(AtomicU64::new(micros(epoch.elapsed()) as u64));
+        let stop = Arc::new(AtomicBool::new(false));
+        let ctl = Control {
+            sock: sock.try_clone()?,
+            peer,
+            dec,
+            enc: srtp(&keys)?,
+            keys: keys.clone(),
+            seq: rand::thread_rng().gen(),
+            epoch,
+            last_peer_us: last_peer_us.clone(),
+            stop: stop.clone(),
+        };
+        let control = std::thread::Builder::new()
+            .name("ddpro-control".into())
+            .spawn(move || ctl.run())?;
+        Ok(Self {
+            sock,
+            peer,
+            enc: srtp(&keys)?,
+            keys,
+            seq: rand::thread_rng().gen(),
+            epoch,
+            last_peer_us,
+            stop,
+            control: Some(control),
+            stats: SendStats::default(),
+        })
+    }
+
     pub fn peer(&self) -> SocketAddr {
         self.peer
     }
 
-    /// 发一帧（带起始码的 H.265 码流）。`ts` 是 90 kHz 的 RTP 时间戳。
-    pub fn send_frame(&mut self, annexb: &[u8], ts: u32) -> Result<(), Error> {
+    /// 发一帧（带起始码的 H.265 码流）。`ts` 是 90 kHz 的 RTP 时间戳；`stamp` 有值时在首包里带上
+    /// 这一帧的被控端时间（重复上一帧画面等不代表新画面的帧不带）。
+    pub fn send_frame(&mut self, annexb: &[u8], ts: u32, stamp: Option<Stamp>) -> Result<(), Error> {
         let mut payloads = Vec::new();
-        for nal in hevc::split_annexb(annexb) {
-            hevc::payload(nal, RTP_PAYLOAD_MAX, &mut payloads);
+        for (k, nal) in hevc::split_annexb(annexb).into_iter().enumerate() {
+            // 首包要给包头扩展留位置，整个包仍不超过 UDP_PAYLOAD
+            let max = if k == 0 && stamp.is_some() {
+                RTP_PAYLOAD_MAX - EXT_OVERHEAD
+            } else {
+                RTP_PAYLOAD_MAX
+            };
+            hevc::payload(nal, max, &mut payloads);
         }
         let last = payloads.len().saturating_sub(1);
         for (i, p) in payloads.into_iter().enumerate() {
-            let pkt = rtp_packet(PT_VIDEO, self.keys.ssrc_media, self.seq, ts, i == last, p);
+            let mut pkt = rtp_packet(PT_VIDEO, self.keys.ssrc_media, self.seq, ts, i == last, p);
+            if let (0, Some(s)) = (i, stamp) {
+                let st = SenderStamp {
+                    captured_us: micros(s.captured.saturating_duration_since(self.epoch)) as u64,
+                    encode_us: micros_u32(s.encoded.saturating_duration_since(s.captured)),
+                    queue_us: micros_u32(s.encoded.elapsed()),
+                };
+                pkt.header
+                    .set_extension(EXT_ID, Bytes::copy_from_slice(&st.to_bytes()))
+                    .map_err(|e| Error::Srtp(e.to_string()))?;
+            }
             self.seq = self.seq.wrapping_add(1);
             let data = seal(&mut self.enc, &pkt)?;
-            self.send(&data)?;
+            self.sock.send_to(&data, self.peer)?;
             self.stats.packets += 1;
             self.stats.bytes += data.len() as u64;
         }
@@ -258,36 +350,74 @@ impl Sender {
         Ok(())
     }
 
-    fn send(&self, data: &[u8]) -> Result<(), Error> {
-        // 非阻塞套接字（为了不阻塞地收心跳）：发送缓冲满时稍等再试，不能把包丢在本机
-        let start = Instant::now();
-        loop {
-            match self.sock.send_to(data, self.peer) {
-                Ok(_) => return Ok(()),
-                Err(e) if e.kind() == ErrorKind::WouldBlock && start.elapsed() < Duration::from_millis(50) => {
-                    std::thread::sleep(Duration::from_micros(200));
+    /// 主控端是否还在（3 秒内收到过它的心跳）。
+    pub fn peer_alive(&self) -> bool {
+        let last = self.last_peer_us.load(Ordering::Relaxed) as i64;
+        micros(self.epoch.elapsed()) - last < micros(PEER_TIMEOUT)
+    }
+}
+
+impl Drop for Sender {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(h) = self.control.take() {
+            h.join().ok();
+        }
+    }
+}
+
+/// 被控端收心跳、回授时包的线程。
+struct Control {
+    sock: UdpSocket,
+    peer: SocketAddr,
+    dec: Context,
+    enc: Context,
+    keys: Keys,
+    seq: u16,
+    epoch: Instant,
+    last_peer_us: Arc<AtomicU64>,
+    stop: Arc<AtomicBool>,
+}
+
+impl Control {
+    fn run(mut self) {
+        let mut buf = vec![0u8; 2048];
+        while !self.stop.load(Ordering::Relaxed) {
+            let n = match self.sock.recv_from(&mut buf) {
+                Ok((n, from)) if from == self.peer => n,
+                Ok(_) => continue,
+                Err(e) if is_timeout(&e) => continue,
+                // 套接字坏了：不再更新心跳时刻，发送端 3 秒后按「主控端不再应答」收场
+                Err(_) => return,
+            };
+            let t2 = micros(self.epoch.elapsed());
+            let Some(p) = open(&mut self.dec, &buf[..n]) else {
+                continue;
+            };
+            let Some((kind, body)) = control(&p, &self.keys) else {
+                continue;
+            };
+            self.last_peer_us.store(t2 as u64, Ordering::Relaxed);
+            if kind == CTRL_KEEPALIVE {
+                if let Some(t1) = read_i64(body) {
+                    self.echo(t1, t2);
                 }
-                Err(e) => return Err(e.into()),
             }
         }
     }
 
-    /// 收掉已到的心跳，返回主控端是否还在（3 秒内收到过心跳）。
-    pub fn peer_alive(&mut self) -> bool {
-        loop {
-            match self.sock.recv_from(&mut self.buf) {
-                Ok((n, from)) if from == self.peer => {
-                    if let Some(p) = open(&mut self.dec, &self.buf[..n]) {
-                        if control(&p, &self.keys).is_some() {
-                            self.last_peer = Instant::now();
-                        }
-                    }
-                }
-                Ok(_) => {}
-                Err(_) => break,
-            }
+    fn echo(&mut self, t1: i64, t2: i64) {
+        let mut payload = Vec::with_capacity(25);
+        payload.push(CTRL_TIME_ECHO);
+        payload.extend_from_slice(&t1.to_le_bytes());
+        payload.extend_from_slice(&t2.to_le_bytes());
+        payload.extend_from_slice(&micros(self.epoch.elapsed()).to_le_bytes());
+        let pkt = rtp_packet(PT_CONTROL, self.keys.ssrc_reply(), self.seq, 0, false, payload);
+        self.seq = self.seq.wrapping_add(1);
+        // 授时回包丢了无所谓，主控端 0.1 秒后再探
+        if let Ok(data) = seal(&mut self.enc, &pkt) {
+            self.sock.send_to(&data, self.peer).ok();
         }
-        self.last_peer.elapsed() < PEER_TIMEOUT
     }
 }
 
@@ -295,8 +425,13 @@ impl Sender {
 
 pub enum Event {
     /// 收齐的一帧（带起始码的 H.265 码流）。丢包之后，第一个收到的总是关键帧。
-    Frame { data: Vec<u8>, timestamp: u32 },
-    /// 发现丢包：调用方应经 RustDesk 原连接请求关键帧。等关键帧期间每隔 0.5 秒会再报一次。
+    /// `times` 是这一帧的分段时间，被控端没带时间（如重复上一帧画面）时为 None。
+    Frame {
+        data: Vec<u8>,
+        timestamp: u32,
+        times: Option<FrameTimes>,
+    },
+    /// 发现丢包：调用方应经 RustDesk 原连接请求关键帧。等关键帧期间每隔 0.2 秒会再报一次。
     Loss { packets: u32 },
 }
 
@@ -317,7 +452,7 @@ pub struct RecvStats {
     pub jitter_ms: f64,
 }
 
-/// 主控端：打招呼、发心跳、收画面。
+/// 主控端：打招呼、发心跳（兼授时）、收画面。
 pub struct Receiver {
     sock: UdpSocket,
     peer: SocketAddr,
@@ -335,6 +470,10 @@ pub struct Receiver {
     drop_permille: u32,
     jitter: Option<(f64, f64)>,
     start: Instant,
+    clock: ClockSync,
+    /// 正在收的这一帧：首包到达时刻、被控端带来的时间
+    frame_first: Option<i64>,
+    frame_stamp: Option<SenderStamp>,
     buf: Vec<u8>,
     pub stats: RecvStats,
 }
@@ -363,6 +502,9 @@ impl Receiver {
             drop_permille,
             jitter: None,
             start: now,
+            clock: ClockSync::default(),
+            frame_first: None,
+            frame_stamp: None,
             buf: vec![0u8; 2048],
             stats: RecvStats::default(),
         };
@@ -373,7 +515,7 @@ impl Receiver {
                 return Err(Error::Timeout("no video from the controlled side on the pro channel"));
             }
             if last_hello.map_or(true, |t| t.elapsed() >= Duration::from_millis(100)) {
-                r.send_control(CTRL_HELLO)?;
+                r.send_control(CTRL_HELLO, &[])?;
                 last_hello = Some(Instant::now());
             }
             r.poll_once()?;
@@ -382,9 +524,24 @@ impl Receiver {
         Ok(r)
     }
 
-    fn send_control(&mut self, kind: u8) -> Result<(), Error> {
+    /// 主控端时间轴的零点：[`FrameTimes`] 里的时刻和 [`Receiver::now_us`] 都从这一刻算起。
+    pub fn epoch(&self) -> Instant {
+        self.start
+    }
+
+    pub fn now_us(&self) -> i64 {
+        micros(self.start.elapsed())
+    }
+
+    /// 当前的对时结果（最近 2 秒里往返最快的那次）；还没有授时样本时 None。
+    pub fn clock(&self) -> Option<ClockEstimate> {
+        self.clock.estimate(self.now_us())
+    }
+
+    fn send_control(&mut self, kind: u8, body: &[u8]) -> Result<(), Error> {
         let mut payload = vec![kind];
         payload.extend_from_slice(&self.keys.token);
+        payload.extend_from_slice(body);
         let pkt = rtp_packet(PT_CONTROL, self.keys.ssrc_control, self.ctrl_seq, 0, false, payload);
         self.ctrl_seq = self.ctrl_seq.wrapping_add(1);
         let data = seal(&mut self.enc, &pkt)?;
@@ -400,7 +557,8 @@ impl Receiver {
                 return Ok(e);
             }
             if self.last_keepalive.elapsed() >= KEEPALIVE_INTERVAL {
-                self.send_control(CTRL_KEEPALIVE)?;
+                let t1 = self.now_us();
+                self.send_control(CTRL_KEEPALIVE, &t1.to_le_bytes())?;
             }
             if self.last_media.elapsed() >= PEER_TIMEOUT {
                 return Err(Error::PeerGone);
@@ -418,6 +576,7 @@ impl Receiver {
             }
             Err(e) => return Err(e.into()),
         };
+        let arrival = self.now_us();
         if from != self.peer {
             return Ok(());
         }
@@ -430,18 +589,32 @@ impl Receiver {
             self.stats.auth_failures += 1;
             return Ok(());
         };
+        if p.header.payload_type == PT_CONTROL && p.header.ssrc == self.keys.ssrc_reply() {
+            self.on_echo(&p.payload, arrival);
+            return Ok(());
+        }
         if p.header.payload_type != PT_VIDEO || p.header.ssrc != self.keys.ssrc_media {
             return Ok(());
         }
         self.last_media = Instant::now();
         self.stats.packets += 1;
         self.stats.bytes += n as u64;
-        self.on_media(p);
+        self.on_media(p, arrival);
         self.repeat_loss();
         Ok(())
     }
 
-    fn on_media(&mut self, p: Packet) {
+    fn on_echo(&mut self, payload: &[u8], t4: i64) {
+        if payload.len() != 25 || payload[0] != CTRL_TIME_ECHO {
+            return;
+        }
+        let (Some(t1), Some(t2), Some(t3)) = (read_i64(&payload[1..9]), read_i64(&payload[9..17]), read_i64(&payload[17..25])) else {
+            return;
+        };
+        self.clock.on_echo(t1, t2, t3, t4);
+    }
+
+    fn on_media(&mut self, p: Packet, arrival: i64) {
         let seq = p.header.sequence_number;
         if let Some(expect) = self.expect {
             let gap = seq.wrapping_sub(expect);
@@ -454,6 +627,10 @@ impl Receiver {
             }
         }
         self.expect = Some(seq.wrapping_add(1));
+        self.frame_first.get_or_insert(arrival);
+        if let Some(ext) = p.header.get_extension(EXT_ID) {
+            self.frame_stamp = SenderStamp::from_bytes(&ext);
+        }
 
         match self.depack.push(&p.payload) {
             Ok(()) => {}
@@ -464,6 +641,8 @@ impl Receiver {
         if !p.header.marker {
             return;
         }
+        let first = self.frame_first.take().unwrap_or(arrival);
+        let stamp = self.frame_stamp.take();
         let frame = match self.depack.take_frame() {
             Ok(f) => f,
             Err(_) => {
@@ -483,9 +662,11 @@ impl Receiver {
         }
         self.update_jitter(p.header.timestamp);
         self.stats.frames += 1;
+        let offset = self.clock.estimate(arrival).map(|e| e.offset_us);
         self.pending.push_back(Event::Frame {
             data: frame,
             timestamp: p.header.timestamp,
+            times: stamp.map(|s| FrameTimes::new(s, offset, first, arrival)),
         });
     }
 
@@ -493,6 +674,9 @@ impl Receiver {
     fn loss(&mut self, packets: u32) {
         self.stats.lost_packets += packets as u64;
         self.depack.reset();
+        // 残帧的首包时间和被控端时间都作废，不能带到下一帧
+        self.frame_first = None;
+        self.frame_stamp = None;
         if !self.waiting_irap {
             self.waiting_irap = true;
             self.emit_loss(packets);
