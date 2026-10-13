@@ -2359,7 +2359,9 @@ impl<T: InvokeUiSession> Remote<T> {
                     self.handler.handle_terminal_response(response);
                 }
                 #[cfg(feature = "dd-pro")]
-                Some(message::Union::DdPro(data)) => crate::ddpro::client::on_message(&data),
+                Some(message::Union::DdPro(data)) => {
+                    crate::ddpro::client::on_message(&data, &self.sender)
+                }
                 _ => {}
             }
         }

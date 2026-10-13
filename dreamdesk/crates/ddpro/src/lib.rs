@@ -8,11 +8,14 @@ mod protos {
 }
 
 pub use protos::ddpro::*;
+// RustDesk 只依赖门面这一个 crate，编码器和画面通道经这里拿
+pub use ddpro_enc as enc;
+pub use ddpro_media as media;
 
 use protobuf::Message as _;
 
 /// 专业协议版本。两端必须完全一致，不一致就拒绝。
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// 被控端名片在 RustDesk「平台附加信息」里的键，值是 [`PROTOCOL_VERSION`]。
 pub const NAME_CARD_KEY: &str = "ddpro";
@@ -48,13 +51,46 @@ pub fn version_mismatch(peer: u32) -> Option<String> {
     ))
 }
 
-pub fn hello(decode: FormatCaps, display: DisplayCaps) -> dd_pro::Union {
+pub fn hello(decode: FormatCaps, display: DisplayCaps, display_index: u32) -> dd_pro::Union {
     dd_pro::Union::Hello(Hello {
         tier: Tier::TIER_PRO.into(),
         decode: Some(decode).into(),
         display: Some(display).into(),
+        display_index,
         ..Default::default()
     })
+}
+
+pub fn keyframe_request() -> dd_pro::Union {
+    dd_pro::Union::KeyframeRequest(KeyframeRequest::default())
+}
+
+/// 画面通道信息（地址 + 密钥材料），放进「同意」答复。
+pub fn media_channel(host: std::net::IpAddr, port: u16, keys: &media::Keys) -> MediaChannel {
+    MediaChannel {
+        host: host.to_string(),
+        port: port as u32,
+        token: keys.token.to_vec(),
+        srtp_key: keys.key.to_vec(),
+        srtp_salt: keys.salt.to_vec(),
+        ssrc_media: keys.ssrc_media,
+        ssrc_control: keys.ssrc_control,
+        ..Default::default()
+    }
+}
+
+/// 主控端从「同意」答复里取出通道地址和密钥；字段不全或长度不对返回 None。
+pub fn media_endpoint(m: &MediaChannel) -> Option<(std::net::SocketAddr, media::Keys)> {
+    let ip: std::net::IpAddr = m.host.parse().ok()?;
+    let port = u16::try_from(m.port).ok().filter(|&p| p != 0)?;
+    let keys = media::Keys {
+        key: m.srtp_key.as_slice().try_into().ok()?,
+        salt: m.srtp_salt.as_slice().try_into().ok()?,
+        token: m.token.as_slice().try_into().ok()?,
+        ssrc_media: m.ssrc_media,
+        ssrc_control: m.ssrc_control,
+    };
+    Some(((ip, port).into(), keys))
 }
 
 pub fn reject(reason: reject::Reason, detail: String) -> dd_pro::Union {
@@ -145,14 +181,15 @@ pub fn answer_hello(hello: &Hello, encode: &FormatCaps) -> Answer {
     }
 }
 
-/// 被控端此刻能编的格式（问显卡驱动，每次请求时现查：编码会话占用是实时状态）。
-/// 探测不成功也算「已探测、能编的为空」，不当作「未探测」；第二个值是做不到的原因，给日志用。
-pub fn encoder_caps() -> (FormatCaps, Option<String>) {
+/// 被控端此刻能编的格式。`probe` 是用要编的那块屏的采集器所在显卡探测的结果（每次请求时现查：
+/// 编码会话占用是实时状态）。探测不成功也算「已探测、能编的为空」，不当作「未探测」；
+/// 第二个值是做不到的原因，给日志用。
+pub fn encoder_caps(probe: Result<enc::Caps, enc::Error>) -> (FormatCaps, Option<String>) {
     let mut caps = FormatCaps {
         checked: true,
         ..Default::default()
     };
-    match ddpro_enc::probe_nvidia() {
+    match probe {
         // 编码器目前只实现了 8bit；10bit 等 P1 做 HDR 时再报
         Ok(c) if c.yuv444_8bit => {
             caps.formats.push(VideoFormat {

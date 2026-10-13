@@ -4074,7 +4074,13 @@ impl Connection {
                 }
                 #[cfg(feature = "dd-pro")]
                 Some(message::Union::DdPro(data)) => {
-                    if let Some(reply) = crate::ddpro::server::on_message(&data) {
+                    let ctx = crate::ddpro::server::ConnCtx {
+                        conn_id: self.inner.id(),
+                        conn: self.inner.clone(),
+                        server: self.server.clone(),
+                        local_ip: self.stream.local_addr().ip(),
+                    };
+                    if let Some(reply) = crate::ddpro::server::on_message(&data, ctx).await {
                         self.send(reply).await;
                     }
                 }

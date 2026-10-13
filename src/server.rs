@@ -74,7 +74,7 @@ pub(crate) mod port_forward_mux;
 pub mod display_service;
 #[cfg(windows)]
 pub mod portable_service;
-mod service;
+pub(crate) mod service;
 mod video_qos;
 pub mod video_service;
 
@@ -503,13 +503,34 @@ impl Server {
         }
     }
 
-    fn add_service(&mut self, service: Box<dyn Service>) {
+    pub(crate) fn add_service(&mut self, service: Box<dyn Service>) {
         let name = service.name();
         self.services.insert(name, service);
     }
 
     pub fn contains(&self, name: &str) -> bool {
         self.services.contains_key(name)
+    }
+
+    /// Connections other than `except` watching `display_idx` through the general video service.
+    #[cfg(feature = "dd-pro")]
+    pub(crate) fn display_viewers(&self, display_idx: usize, except: i32) -> Vec<i32> {
+        let name = video_service::get_service_name(VideoSource::Monitor, display_idx);
+        let Some(s) = self.services.get(&name) else {
+            return Vec::new();
+        };
+        self.connections
+            .keys()
+            .copied()
+            .filter(|&id| id != except && s.is_subed(id))
+            .collect()
+    }
+
+    /// Whether `conn_id` is still subscribed to `name`; a closed connection is unsubscribed from
+    /// every service while the server lock is held, so this also tells whether it is still open.
+    #[cfg(all(feature = "dd-pro", windows, feature = "vram"))]
+    pub(crate) fn is_subscribed(&self, name: &str, conn_id: i32) -> bool {
+        self.services.get(name).is_some_and(|s| s.is_subed(conn_id))
     }
 
     pub fn subscribe(&mut self, name: &str, conn: ConnInner, sub: bool) {

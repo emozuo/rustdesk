@@ -57,7 +57,6 @@ mod win {
     }
 
     pub fn probe() -> Res {
-        println!("default NVIDIA GPU: {:?}", ddpro_enc::probe_nvidia());
         for d in Displays::new()? {
             let desc = describe(&d);
             match Capturer::new(d) {

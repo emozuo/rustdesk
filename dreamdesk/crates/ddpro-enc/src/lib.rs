@@ -12,6 +12,22 @@ mod nvenc_sys;
 #[cfg(windows)]
 pub use nvenc::{probe, Config, EncodedFrame, Encoder};
 
+/// 采集到的 D3D11 纹理的宽高（编码器要按画面尺寸创建）。
+#[cfg(windows)]
+pub fn texture_size(texture: *mut std::ffi::c_void) -> Result<(u32, u32), Error> {
+    use windows::{
+        core::Interface,
+        Win32::Graphics::Direct3D11::{ID3D11Texture2D, D3D11_TEXTURE2D_DESC},
+    };
+    unsafe {
+        let t = ID3D11Texture2D::from_raw_borrowed(&texture)
+            .ok_or_else(|| Error::Config("null texture".to_owned()))?;
+        let mut d = D3D11_TEXTURE2D_DESC::default();
+        t.GetDesc(&mut d);
+        Ok((d.Width, d.Height))
+    }
+}
+
 /// 显卡的 HEVC 编码能力（问驱动得来，不按型号猜）。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Caps {
@@ -58,49 +74,3 @@ impl From<windows::core::Error> for Error {
     }
 }
 
-/// 在本机第一块 NVIDIA 显卡上探测编码能力（谈判时还没有采集器，自己找卡建设备）。
-#[cfg(windows)]
-pub fn probe_nvidia() -> Result<Caps, Error> {
-    use windows::{
-        core::Interface,
-        Win32::{
-            Foundation::HMODULE,
-            Graphics::{
-                Direct3D::D3D_DRIVER_TYPE_UNKNOWN,
-                Direct3D11::{D3D11CreateDevice, D3D11_CREATE_DEVICE_FLAG, D3D11_SDK_VERSION},
-                Dxgi::{CreateDXGIFactory1, IDXGIFactory1},
-            },
-        },
-    };
-    const NVIDIA: u32 = 0x10de;
-    unsafe {
-        let factory: IDXGIFactory1 = CreateDXGIFactory1()?;
-        let mut i = 0;
-        while let Ok(adapter) = factory.EnumAdapters1(i) {
-            i += 1;
-            if adapter.GetDesc1()?.VendorId != NVIDIA {
-                continue;
-            }
-            let mut device = None;
-            D3D11CreateDevice(
-                &adapter,
-                D3D_DRIVER_TYPE_UNKNOWN,
-                HMODULE::default(),
-                D3D11_CREATE_DEVICE_FLAG(0),
-                None,
-                D3D11_SDK_VERSION,
-                Some(&mut device),
-                None,
-                None,
-            )?;
-            let device = device.ok_or_else(|| Error::Config("D3D11CreateDevice returned nothing".to_owned()))?;
-            return probe(device.as_raw());
-        }
-        Err(Error::Unsupported("no NVIDIA GPU".to_owned()))
-    }
-}
-
-#[cfg(not(windows))]
-pub fn probe_nvidia() -> Result<Caps, Error> {
-    Err(Error::Unsupported("pro encoding needs Windows with an NVIDIA GPU".to_owned()))
-}

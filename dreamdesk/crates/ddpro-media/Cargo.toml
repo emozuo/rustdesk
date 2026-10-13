@@ -4,4 +4,11 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
+# rtp / webrtc-srtp / webrtc-util 用 RustDesk 已经在用的那一份（同一个仓库、同一个提交），不新增依赖
 [dependencies]
+bytes = "1"
+rand = "0.8"
+socket2 = "0.5"
+rtp = { git = "https://github.com/rustdesk-org/webrtc", rev = "49c89bd8d30e6e62e4c1a96cee38fdc11f79ef63" }
+webrtc-srtp = { git = "https://github.com/rustdesk-org/webrtc", rev = "49c89bd8d30e6e62e4c1a96cee38fdc11f79ef63" }
+webrtc-util = { git = "https://github.com/rustdesk-org/webrtc", rev = "49c89bd8d30e6e62e4c1a96cee38fdc11f79ef63" }
