@@ -2014,6 +2014,8 @@ impl Connection {
         {
             platform_additions.insert("support_view_camera".into(), json!(true));
         }
+        #[cfg(feature = "dd-pro")]
+        crate::ddpro::server::add_name_card(&mut platform_additions);
 
         #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
         if !platform_additions.is_empty() {
@@ -4069,6 +4071,12 @@ impl Connection {
                     allow_err!(self.handle_terminal_action(action).await);
                     #[cfg(any(target_os = "android", target_os = "ios"))]
                     log::warn!("Terminal action received but not supported on this platform");
+                }
+                #[cfg(feature = "dd-pro")]
+                Some(message::Union::DdPro(data)) => {
+                    if let Some(reply) = crate::ddpro::server::on_message(&data) {
+                        self.send(reply).await;
+                    }
                 }
                 _ => {}
             }

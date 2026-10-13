@@ -1,0 +1,66 @@
+syntax = "proto3";
+package ddpro;
+
+// 专业协议的信封，装在 RustDesk Message 的 `bytes dd_pro` 里。
+// 字段 1 的编号和类型永远不能改：对端先读它，版本不一致就拒绝，不解释后面的内容。
+message DdPro {
+  uint32 version = 1;
+  oneof union {
+    Hello hello = 2;
+    Accept accept = 3;
+    Reject reject = 4;
+  }
+}
+
+enum Tier {
+  TIER_UNSPECIFIED = 0;
+  TIER_PRO = 1;
+}
+
+enum Chroma {
+  CHROMA_UNSPECIFIED = 0;
+  CHROMA_420 = 1;
+  CHROMA_444 = 2;
+}
+
+message VideoFormat {
+  Chroma chroma = 1;
+  uint32 bit_depth = 2;
+}
+
+// 还没有探测的能力报 checked = false，而不是猜一个值，免得「没查」被当成「支持」。
+message FormatCaps {
+  bool checked = 1;
+  repeated VideoFormat formats = 2;
+}
+
+message DisplayCaps {
+  bool checked = 1;
+  bool available = 2;
+}
+
+// 主控端 → 被控端：要哪一档，以及本机能解什么、能不能显示。
+message Hello {
+  Tier tier = 1;
+  FormatCaps decode = 2;
+  DisplayCaps display = 3;
+}
+
+// 被控端 → 主控端：同意，并给出选定的格式。
+// 任何一方的能力还没探测时没有 format，表示只谈通了协议。
+message Accept {
+  VideoFormat format = 1;
+}
+
+message Reject {
+  enum Reason {
+    REASON_UNSPECIFIED = 0;
+    VERSION_MISMATCH = 1;
+    UNSUPPORTED_TIER = 2;
+    NO_COMMON_FORMAT = 3;
+    DISPLAY_UNAVAILABLE = 4;
+    MALFORMED = 5;
+  }
+  Reason reason = 1;
+  string detail = 2;
+}

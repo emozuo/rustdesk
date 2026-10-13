@@ -1030,5 +1030,7 @@ message Message {
     TerminalAction terminal_action = 31;
     TerminalResponse terminal_response = 32;
     PortForwardChannel port_forward_channel = 33;
+    // DreamDesk pro protocol, opaque here; a high number stays clear of upstream's next fields.
+    bytes dd_pro = 1000;
   }
 }

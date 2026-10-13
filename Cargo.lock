@@ -2088,6 +2088,8 @@ dependencies = [
  "ddpro-enc",
  "ddpro-media",
  "ddpro-view",
+ "protobuf",
+ "protobuf-codegen",
 ]
 
 [[package]]

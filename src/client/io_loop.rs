@@ -1594,6 +1594,12 @@ impl<T: InvokeUiSession> Remote<T> {
                                 return false;
                             }
                         }
+                        #[cfg(feature = "dd-pro")]
+                        if let Some(msg) =
+                            crate::ddpro::client::on_peer_info(&pi, self.handler.is_default())
+                        {
+                            allow_err!(peer.send(&msg).await);
+                        }
                         self.handler.handle_peer_info(pi);
                         #[cfg(all(target_os = "windows", not(feature = "flutter")))]
                         self.check_clipboard_file_context();
@@ -2352,6 +2358,8 @@ impl<T: InvokeUiSession> Remote<T> {
                     }
                     self.handler.handle_terminal_response(response);
                 }
+                #[cfg(feature = "dd-pro")]
+                Some(message::Union::DdPro(data)) => crate::ddpro::client::on_message(&data),
                 _ => {}
             }
         }

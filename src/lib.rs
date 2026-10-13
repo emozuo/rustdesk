@@ -77,3 +77,6 @@ pub mod privacy_mode;
 pub mod virtual_display_manager;
 
 mod kcp_stream;
+
+#[cfg(feature = "dd-pro")]
+mod ddpro;
