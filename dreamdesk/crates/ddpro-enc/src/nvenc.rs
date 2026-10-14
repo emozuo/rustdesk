@@ -289,7 +289,8 @@ impl Encoder {
         // 码率缓冲只给一帧的量：单帧不会大到要排队好几帧才发得完
         c.rcParams.vbvBufferSize = bitrate / cfg.fps.max(1);
         c.rcParams.vbvInitialDelay = c.rcParams.vbvBufferSize;
-        // 逐块调质量（P1 静止收敛要用）只能在创建时打开，运行中打不开
+        // 逐块调质量（P1 静止收敛要用）。「只能在创建时打开、运行中打不开」是旧实现的说法，未核实，P1 做静止收敛时
+        // 实测（运行中重配编码器能否打开）；现在不传逐块质量表，开着不起作用，第 3 步的画质就是开着测的
         c.rcParams.qpMapMode = _NV_ENC_QP_MAP_MODE::NV_ENC_QP_MAP_DELTA;
 
         let hevc = &mut c.encodeCodecConfig.hevcConfig;
