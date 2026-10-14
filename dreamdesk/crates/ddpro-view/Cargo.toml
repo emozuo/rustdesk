@@ -4,4 +4,12 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
-[dependencies]
+# Wayland 客户端用 smithay-client-toolkit 0.20：RustDesk 的 base 已经依赖它（同样的开关），不新增依赖。
+# 它带了要用的三样：xdg 窗口、linux-dmabuf（显存画面零拷贝交给合成器）、presentation-time（每帧实际上屏时刻）。
+[target.'cfg(target_os = "linux")'.dependencies]
+sctk = { package = "smithay-client-toolkit", version = "0.20.0", default-features = false, features = ["calloop"] }
+ddpro-dec = { path = "../ddpro-dec" }
+libc = "0.2"
+
+[dev-dependencies]
+ddpro-media = { path = "../ddpro-media" }

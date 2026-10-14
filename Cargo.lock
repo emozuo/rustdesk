@@ -2124,6 +2124,12 @@ dependencies = [
 [[package]]
 name = "ddpro-view"
 version = "0.1.0"
+dependencies = [
+ "ddpro-dec",
+ "ddpro-media",
+ "libc",
+ "smithay-client-toolkit 0.20.0",
+]
 
 [[package]]
 name = "debug-helper"
