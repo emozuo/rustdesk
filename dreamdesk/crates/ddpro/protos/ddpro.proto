@@ -9,8 +9,9 @@ message DdPro {
     Hello hello = 2;
     Accept accept = 3;
     Reject reject = 4;
-    KeyframeRequest keyframe_request = 5;
   }
+  // v2–v3 的「请求关键帧」（经 RustDesk 原连接）；v4 起改在画面通道上回发，编号不再使用
+  reserved 5;
 }
 
 enum Tier {
@@ -69,9 +70,6 @@ message Accept {
   VideoFormat format = 1;
   MediaChannel media = 2;
 }
-
-// 主控端 → 被控端：画面通道丢了包，请下一帧编成关键帧。
-message KeyframeRequest {}
 
 message Reject {
   enum Reason {

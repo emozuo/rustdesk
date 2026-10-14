@@ -62,11 +62,6 @@ fn handle(data: &[u8], ctx: &ConnCtx) -> Option<Message> {
     }
     match msg.union {
         Some(dd_pro::Union::Hello(hello)) => wrap(answer(&hello, ctx)),
-        Some(dd_pro::Union::KeyframeRequest(_)) => {
-            #[cfg(all(windows, feature = "vram"))]
-            super::video::request_keyframe(ctx.conn_id);
-            None
-        }
         _ => {
             throttled_log!(
                 PEER_LOG_INTERVAL,

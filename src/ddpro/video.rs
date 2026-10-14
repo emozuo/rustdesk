@@ -22,10 +22,7 @@ use std::{
     io::ErrorKind,
     net::IpAddr,
     ops::{Deref, DerefMut},
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
-    },
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
@@ -46,7 +43,6 @@ struct Session {
     conn: ConnInner,
     server: ServerPtrWeak,
     listener: Mutex<Option<Listener>>,
-    keyframe: AtomicBool,
 }
 
 lazy_static::lazy_static! {
@@ -110,7 +106,6 @@ pub fn start(
         conn: conn.clone(),
         server: server.clone(),
         listener: Mutex::new(Some(listener)),
-        keyframe: AtomicBool::new(false),
     });
     SESSIONS.lock().unwrap().insert(display, session);
 
@@ -123,14 +118,6 @@ pub fn start(
     s.subscribe(&general_name(display), conn.clone(), false);
     s.subscribe(&pro, conn, true);
     Ok(ddpro::media_channel(local_ip, port, &keys))
-}
-
-pub fn request_keyframe(conn_id: i32) {
-    for s in SESSIONS.lock().unwrap().values() {
-        if s.conn_id == conn_id {
-            s.keyframe.store(true, Ordering::Release);
-        }
-    }
 }
 
 #[derive(Clone)]
@@ -171,7 +158,7 @@ fn run(ps: ProService) -> ResultType<()> {
         // 通道只能用一次；同一会话重新进来说明上一轮已经结束，等连接退订
         return Ok(());
     };
-    let result = stream(&ps, &session, listener);
+    let result = stream(&ps, listener);
     match &result {
         // 连接退订（关闭或切走）而结束，RustDesk 已经处理好订阅
         Ok(()) => log::info!("ddpro: pro video on display {display} ended"),
@@ -208,7 +195,7 @@ fn back_to_general(display: usize, session: &Session) -> bool {
     true
 }
 
-fn stream(ps: &ProService, session: &Session, listener: Listener) -> ResultType<()> {
+fn stream(ps: &ProService, listener: Listener) -> ResultType<()> {
     let display = ps.display;
     let (mut cap, first_frame) = start_capture(display)?;
     let dev = cap.device();
@@ -249,7 +236,7 @@ fn stream(ps: &ProService, session: &Session, listener: Listener) -> ResultType<
             src = next_texture(&mut cap, wait)?;
             captured = src.map(|_| Instant::now());
         }
-        let force = session.keyframe.swap(false, Ordering::AcqRel);
+        let force = sender.take_keyframe_request();
         let f = enc.encode(src, force).map_err(|e| anyhow!("{e}"))?;
         let stamp = captured.map(|captured| Stamp {
             captured,

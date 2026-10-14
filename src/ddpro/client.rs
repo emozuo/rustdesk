@@ -55,7 +55,7 @@ pub fn on_peer_info(pi: &PeerInfo, is_remote_desktop: bool) -> Option<Message> {
     wrap(ddpro::hello(decode_caps(), display_caps(), display))
 }
 
-/// 处理被控端的答复。同意且带画面通道时起接收线程；`sender` 用来经 RustDesk 原连接请求关键帧。
+/// 处理被控端的答复。同意且带画面通道时起接收线程；`sender` 是 RustDesk 消息循环的发送端，它关了说明会话已结束。
 pub fn on_message(data: &[u8], sender: &UnboundedSender<Data>) {
     let msg = match ddpro::decode(data) {
         Ok(msg) => msg,
@@ -170,11 +170,8 @@ fn start_receiver(media: &MediaChannel, sender: UnboundedSender<Data>) {
                     throttled_log!(
                         PEER_LOG_INTERVAL,
                         info,
-                        "ddpro: pro video lost {packets} packet(s), requesting a keyframe"
+                        "ddpro: pro video lost {packets} packet(s), keyframe requested on the pro channel"
                     );
-                    if let Some(msg) = wrap(ddpro::keyframe_request()) {
-                        sender.send(Data::Message(msg)).ok();
-                    }
                 }
                 Err(e) => break e.to_string(),
             }

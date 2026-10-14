@@ -7,8 +7,8 @@
 //! 主控端每 0.1 秒发一次心跳，心跳同时是授时探测：被控端收到立即回「收到 / 回包时刻」，主控端据此对时钟
 //! （[`crate::timing::ClockSync`]）。被控端 3 秒收不到心跳就认为通道断了，主控端 3 秒收不到画面同理。
 //! 被控端在每帧首包的包头扩展里带上这一帧的采集 / 编码 / 发出时间，主控端据此记分段延迟。
-//! 丢包不重传：主控端发现序号断档就丢掉残帧、等关键帧，并通过 [`Event::Loss`] 让调用方经 RustDesk
-//! 原连接请求关键帧。
+//! 丢包不重传：主控端发现序号断档就丢掉残帧、等关键帧，并在本通道上回发「请求关键帧」（RTP 的标准做法，
+//! 同 RTCP 的关键帧请求），被控端下一帧编成关键帧；[`Event::Loss`] 只告诉调用方发生了丢包。
 
 use crate::{
     hevc::{self, DepacketizeError, Depacketizer},
@@ -44,6 +44,8 @@ const CTRL_HELLO: u8 = 1;
 const CTRL_KEEPALIVE: u8 = 2;
 /// 被控端 → 主控端：授时回包，带心跳里的时刻和被控端收到、回包的时刻
 const CTRL_TIME_ECHO: u8 = 3;
+/// 主控端 → 被控端：丢了包，请下一帧编成关键帧
+const CTRL_KEYFRAME: u8 = 4;
 /// 心跳也是授时探测，所以比「判断对方还在」需要的密得多：授时只取最近 2 秒里最好的样本
 pub const KEEPALIVE_INTERVAL: Duration = Duration::from_millis(100);
 pub const PEER_TIMEOUT: Duration = Duration::from_secs(3);
@@ -272,6 +274,8 @@ pub struct Sender {
     epoch: Instant,
     /// 最近一次收到主控端控制包的时刻（距 `epoch` 的微秒），由收心跳的线程更新
     last_peer_us: Arc<AtomicU64>,
+    /// 主控端请求了关键帧，由收心跳的线程置上
+    keyframe: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
     control: Option<JoinHandle<()>>,
     pub stats: SendStats,
@@ -281,6 +285,7 @@ impl Sender {
     fn start(listener: Listener, peer: SocketAddr, dec: Context) -> Result<Self, Error> {
         let Listener { sock, keys, epoch } = listener;
         let last_peer_us = Arc::new(AtomicU64::new(micros(epoch.elapsed()) as u64));
+        let keyframe = Arc::new(AtomicBool::new(false));
         let stop = Arc::new(AtomicBool::new(false));
         let ctl = Control {
             sock: sock.try_clone()?,
@@ -291,6 +296,7 @@ impl Sender {
             seq: rand::thread_rng().gen(),
             epoch,
             last_peer_us: last_peer_us.clone(),
+            keyframe: keyframe.clone(),
             stop: stop.clone(),
         };
         let control = std::thread::Builder::new()
@@ -304,6 +310,7 @@ impl Sender {
             seq: rand::thread_rng().gen(),
             epoch,
             last_peer_us,
+            keyframe,
             stop,
             control: Some(control),
             stats: SendStats::default(),
@@ -355,6 +362,11 @@ impl Sender {
         let last = self.last_peer_us.load(Ordering::Relaxed) as i64;
         micros(self.epoch.elapsed()) - last < micros(PEER_TIMEOUT)
     }
+
+    /// 主控端自上次查看以来请求过关键帧没有（查看即清除）。
+    pub fn take_keyframe_request(&self) -> bool {
+        self.keyframe.swap(false, Ordering::AcqRel)
+    }
 }
 
 impl Drop for Sender {
@@ -366,7 +378,7 @@ impl Drop for Sender {
     }
 }
 
-/// 被控端收心跳、回授时包的线程。
+/// 被控端收心跳（回授时包）和关键帧请求的线程。
 struct Control {
     sock: UdpSocket,
     peer: SocketAddr,
@@ -376,6 +388,7 @@ struct Control {
     seq: u16,
     epoch: Instant,
     last_peer_us: Arc<AtomicU64>,
+    keyframe: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
 }
 
@@ -398,10 +411,14 @@ impl Control {
                 continue;
             };
             self.last_peer_us.store(t2 as u64, Ordering::Relaxed);
-            if kind == CTRL_KEEPALIVE {
-                if let Some(t1) = read_i64(body) {
-                    self.echo(t1, t2);
+            match kind {
+                CTRL_KEEPALIVE => {
+                    if let Some(t1) = read_i64(body) {
+                        self.echo(t1, t2);
+                    }
                 }
+                CTRL_KEYFRAME => self.keyframe.store(true, Ordering::Release),
+                _ => {}
             }
         }
     }
@@ -431,7 +448,7 @@ pub enum Event {
         timestamp: u32,
         times: Option<FrameTimes>,
     },
-    /// 发现丢包：调用方应经 RustDesk 原连接请求关键帧。等关键帧期间每隔 0.2 秒会再报一次。
+    /// 发现丢包。接收端已经在通道上请求了关键帧，调用方只需记录；等关键帧期间每隔 0.2 秒再请求、再报一次。
     Loss { packets: u32 },
 }
 
@@ -554,6 +571,9 @@ impl Receiver {
     pub fn recv(&mut self) -> Result<Event, Error> {
         loop {
             if let Some(e) = self.pending.pop_front() {
+                if let Event::Loss { .. } = e {
+                    self.send_control(CTRL_KEYFRAME, &[])?;
+                }
                 return Ok(e);
             }
             if self.last_keepalive.elapsed() >= KEEPALIVE_INTERVAL {

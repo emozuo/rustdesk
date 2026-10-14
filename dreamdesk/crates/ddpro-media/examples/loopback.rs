@@ -2,8 +2,8 @@
 //!
 //!   loopback IN.h265 [--drop 千分比] [--out RECEIVED.h265]
 //!
-//! - 发送端按 60 帧/秒发出每一帧；接收端发现丢包时「请求关键帧」，发送端用重发第一帧（关键帧）代替编码器
-//!   出关键帧；
+//! - 发送端按 60 帧/秒发出每一帧；接收端发现丢包时在通道上回发「请求关键帧」，发送端收到后用重发第一帧
+//!   （关键帧）代替编码器出关键帧；
 //! - 不丢包时检查收到的和发出的逐个 NAL 完全一致；丢包时统计「发现丢包 → 收到关键帧」的耗时；
 //! - 发送端发完就停，接收端应在 3 秒后报通道断开；
 //! - 分段延迟（第 5a 步）：两端在同一台机器上，真实的时钟差已知（两端时间轴零点之差），
@@ -12,7 +12,6 @@
 use ddpro_media::{hevc, Event, Keys, Ledger, Listener, Receiver, Stamp};
 use std::{
     net::{IpAddr, Ipv4Addr},
-    sync::mpsc,
     time::{Duration, Instant},
 };
 
@@ -58,7 +57,6 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let listener = Listener::bind(IpAddr::V4(Ipv4Addr::LOCALHOST), keys.clone())?;
     let addr = listener.local_addr()?;
     let sender_epoch = listener.epoch();
-    let (kf_tx, kf_rx) = mpsc::channel::<()>();
     let sent = aus.clone();
     let sender = std::thread::spawn(move || -> Result<u64, String> {
         let mut s = listener.accept(Duration::from_secs(3)).map_err(|e| e.to_string())?;
@@ -66,7 +64,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         let mut keyframes = 0u64;
         for (i, au) in sent.iter().enumerate() {
             // 有关键帧请求就先补发一次关键帧（代替编码器按需出关键帧）
-            if kf_rx.try_iter().count() > 0 {
+            if s.take_keyframe_request() {
                 s.send_frame(&sent[0], (i as u32) * 1500, Some(stamp_now())).map_err(|e| e.to_string())?;
                 keyframes += 1;
             }
@@ -109,7 +107,6 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
             Ok(Event::Loss { .. }) => {
                 loss_at.get_or_insert_with(Instant::now);
-                let _ = kf_tx.send(());
             }
             Err(e) => break e,
         }
