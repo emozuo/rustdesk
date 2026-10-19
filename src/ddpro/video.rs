@@ -6,13 +6,13 @@
 //! 确认连接还订阅着专业服务（即还开着）才把它切回普通画面。
 //!
 //! 画面源变了（分辨率、位置、Windows 桌面切换）和 RustDesk 普通画面服务一样处理：用同样的函数发现、
-//! 把同样的显示变化消息发给主控端，以出错结束本轮，由服务框架切桌面后重跑。专业通道留在会话里跨重跑保留，
-//! 重跑只按新尺寸重建采集器和编码器（P0 实施记录第 5 步「专业模式跟随画面源变化」）。
+//! 把同样的显示变化消息发给主控端，等一会儿、切到当前桌面后在本线程里重建（退避和 RustDesk 服务框架的出错重跑
+//! 一样）。专业通道跨重建保留，只按新尺寸重建采集器和编码器（P0 实施记录第 5 步「专业模式跟随画面源变化」）。
 
 use crate::{
     privacy_mode::{
-        get_privacy_mode_conn_id, is_current_privacy_mode_impl, INVALID_PRIVACY_MODE_CONN_ID,
-        PRIVACY_MODE_IMPL_WIN_MAG,
+        get_privacy_mode_conn_id, is_current_privacy_mode_impl, DEFAULT_PRIVACY_MODE_IMPL,
+        INVALID_PRIVACY_MODE_CONN_ID, PRIVACY_MODE_IMPL_WIN_EXCLUDE_FROM_CAPTURE, PRIVACY_MODE_IMPL_WIN_MAG,
     },
     server::{
         display_service,
@@ -26,7 +26,7 @@ use ddpro::{
     media::{Keys, Listener, Sender, Stamp},
     MediaChannel,
 };
-use hbb_common::{anyhow::anyhow, bail, log, ResultType};
+use hbb_common::{anyhow::anyhow, bail, log, throttled_log, ResultType};
 use scrap::{Capturer, Display, Frame, TraitCapturer};
 use std::{
     collections::HashMap,
@@ -50,12 +50,17 @@ const STARTUP_TIMEOUT: Duration = Duration::from_secs(3);
 const DIAG_DUMP: &str = "DDPRO_DIAG_DUMP";
 /// 显示变化检查的间隔（和 RustDesk 普通画面服务一样）
 const DISPLAY_CHECK_INTERVAL: Duration = Duration::from_secs(1);
+/// 画面源变了之后重建前等多久：和 RustDesk 服务框架出错重跑的退避一样（30 毫秒起、加倍、最多 1 秒）
+const REBUILD_BACKOFF_MIN: Duration = Duration::from_millis(30);
+const REBUILD_BACKOFF_MAX: Duration = Duration::from_secs(1);
+/// 采集被系统反复收回时会一直重建（没有次数上限，见 P1 已知限制），这行日志节流
+const REBUILD_LOG_INTERVAL: Duration = Duration::from_secs(10);
 
 struct Session {
     conn_id: i32,
     conn: ConnInner,
     server: ServerPtrWeak,
-    /// 专业画面通道；本轮开始时取走，只有画面源变了才放回去给重跑用
+    /// 谈成时开好的专业画面通道，服务线程开始时取走
     channel: Mutex<Option<Channel>>,
 }
 
@@ -66,7 +71,7 @@ enum Channel {
 }
 
 impl Channel {
-    /// 还能留给重跑用：已经接通的，或者还没过截止时间的
+    /// 还值得重建接着用：已经接通的，或者还没过截止时间的
     fn usable(&self) -> bool {
         match self {
             Channel::Waiting(_, deadline) => Instant::now() < *deadline,
@@ -77,7 +82,7 @@ impl Channel {
 
 struct Open {
     sender: Sender,
-    /// RTP 时间戳的起点：重跑后时间戳接着走，不回到 0
+    /// RTP 时间戳的起点：重建后时间戳接着走，不回到 0
     epoch: Instant,
 }
 
@@ -206,24 +211,40 @@ fn run(ps: ProService) -> ResultType<()> {
     let Some(session) = SESSIONS.lock().unwrap().get(&display).cloned() else {
         return Ok(());
     };
-    let Some(channel) = session.channel.lock().unwrap().take() else {
+    let Some(mut channel) = session.channel.lock().unwrap().take() else {
         // 本会话已经结束，等连接退订
         return Ok(());
     };
-    match stream(&ps, channel) {
-        Ok((End::SourceChanged(why), channel)) => {
-            *session.channel.lock().unwrap() = Some(channel);
-            // 放回之后再看一次：这期间连接退订了的话服务框架不会再重跑，通道就地关掉
-            if ps.ok() {
-                log::info!("ddpro: pro video on display {display}: {why}; restarting capture and encoder");
-                // 和 RustDesk 普通画面服务一样以出错结束本轮：服务框架等一会儿、切到当前桌面后重跑
-                bail!("SWITCH: {why}");
+    // 画面源变了就在这里重建，通道一直留在本线程：连接退订后自然随本轮结束释放。（交给服务框架按出错重跑的话，
+    // 等待期间连接退订，框架不再重跑，放回会话里的通道就没人关了。）
+    let mut backoff = REBUILD_BACKOFF_MIN;
+    let result = loop {
+        let round = Instant::now();
+        match stream(&ps, channel) {
+            Ok((End::SourceChanged(why), ch)) if ps.ok() => {
+                throttled_log!(
+                    REBUILD_LOG_INTERVAL,
+                    info,
+                    "ddpro: pro video on display {display}: {why}; restarting capture and encoder"
+                );
+                // 和 RustDesk 服务框架出错重跑一样：上一轮跑得久就从头退避，否则加倍；等一会儿、切到当前桌面再重建
+                backoff = if round.elapsed() > REBUILD_BACKOFF_MAX {
+                    REBUILD_BACKOFF_MIN
+                } else {
+                    (backoff * 2).min(REBUILD_BACKOFF_MAX)
+                };
+                std::thread::sleep(backoff);
+                crate::platform::windows::try_change_desktop();
+                channel = ch;
             }
-            session.channel.lock().unwrap().take();
-            log::info!("ddpro: pro video on display {display} ended");
+            other => break other,
         }
+    };
+    match result {
         // 连接退订（关闭或切走）而结束，RustDesk 已经处理好订阅
-        Ok((End::Unsubscribed, _)) => log::info!("ddpro: pro video on display {display} ended"),
+        Ok((End::Unsubscribed, _)) | Ok((End::SourceChanged(_), _)) => {
+            log::info!("ddpro: pro video on display {display} ended")
+        }
         Ok((End::ControllerClosed, _)) => match back_to_general(display, &session) {
             Back::General => log::info!("ddpro: the controller closed the pro view on display {display}; back to general view"),
             Back::OtherDisplay => log::info!("ddpro: the controller closed the pro view on display {display}; the connection already watches other displays"),
@@ -232,11 +253,11 @@ fn run(ps: ProService) -> ResultType<()> {
         Err(e) => match back_to_general(display, &session) {
             Back::General => {
                 log::warn!("ddpro: pro video on display {display} failed: {e}; back to general view");
-                tell_controller(&session, &e);
+                tell_controller(&session, display, &e);
             }
             Back::OtherDisplay => {
                 log::warn!("ddpro: pro video on display {display} failed: {e}; the connection already watches other displays");
-                tell_controller(&session, &e);
+                tell_controller(&session, display, &e);
             }
             Back::Closed => log::warn!("ddpro: pro video on display {display} failed: {e}; the connection is already closed"),
         },
@@ -245,21 +266,23 @@ fn run(ps: ProService) -> ResultType<()> {
     if sessions.get(&display).is_some_and(|s| Arc::ptr_eq(s, &session)) {
         sessions.remove(&display);
     }
-    // 失败已经切回普通画面并写了日志；不让服务框架按出错重试
+    // 失败已经切回普通画面并写了日志；不让服务框架按出错重跑
     Ok(())
 }
 
 /// 被控端这一侧出错、已退回普通画面：经 RustDesk 原连接告诉主控端原因，它马上关专业窗口、挂提示
 /// （不必等画面通道 3 秒没画面才发现，原因也不丢）
-fn tell_controller(session: &Session, e: &hbb_common::anyhow::Error) {
+/// 带上屏号：主控端切过屏的话，它据此认出这是旧屏的消息、不去动新屏的专业窗口
+fn tell_controller(session: &Session, display: usize, e: &hbb_common::anyhow::Error) {
     use ddpro::stopped::Reason;
     let reason = match e.downcast_ref::<ChannelError>() {
         Some(ChannelError::Lost) => Reason::CHANNEL_LOST,
         Some(ChannelError::NeverOpened(_)) => Reason::CHANNEL_FAILED,
         None if e.is::<NoImage>() => Reason::NO_IMAGE,
+        None if e.is::<MagPrivacy>() => Reason::PRIVACY_MODE,
         None => Reason::VIDEO_ERROR,
     };
-    if let Some(msg) = super::wire::wrap(ddpro::stopped(reason, e.to_string())) {
+    if let Some(msg) = super::wire::wrap(ddpro::stopped(reason, e.to_string(), display as u32)) {
         session.conn.clone().send(Arc::new(msg));
     }
 }
@@ -296,6 +319,18 @@ impl std::fmt::Display for NoImage {
 
 impl std::error::Error for NoImage {}
 
+/// 隐私模式开着且用的是放大镜实现（见 [`mag_privacy_mode`]）
+#[derive(Debug)]
+struct MagPrivacy;
+
+impl std::fmt::Display for MagPrivacy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "privacy mode uses the magnifier, which pro capture cannot see through")
+    }
+}
+
+impl std::error::Error for MagPrivacy {}
+
 enum Back {
     /// 连接已经关了
     Closed,
@@ -312,6 +347,11 @@ fn back_to_general(display: usize, session: &Session) -> Back {
     let Some(server) = session.server.upgrade() else {
         return Back::Closed;
     };
+    // 主控端快速切走又切回（A→B→A）时，这块屏已经登记了新的专业会话，专业服务的订阅归它，不能退。
+    // 在服务器锁外查：登记和订阅不在同一把锁里，这里只防这个常见的先后顺序
+    if !SESSIONS.lock().unwrap().get(&display).is_some_and(|s| std::ptr::eq(Arc::as_ptr(s), session)) {
+        return Back::OtherDisplay;
+    }
     // 枚举显示器要几毫秒，放在服务器锁外
     let ndisplay = Display::all().map_or(0, |d| d.len()).max(display + 1);
     let mut s = server.write().unwrap();
@@ -338,14 +378,14 @@ enum End {
     Unsubscribed,
     /// 主控端关了专业窗口，要回普通画面
     ControllerClosed,
-    /// 画面源变了：通道留着（还没接通的也留着），重跑时接着用
+    /// 画面源变了：通道留着（还没接通的也留着），重建后接着用
     SourceChanged(String),
 }
 
 fn stream(ps: &ProService, channel: Channel) -> ResultType<(End, Channel)> {
     let display = ps.display;
     // 服务线程不在当前桌面（比如被控端停在锁屏界面时开始专业会话）时采集器建不起来：
-    // 和画面传输中途一样，交服务框架切到当前桌面后重跑。主控端已经不等了的就不再重跑，按故障退回普通画面
+    // 和画面传输中途一样，切到当前桌面后重建。主控端已经不等了的就不再重建，按故障退回普通画面
     if desktop_changed() && channel.usable() {
         return Ok((End::SourceChanged("desktop changed".into()), channel));
     }
@@ -376,14 +416,16 @@ fn stream(ps: &ProService, channel: Channel) -> ResultType<(End, Channel)> {
     )
     .map_err(|e| anyhow!("{e}"))?;
     let Open { mut sender, epoch } = match channel {
-        Channel::Waiting(listener, _) => Open {
+        // 重建后接着等的只等剩下的时间：主控端过了截止时间就不再来了
+        Channel::Waiting(listener, deadline) => Open {
             sender: listener
-                .accept(CHANNEL_TIMEOUT)
+                .accept(deadline.saturating_duration_since(Instant::now()))
                 .map_err(|e| ChannelError::NeverOpened(e.to_string()))?,
             epoch: Instant::now(),
         },
         Channel::Open(open) => open,
     };
+    sender.pace(BITRATE_KBPS, FPS);
     log::info!(
         "ddpro: pro video on display {display} started: {w}x{h} 4:4:4 8bit {FPS} fps {BITRATE_KBPS} kbps -> {}",
         sender.peer()
@@ -402,7 +444,7 @@ fn stream(ps: &ProService, channel: Channel) -> ResultType<(End, Channel)> {
             break End::Unsubscribed;
         }
         if mag_privacy_mode() {
-            bail!("privacy mode uses the magnifier, which pro capture cannot see through");
+            return Err(MagPrivacy.into());
         }
         if desktop_changed() {
             break End::SourceChanged("desktop changed".into());
@@ -419,7 +461,7 @@ fn stream(ps: &ProService, channel: Channel) -> ResultType<(End, Channel)> {
             src = match next_texture(&mut cap, wait) {
                 Ok(t) => t,
                 Err(e) => {
-                    // 和 RustDesk 普通画面服务一样：采集出错先立刻刷新显示列表，是画面源变了就重跑
+                    // 和 RustDesk 普通画面服务一样：采集出错先立刻刷新显示列表，是画面源变了就重建
                     display_service::check_displays_changed().ok();
                     if display_changed(ps, &geometry) {
                         break End::SourceChanged(format!("display changed ({e})"));
@@ -456,7 +498,9 @@ fn stream(ps: &ProService, channel: Channel) -> ResultType<(End, Channel)> {
         if !sender.peer_alive() {
             return Err(ChannelError::Lost.into());
         }
-        i += 1;
+        // 落后了（关键帧按发包节奏摊开发要一百多毫秒）就跳过错过的节拍，不背靠背补出一串帧
+        let due = (first.elapsed().as_nanos() / interval.as_nanos()) as u64;
+        i = (i + 1).max(due);
         if let Some(d) = (first + interval * i as u32).checked_duration_since(Instant::now()) {
             std::thread::sleep(d);
         }
@@ -464,10 +508,11 @@ fn stream(ps: &ProService, channel: Channel) -> ResultType<(End, Channel)> {
     if !matches!(end, End::SourceChanged(_)) {
         let st = &sender.stats;
         log::info!(
-            "ddpro: pro video on display {display} sent {} frames, {} packets, {} bytes",
+            "ddpro: pro video on display {display} sent {} frames, {} packets, {} bytes, {} retransmitted",
             st.frames,
             st.packets,
-            st.bytes
+            st.bytes,
+            st.retransmitted
         );
     }
     Ok((end, Channel::Open(Open { sender, epoch })))
@@ -480,10 +525,11 @@ fn desktop_changed() -> bool {
 
 /// 隐私模式开着且用的是放大镜实现：它靠专门的截屏方式绕开遮罩，专业采集只会拍到黑屏
 /// （默认的「截屏时排除」实现不影响专业采集，见 P0 实施记录）。
-/// 支持「截屏时排除」的系统上 RustDesk 根本不提供放大镜实现，直接跳过：查隐私模式要拿它的锁，打开隐私模式时
-/// 这把锁要被持有好几秒，每帧去等会让专业画面停发、主控端 3 秒后判定断开（2026-10-19 在 209.32 上实撞）
+/// 默认实现是「截屏时排除」（系统支持它）时 RustDesk 根本不提供放大镜实现，直接跳过：查隐私模式要拿它的锁，
+/// 打开隐私模式时这把锁要被持有好几秒，每帧去等会让专业画面停发、主控端 3 秒后判定断开（2026-10-19 在 209.32 上实撞）。
+/// 不支持的老系统（Windows 10 2004 以下）照旧每帧查，打开隐私模式时专业画面仍会断（已知限制）
 fn mag_privacy_mode() -> bool {
-    if crate::privacy_mode::win_exclude_from_capture::is_supported() {
+    if *DEFAULT_PRIVACY_MODE_IMPL == PRIVACY_MODE_IMPL_WIN_EXCLUDE_FROM_CAPTURE {
         return false;
     }
     get_privacy_mode_conn_id().is_some_and(|id| id != INVALID_PRIVACY_MODE_CONN_ID)

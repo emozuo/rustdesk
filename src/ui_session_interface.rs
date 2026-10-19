@@ -855,6 +855,8 @@ impl<T: InvokeUiSession> Session<T> {
     }
 
     pub fn switch_display(&self, display: i32) {
+        #[cfg(feature = "dd-pro")]
+        crate::ddpro::client::on_switch_display(self, display);
         let (w, h) = match self.lc.read().unwrap().get_custom_resolution(display) {
             Some((w, h)) => (w, h),
             None => (0, 0),

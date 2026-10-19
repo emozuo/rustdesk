@@ -1,10 +1,11 @@
 //! 第 4 步自测：在本机用录好的真实 H.265 码流走一遍完整通道（UDP + RTP + SRTP），不需要显卡。
 //!
-//!   loopback IN.h265 [--drop 千分比] [--out RECEIVED.h265]
+//!   loopback IN.h265 [--drop 千分比] [--pace KBPS] [--out RECEIVED.h265]
 //!
-//! - 发送端按 60 帧/秒发出每一帧；接收端发现丢包时在通道上回发「请求关键帧」，发送端收到后用重发第一帧
-//!   （关键帧）代替编码器出关键帧；
-//! - 不丢包时检查收到的和发出的逐个 NAL 完全一致；丢包时统计「发现丢包 → 收到关键帧」的耗时；
+//! - 发送端按 60 帧/秒发出每一帧，发包节奏按 --pace 的码率（默认 30000，和专业模式一样；0 = 不控节奏）；
+//!   接收端缺包先请求补发，补发也等不到才回发「请求关键帧」，发送端收到后用重发第一帧（关键帧）代替编码器出关键帧；
+//! - 没有救不回来的丢包时（不丢包，或丢的全补回来了）检查收到的和发出的逐个 NAL 完全一致；
+//!   否则统计「发现丢包 → 收到关键帧」的耗时；
 //! - 发送端发完就停，接收端应在 3 秒后报通道断开；
 //! - 分段延迟（第 5a 步）：两端在同一台机器上，真实的时钟差已知（两端时间轴零点之差），
 //!   检查授时算出的时钟差误差 ≤ 0.1 ms、各段之和与总数对得上、网络一段没有负数。
@@ -33,14 +34,16 @@ fn stamp_now() -> Stamp {
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let input = args.first().ok_or("usage: loopback IN.h265 [--drop PERMILLE] [--out FILE]")?;
+    let input = args.first().ok_or("usage: loopback IN.h265 [--drop PERMILLE] [--pace KBPS] [--out FILE]")?;
     let mut drop = 0u32;
+    let mut pace = 30_000u32;
     let mut out = None;
     let mut it = args[1..].iter();
     while let Some(k) = it.next() {
         let v = it.next().ok_or_else(|| format!("{k} needs a value"))?;
         match k.as_str() {
             "--drop" => drop = v.parse()?,
+            "--pace" => pace = v.parse()?,
             "--out" => out = Some(v.clone()),
             _ => return Err(format!("unknown option {k}").into()),
         }
@@ -60,6 +63,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let sent = aus.clone();
     let sender = std::thread::spawn(move || -> Result<u64, String> {
         let mut s = listener.accept(Duration::from_secs(3)).map_err(|e| e.to_string())?;
+        if pace > 0 {
+            s.pace(pace, 60);
+        }
         let start = Instant::now();
         let mut keyframes = 0u64;
         for (i, au) in sent.iter().enumerate() {
@@ -122,7 +128,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         "clock: true offset {true_offset} us, last estimate {:?}, max error {clock_err_max} us; frames without timing {untimed}",
         r.clock()
     );
-    let net_negatives = summary.stage(ddpro_media::Stage::Net).map_or(0, |s| s.negatives);
+    // 网络一段和帧内跨度都不能有负数：补发时暂存的包按到达时刻算首包、按拼进来的时刻算收齐，算错了就会出负数
+    let negatives = |stage| summary.stage(stage).map_or(0, |s| s.negatives);
+    let net_negatives = negatives(ddpro_media::Stage::Net) + negatives(ddpro_media::Stage::Spread);
     if clock_err_max > 100 || summary.mismatches > 0 || net_negatives > 0 || summary.frames == 0 {
         return Err("latency ledger check failed".into());
     }
@@ -131,7 +139,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         std::fs::write(&path, received.concat())?;
         println!("received stream written to {path}");
     }
-    if drop == 0 {
+    if r.stats.loss_events == 0 {
         // 逐个 NAL 比（起始码 3 / 4 字节的差别不算）
         let a: Vec<&[u8]> = aus.iter().flat_map(|f| hevc::split_annexb(f)).collect();
         let joined = received.concat();

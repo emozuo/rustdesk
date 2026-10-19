@@ -14,7 +14,20 @@ pub fn nal_type(nal: &[u8]) -> u8 {
 
 /// 关键帧（IRAP：BLA / IDR / CRA），从它开始可以独立解码。
 pub fn is_irap(nal: &[u8]) -> bool {
-    (16..=21).contains(&nal_type(nal))
+    is_irap_type(nal_type(nal))
+}
+
+fn is_irap_type(t: u8) -> bool {
+    (16..=21).contains(&t)
+}
+
+/// 这个 RTP 负载是不是关键帧开头的部分：参数集（VPS / SPS / PPS）或 IRAP 的单个 NAL / 首个分片。
+pub fn payload_starts_keyframe(p: &[u8]) -> bool {
+    let t = match nal_type(p) {
+        TYPE_FU if p.len() > NAL_HEADER && p[2] & 0x80 != 0 => p[2] & 0x3f,
+        t => t,
+    };
+    is_irap_type(t) || (32..=34).contains(&t)
 }
 
 /// 按起始码（00 00 01 或 00 00 00 01）切出各个 NAL，不含起始码。

@@ -384,10 +384,12 @@ impl State {
         if w == 0 || h == 0 || c.rgba.len() != w * h * 4 {
             return Err(Error(format!("bad cursor image {w}x{h} with {} bytes", c.rgba.len())));
         }
-        if self.cursor_pool.is_none() {
-            self.cursor_pool = Some(SlotPool::new(w * h * 4, &self.shm).map_err(err("create the cursor buffer pool"))?);
-        }
-        let Some(pool) = self.cursor_pool.as_mut() else { unreachable!() };
+        let pool = match self.cursor_pool.as_mut() {
+            Some(pool) => pool,
+            None => self
+                .cursor_pool
+                .insert(SlotPool::new(w * h * 4, &self.shm).map_err(err("create the cursor buffer pool"))?),
+        };
         let (buffer, canvas) = pool
             .create_buffer(w as i32, h as i32, (w * 4) as i32, wl_shm::Format::Argb8888)
             .map_err(err("create a cursor buffer"))?;

@@ -9,7 +9,7 @@
 //! - 读标准输入：光标、远程这块屏的显示变化、会话进程退出；
 //! - 主线程：窗口事件、解码、转 RGB、提交、键鼠。
 
-use super::wire::PEER_LOG_INTERVAL;
+use crate::ddpro::wire::PEER_LOG_INTERVAL;
 use base::message_proto::{message, misc, CursorData, Message};
 use ddpro::{
     dec::{fit_rect, Converter, Decoder, Device, RgbStandard},
@@ -87,17 +87,19 @@ struct Shown {
 pub fn run() {
     // 标准输出拿来回传消息：先把它另存一份当专用通道，再把原来的标准输出指到标准错误，
     // 这样任何库往标准输出打的字都不会混进消息里
-    let up = unsafe {
+    // 指不过去就不能用：库打到标准输出的字会混进消息里，干净地失败（会话进程按「专业窗口意外退出」处理）
+    let mut up = unsafe {
         let fd = hbb_common::libc::dup(1);
-        hbb_common::libc::dup2(2, 1);
-        if fd < 0 {
-            log::error!("ddpro: pro view cannot set up its channel to the session");
+        if fd < 0 || hbb_common::libc::dup2(2, 1) < 0 {
+            log::error!(
+                "ddpro: pro view cannot set up its channel to the session: {}",
+                std::io::Error::last_os_error()
+            );
             return;
         }
         File::from_raw_fd(fd)
     };
-    let up = Arc::new(Mutex::new(up));
-    let (kind, detail) = match run_(&up) {
+    let (kind, detail) = match run_(&mut up) {
         Ok((kind, detail)) => {
             log::info!("ddpro: pro view ended: {detail}");
             (kind, detail)
@@ -112,15 +114,15 @@ pub fn run() {
         detail,
         ..Default::default()
     };
-    send_up(&up, view_up::Union::Ended(ended)).ok();
+    send_up(&mut up, view_up::Union::Ended(ended)).ok();
 }
 
-fn send_up(up: &Mutex<File>, union: view_up::Union) -> ResultType<()> {
+fn send_up(up: &mut File, union: view_up::Union) -> ResultType<()> {
     let msg = ViewUp {
         union: Some(union),
         ..Default::default()
     };
-    ddpro::write_frame(&mut *up.lock().unwrap(), &msg)?;
+    ddpro::write_frame(up, &msg)?;
     Ok(())
 }
 
@@ -131,7 +133,7 @@ struct ChannelEnd {
     why: String,
 }
 
-fn run_(up: &Arc<Mutex<File>>) -> ResultType<(Kind, String)> {
+fn run_(up: &mut File) -> ResultType<(Kind, String)> {
     let mut stdin = BufReader::new(std::io::stdin());
     let start: ViewStart = match ddpro::read_frame::<ViewDown>(&mut stdin)? {
         Some(ViewDown {

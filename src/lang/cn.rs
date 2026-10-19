@@ -793,7 +793,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Not in pro mode: the controlled side's screen shows no picture (no monitor connected?)", "非专业模式：被控端屏幕没有画面（可能没接显示器）"),
         ("The controlled side could not capture the screen or encode the pro video. Reconnect to try again; if it keeps happening, check the controlled side's graphics driver.", "被控端截屏或专业编码出错。可以重新连接再试；反复出现时请检查被控端的显卡驱动。"),
         ("The controlled side has no monitor connected, or its monitor is asleep, so the graphics card produces no picture. Connect a monitor (or an HDMI dummy plug), or enable a virtual display on the controlled side, then reconnect.", "被控端没有接显示器，或者显示器处于休眠，显卡拿不到画面。请接上显示器（或 HDMI 假负载插头），或在被控端启用虚拟显示器后重新连接。"),
-        ("No pro video arrived for 3 seconds, usually because the network was interrupted. Reconnect after the network recovers.", "专业画面连续 3 秒没有收到，通常是网络中断。网络恢复后重新连接即可。"),
+        ("The pro video stopped: either no video arrived here for 3 seconds, or the controlled side stopped hearing from this computer (for example, a firewall blocks UDP in one direction). Reconnect after checking the network or firewall.", "专业画面中断了：要么本机连续 3 秒没收到画面，要么被控端收不到本机的回应（比如防火墙挡住了一个方向的 UDP）。检查网络或防火墙后重新连接。"),
         ("The pro video channel could not be set up. A firewall between the two computers may be blocking UDP. Check the network or firewall, then reconnect.", "专业画面通道建立不起来，可能是两台电脑之间的防火墙挡住了 UDP。检查网络或防火墙设置后重新连接。"),
         ("This computer failed to show the pro video (hardware decoding or display error). Reconnect to try again; if it keeps happening, check this computer's graphics driver and desktop.", "本机显示专业画面出错（显卡解码或显示失败）。可以重新连接再试；反复出现时请检查本机的显卡驱动和桌面环境。"),
         ("This computer does not meet the pro mode requirements: hardware HEVC 4:4:4 decoding and a Wayland desktop.", "本机不满足专业模式的条件：需要显卡支持 HEVC 4:4:4 硬解，并且使用 Wayland 桌面。"),
@@ -801,6 +801,10 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Another connection is using this display of the controlled side (pro mode allows one connection per display). Reconnect after it ends, or switch to another display.", "被控端这块屏正被别的连接使用（专业模式一块屏只给一个连接）。等对方断开后再连，或切换到另一块屏。"),
         ("The two computers run different versions of the pro protocol. Upgrade the older side so both run the same version.", "两端的专业协议版本不同。请把较旧的一端升级，让两端版本一致。"),
         ("You closed the pro view, so this session is shown in general mode. Reconnect to return to pro mode.", "你关闭了专业窗口，所以这次会话改用普通模式显示。重新连接即可回到专业模式。"),
-        ("Original error (for troubleshooting)", "原始错误（排查用）")
+        ("Original error (for troubleshooting)", "原始错误（排查用）"),
+        ("Not in pro mode: privacy mode is on at the controlled side", "非专业模式：被控端开着隐私模式"),
+        ("On this version of Windows, the controlled side's privacy mode hides the screen from pro capture. Turn privacy mode off, then reconnect.", "被控端这个版本的 Windows 上，隐私模式会挡住专业模式的截屏。关掉隐私模式后重新连接。"),
+        ("Not in pro mode: the size of the remote display is unknown", "非专业模式：不知道远程这块屏的尺寸"),
+        ("The controlled side did not report the size of this display. Reconnect to try again.", "被控端没有报告这块屏的尺寸。重新连接再试。")
     ].iter().cloned().collect();
 }

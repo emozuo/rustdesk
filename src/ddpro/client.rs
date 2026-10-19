@@ -4,9 +4,9 @@
 //! 诊断开关 `DDPRO_DIAG_RECEIVE_ONLY=1` 打开「只收不解」：解码 / 显示能力报成 4:4:4 8bit 可用（日志里写明是诊断），
 //! 本进程自己收专业画面、记延迟，码流写进 `DDPRO_DIAG_DUMP` 指定的文件，用来在没有专业显示的机器上验证画面通道。
 
-use super::wire::{wrap, PEER_LOG_INTERVAL};
 use crate::{
-    client::Data,
+    client::{Data, Interface},
+    ddpro::wire::{wrap, PEER_LOG_INTERVAL},
     ui_session_interface::{InvokeUiSession, Session},
 };
 use base::message_proto::{Message, PeerInfo};
@@ -35,33 +35,57 @@ fn receive_only() -> bool {
     std::env::var(DIAG_RECEIVE_ONLY).is_ok_and(|v| v == "1")
 }
 
-/// 收到被控端的登录应答后决定要不要发起专业会话，返回要发出的请求。
+/// 收到被控端的登录应答后决定要不要发起专业会话。
 /// 只在远程桌面会话里发起；文件传输、终端、端口转发等会话不发。
-pub fn on_peer_info<T: InvokeUiSession>(pi: &PeerInfo, is_remote_desktop: bool, _session: &Session<T>) -> Option<Message> {
-    if !is_remote_desktop {
-        return None;
+pub fn on_peer_info<T: InvokeUiSession>(pi: &PeerInfo, session: &Session<T>) {
+    if !session.is_default() {
+        return;
     }
     #[cfg(all(feature = "flutter", target_os = "linux"))]
-    super::view_link::remember_display(pi, _session);
+    super::view_link::remember_display(pi, session);
     let card = serde_json::from_str::<Value>(&pi.platform_additions)
         .ok()
         .and_then(|v| v.get(ddpro::NAME_CARD_KEY).and_then(Value::as_u64));
     let Some(peer_version) = card else {
         log::info!("ddpro: the peer does not offer pro mode, staying in general mode");
-        return None;
+        // 重连到了不提供专业模式的对端：上次挂的提示不再适用（对普通 RustDesk 对端不显示提示）
+        #[cfg(all(feature = "flutter", target_os = "linux"))]
+        super::view_link::clear_notice(session);
+        return;
     };
     let peer_version = u32::try_from(peer_version).unwrap_or(u32::MAX);
     if let Some(mismatch) = ddpro::version_mismatch(peer_version) {
         log::error!("ddpro: not starting a pro session: {mismatch}");
         #[cfg(all(feature = "flutter", target_os = "linux"))]
-        super::view_link::version_mismatch(_session, &mismatch);
-        return None;
+        super::view_link::version_mismatch(session, &mismatch);
+        return;
     }
     let display = u32::try_from(pi.current_display).unwrap_or(0);
     log::info!("ddpro: the peer offers pro protocol v{peer_version}, requesting a pro session for display {display}");
+    request_pro(session, display);
+}
+
+/// 对 `display` 发起专业请求（开会话、换屏各算新的一次）。本机能力第一次探测要打开显卡、连 Wayland，
+/// 几十到几百毫秒，放到单独的线程里做，不占 RustDesk 的消息循环；请求经会话的发送通道发出。
+fn request_pro<T: InvokeUiSession>(session: &Session<T>, display: u32) {
     #[cfg(all(feature = "flutter", target_os = "linux"))]
-    super::view_link::begin_attempt(_session);
-    wrap(ddpro::hello(decode_caps(), display_caps(), display))
+    super::view_link::clear_notice(session);
+    let session = session.clone();
+    std::thread::spawn(move || {
+        if let Some(m) = wrap(ddpro::hello(decode_caps(), display_caps(), display)) {
+            session.send(Data::Message(m));
+        }
+    });
+}
+
+/// 用户在 RustDesk 里切屏（`Session::switch_display` 的钩子）：专业窗口开着、或上次因和屏有关的故障没进专业模式时，
+/// 关掉旧屏的专业窗口、对新屏重新发起专业请求（「同屏不共享」照旧由被控端检查）。
+pub fn on_switch_display<T: InvokeUiSession>(_session: &Session<T>, _display: i32) {
+    #[cfg(all(feature = "flutter", target_os = "linux"))]
+    if let Some(display) = super::view_link::on_switch_display(_session, _display) {
+        log::info!("ddpro: switched to remote display {display}; requesting a pro session for it");
+        request_pro(_session, u32::try_from(display).unwrap_or(0));
+    }
 }
 
 /// 处理被控端的答复。同意且带画面通道时拉起专业窗口（诊断「只收不解」时本进程自己收）；
@@ -271,16 +295,8 @@ fn display_caps() -> DisplayCaps {
     DisplayCaps::default()
 }
 
-/// RustDesk 连接里收到的每条消息都过一下（RustDesk 自己的处理照旧）：光标、显示变化转给开着的专业窗口；
-/// 用户换到了别的屏时，专业窗口已经关掉，这里对新屏重新发起专业请求（「同屏不共享」照旧由被控端检查）。
+/// RustDesk 连接里收到的每条消息都过一下（RustDesk 自己的处理照旧）：光标、当前屏的显示变化转给开着的专业窗口。
 pub fn on_rustdesk_message<T: InvokeUiSession>(_msg: &Message, _session: &Session<T>) {
     #[cfg(all(feature = "flutter", target_os = "linux"))]
-    if let Some(display) = super::view_link::on_rustdesk_message(_msg, _session) {
-        log::info!("ddpro: the remote display switched to {display}; requesting a pro session for it");
-        let display = u32::try_from(display).unwrap_or(0);
-        if let Some(m) = wrap(ddpro::hello(decode_caps(), display_caps(), display)) {
-            use crate::client::Interface;
-            _session.send(Data::Message(m));
-        }
-    }
+    super::view_link::on_rustdesk_message(_msg, _session);
 }

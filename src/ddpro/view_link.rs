@@ -7,9 +7,9 @@
 //! 「非专业模式」提示（不静默降级，P0 实施记录「P0 收尾：模式提示」）也在这里：对端支持专业模式、但这次会话
 //! 现在不在专业模式时，往 RustDesk 远程窗口推 `ddpro_mode` 事件，界面在画面左上角挂常驻标签。
 
-use super::wire::PEER_LOG_INTERVAL;
 use crate::{
     client::{Data, Interface},
+    ddpro::wire::PEER_LOG_INTERVAL,
     ui_session_interface::{InvokeUiSession, Session},
 };
 use base::message_proto::{message, misc, KeyboardMode, Message, PeerInfo};
@@ -29,17 +29,19 @@ use std::{
     time::Duration,
 };
 
-/// 每个会话（按 RustDesk 的会话号）：远程当前屏的编号和位置尺寸，专业窗口开着时还有给它发消息的通道。
+/// 每个会话（按 RustDesk 的会话号）：远程当前屏的编号、各块屏的位置尺寸，专业窗口开着时还有给它发消息的通道。
 #[derive(Default)]
 struct Link {
     index: i32,
-    display: (i32, i32, u32, u32),
+    /// 远程各块屏的位置尺寸：对端信息里的显示列表，之后被控端每次报显示变化就更新那一块。
+    /// 用户切屏时新屏的尺寸当场就有，不必等被控端回显示变化
+    rects: HashMap<i32, (i32, i32, u32, u32)>,
     /// 专业窗口的进程号和给它发消息的通道。换屏时旧窗口还没退出新窗口就开了，旧窗口收尾时凭进程号
     /// 只清自己的
     down: Option<(u32, mpsc::Sender<ViewDown>)>,
     /// 这次专业请求（开会话、换屏各算一次）挂着的提示：只报第一个原因，后面的多半是它的连带结果；
     /// 例外是主控端因「没画面」推测的通道原因，被控端随后报来的确切原因可以替换它
-    notice: Option<&'static str>,
+    notice: Option<Notice>,
 }
 
 static LINKS: OnceLock<Mutex<HashMap<u64, Link>>> = OnceLock::new();
@@ -52,123 +54,182 @@ fn key<T: InvokeUiSession>(session: &Session<T>) -> u64 {
     session.lc.read().unwrap().session_id
 }
 
-// 「非专业模式」提示的结论。英文本身是多语言表的键（`src/lang`），界面按它翻译
-const NOT_PRO_PEER_FAILED: &str = "Not in pro mode: the controlled side failed to capture or encode";
-const NOT_PRO_NO_IMAGE: &str = "Not in pro mode: the controlled side's screen shows no picture (no monitor connected?)";
-const NOT_PRO_LOST: &str = "Not in pro mode: the pro channel was interrupted";
-const NOT_PRO_CHANNEL_FAILED: &str = "Not in pro mode: the pro channel could not be opened";
-const NOT_PRO_DISPLAY: &str = "Not in pro mode: this computer cannot show the pro view";
-const NOT_PRO_UNSUPPORTED: &str = "Not in pro mode: this computer does not support pro mode";
-const NOT_PRO_PEER_UNAVAILABLE: &str = "Not in pro mode: the controlled side cannot provide pro video";
-const NOT_PRO_BUSY: &str = "Not in pro mode: this display is already in use";
-const NOT_PRO_VERSION: &str = "Not in pro mode: the pro protocol versions do not match";
-const NOT_PRO_USER_CLOSED: &str = "Not in pro mode: you closed the pro view";
+/// 「非专业模式」提示的原因。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Notice {
+    PeerFailed,
+    NoImage,
+    PrivacyMode,
+    Lost,
+    ChannelFailed,
+    Display,
+    NoDisplayInfo,
+    Unsupported,
+    PeerUnavailable,
+    Busy,
+    Version,
+    UserClosed,
+}
 
-/// 每种结论配一句说明：这意味着什么、该怎么处理（鼠标停在标签上显示，原始错误跟在后面）。同样是多语言表的键
-fn tip(text: &str) -> &'static str {
-    match text {
-        NOT_PRO_PEER_FAILED => "The controlled side could not capture the screen or encode the pro video. Reconnect to try again; if it keeps happening, check the controlled side's graphics driver.",
-        NOT_PRO_NO_IMAGE => "The controlled side has no monitor connected, or its monitor is asleep, so the graphics card produces no picture. Connect a monitor (or an HDMI dummy plug), or enable a virtual display on the controlled side, then reconnect.",
-        NOT_PRO_LOST => "No pro video arrived for 3 seconds, usually because the network was interrupted. Reconnect after the network recovers.",
-        NOT_PRO_CHANNEL_FAILED => "The pro video channel could not be set up. A firewall between the two computers may be blocking UDP. Check the network or firewall, then reconnect.",
-        NOT_PRO_DISPLAY => "This computer failed to show the pro video (hardware decoding or display error). Reconnect to try again; if it keeps happening, check this computer's graphics driver and desktop.",
-        NOT_PRO_UNSUPPORTED => "This computer does not meet the pro mode requirements: hardware HEVC 4:4:4 decoding and a Wayland desktop.",
-        NOT_PRO_PEER_UNAVAILABLE => "The controlled side cannot provide pro video, for example because its graphics card cannot encode HEVC 4:4:4.",
-        NOT_PRO_BUSY => "Another connection is using this display of the controlled side (pro mode allows one connection per display). Reconnect after it ends, or switch to another display.",
-        NOT_PRO_VERSION => "The two computers run different versions of the pro protocol. Upgrade the older side so both run the same version.",
-        NOT_PRO_USER_CLOSED => "You closed the pro view, so this session is shown in general mode. Reconnect to return to pro mode.",
-        _ => "",
+impl Notice {
+    /// 标签上的结论。英文本身是多语言表的键（`src/lang`），界面按它翻译
+    fn text(self) -> &'static str {
+        match self {
+            Notice::PeerFailed => "Not in pro mode: the controlled side failed to capture or encode",
+            Notice::NoImage => "Not in pro mode: the controlled side's screen shows no picture (no monitor connected?)",
+            Notice::PrivacyMode => "Not in pro mode: privacy mode is on at the controlled side",
+            Notice::Lost => "Not in pro mode: the pro channel was interrupted",
+            Notice::ChannelFailed => "Not in pro mode: the pro channel could not be opened",
+            Notice::Display => "Not in pro mode: this computer cannot show the pro view",
+            Notice::NoDisplayInfo => "Not in pro mode: the size of the remote display is unknown",
+            Notice::Unsupported => "Not in pro mode: this computer does not support pro mode",
+            Notice::PeerUnavailable => "Not in pro mode: the controlled side cannot provide pro video",
+            Notice::Busy => "Not in pro mode: this display is already in use",
+            Notice::Version => "Not in pro mode: the pro protocol versions do not match",
+            Notice::UserClosed => "Not in pro mode: you closed the pro view",
+        }
+    }
+
+    /// 配的说明：这意味着什么、该怎么处理（鼠标停在标签上显示，原始错误跟在后面）。同样是多语言表的键
+    fn tip(self) -> &'static str {
+        match self {
+            Notice::PeerFailed => "The controlled side could not capture the screen or encode the pro video. Reconnect to try again; if it keeps happening, check the controlled side's graphics driver.",
+            Notice::NoImage => "The controlled side has no monitor connected, or its monitor is asleep, so the graphics card produces no picture. Connect a monitor (or an HDMI dummy plug), or enable a virtual display on the controlled side, then reconnect.",
+            Notice::PrivacyMode => "On this version of Windows, the controlled side's privacy mode hides the screen from pro capture. Turn privacy mode off, then reconnect.",
+            Notice::Lost => "The pro video stopped: either no video arrived here for 3 seconds, or the controlled side stopped hearing from this computer (for example, a firewall blocks UDP in one direction). Reconnect after checking the network or firewall.",
+            Notice::ChannelFailed => "The pro video channel could not be set up. A firewall between the two computers may be blocking UDP. Check the network or firewall, then reconnect.",
+            Notice::Display => "This computer failed to show the pro video (hardware decoding or display error). Reconnect to try again; if it keeps happening, check this computer's graphics driver and desktop.",
+            Notice::NoDisplayInfo => "The controlled side did not report the size of this display. Reconnect to try again.",
+            Notice::Unsupported => "This computer does not meet the pro mode requirements: hardware HEVC 4:4:4 decoding and a Wayland desktop.",
+            Notice::PeerUnavailable => "The controlled side cannot provide pro video, for example because its graphics card cannot encode HEVC 4:4:4.",
+            Notice::Busy => "Another connection is using this display of the controlled side (pro mode allows one connection per display). Reconnect after it ends, or switch to another display.",
+            Notice::Version => "The two computers run different versions of the pro protocol. Upgrade the older side so both run the same version.",
+            Notice::UserClosed => "You closed the pro view, so this session is shown in general mode. Reconnect to return to pro mode.",
+        }
+    }
+
+    /// 主控端自己推测的通道原因（等 3 秒没画面）：被控端随后报来的确切原因可以替换它
+    fn is_guess(self) -> bool {
+        matches!(self, Notice::Lost | Notice::ChannelFailed)
+    }
+
+    /// 用户切到别的屏时值得对新屏再请求一次：和这块屏、这次通道有关的故障。本机不支持、版本不一致换屏也一样；
+    /// 用户自己关的专业窗口不替他重开
+    fn retry_on_switch(self) -> bool {
+        !matches!(self, Notice::Unsupported | Notice::Version | Notice::UserClosed)
     }
 }
 
-/// 推给 RustDesk 远程窗口：`level` 为 `fault`（红）、`user`（灰），空串表示撤掉提示
-fn push_mode<T: InvokeUiSession>(session: &Session<T>, level: &str, text: &str, detail: &str) {
+/// 推给 RustDesk 远程窗口：`level` 为 `fault`（红）、`user`（灰）；`notice` 为 None 表示撤掉提示
+fn push_mode<T: InvokeUiSession>(session: &Session<T>, level: &str, notice: Option<Notice>, detail: &str) {
+    let (text, tip) = notice.map_or(("", ""), |n| (n.text(), n.tip()));
     let conn_type = session.lc.read().unwrap().conn_type;
     if let Some(s) = crate::flutter::sessions::get_session_by_peer_id(session.get_id(), conn_type) {
         s.push_event(
             "ddpro_mode",
-            &[("level", level), ("text", text), ("tip", tip(text)), ("detail", detail)],
+            &[("level", level), ("text", text), ("tip", tip), ("detail", detail)],
             &[],
         );
     }
 }
 
-/// 发起一次专业请求（开会话、换屏）：这次请求里的第一个故障才挂提示。
-pub fn begin_attempt<T: InvokeUiSession>(session: &Session<T>) {
-    links().lock().unwrap().entry(key(session)).or_default().notice = None;
+/// 发起一次专业请求（开会话、换屏），或对端根本不提供专业模式：撤掉上次挂的提示，这次请求里的第一个故障才挂新的。
+pub fn clear_notice<T: InvokeUiSession>(session: &Session<T>) {
+    let had = links().lock().unwrap().entry(key(session)).or_default().notice.take().is_some();
+    if had {
+        push_mode(session, "", None, "");
+    }
 }
 
 /// 这次专业请求失败：写日志、挂红色提示（同一次请求只报第一个原因）。
-pub fn fault<T: InvokeUiSession>(session: &Session<T>, text: &'static str, detail: &str) {
-    raise(session, text, detail, |_| false);
+fn fault<T: InvokeUiSession>(session: &Session<T>, notice: Notice, detail: &str) {
+    raise(session, notice, detail, |_| false);
 }
 
 /// 挂红色提示；这次请求已经挂着提示时，只有 `replaces` 认可的才替换。
-fn raise<T: InvokeUiSession>(
-    session: &Session<T>,
-    text: &'static str,
-    detail: &str,
-    replaces: impl Fn(&'static str) -> bool,
-) {
+fn raise<T: InvokeUiSession>(session: &Session<T>, notice: Notice, detail: &str, replaces: impl Fn(Notice) -> bool) {
     {
         let mut links = links().lock().unwrap();
         let link = links.entry(key(session)).or_default();
         if link.notice.is_some_and(|cur| !replaces(cur)) {
             return;
         }
-        link.notice = Some(text);
+        link.notice = Some(notice);
     }
-    log::warn!("ddpro: {text} ({detail})");
-    push_mode(session, "fault", text, detail);
+    log::warn!("ddpro: {} ({detail})", notice.text());
+    push_mode(session, "fault", Some(notice), detail);
 }
 
 /// 两端专业协议版本不一致（谈判前看名片，或收到对端消息时发现）。
 pub fn version_mismatch<T: InvokeUiSession>(session: &Session<T>, detail: &str) {
-    fault(session, NOT_PRO_VERSION, detail);
+    fault(session, Notice::Version, detail);
 }
 
 /// 被控端拒绝了专业请求：按原因码换成用户看得懂的结论，原始说明放细节里。
 pub fn rejected<T: InvokeUiSession>(session: &Session<T>, r: &Reject) {
     use reject::Reason;
-    let text = match r.reason.enum_value() {
-        Ok(Reason::DISPLAY_BUSY) => NOT_PRO_BUSY,
-        Ok(Reason::VERSION_MISMATCH | Reason::MALFORMED | Reason::UNSUPPORTED_TIER) => NOT_PRO_VERSION,
+    let notice = match r.reason.enum_value() {
+        Ok(Reason::DISPLAY_BUSY) => Notice::Busy,
+        Ok(Reason::VERSION_MISMATCH | Reason::MALFORMED | Reason::UNSUPPORTED_TIER) => Notice::Version,
         // 「主控端没有专业显示」，或格式谈不拢而本机就解不了 4:4:4
-        Ok(Reason::DISPLAY_UNAVAILABLE) => NOT_PRO_UNSUPPORTED,
-        Ok(Reason::NO_COMMON_FORMAT) if decode_caps().formats.is_empty() => NOT_PRO_UNSUPPORTED,
-        _ => NOT_PRO_PEER_UNAVAILABLE,
+        Ok(Reason::DISPLAY_UNAVAILABLE) => Notice::Unsupported,
+        Ok(Reason::NO_COMMON_FORMAT) if decode_caps().formats.is_empty() => Notice::Unsupported,
+        _ => Notice::PeerUnavailable,
     };
-    fault(session, text, &r.detail);
+    fault(session, notice, &r.detail);
 }
 
 /// 被控端报告它那一侧的专业画面出错、已退回普通画面：挂提示，关掉专业窗口（不等通道 3 秒没画面）。
+/// 说的不是当前屏（主控端切过屏，旧屏晚到的消息）就只记日志，不动新屏的专业窗口和提示。
 pub fn peer_stopped<T: InvokeUiSession>(session: &Session<T>, s: &Stopped) {
     use stopped::Reason;
-    let text = match s.reason.enum_value() {
-        Ok(Reason::CHANNEL_LOST) => NOT_PRO_LOST,
-        Ok(Reason::CHANNEL_FAILED) => NOT_PRO_CHANNEL_FAILED,
-        Ok(Reason::NO_IMAGE) => NOT_PRO_NO_IMAGE,
-        _ => NOT_PRO_PEER_FAILED,
+    let current = links().lock().unwrap().get(&key(session)).map(|l| l.index);
+    if current != i32::try_from(s.display_index).ok() {
+        log::info!(
+            "ddpro: ignoring the stop of pro video on display {} (now on display {current:?}): {}",
+            s.display_index,
+            s.detail
+        );
+        return;
+    }
+    let notice = match s.reason.enum_value() {
+        Ok(Reason::CHANNEL_LOST) => Notice::Lost,
+        Ok(Reason::CHANNEL_FAILED) => Notice::ChannelFailed,
+        Ok(Reason::NO_IMAGE) => Notice::NoImage,
+        Ok(Reason::PRIVACY_MODE) => Notice::PrivacyMode,
+        _ => Notice::PeerFailed,
     };
     // 被控端说的是确切原因：主控端等 3 秒没画面先挂上的通道原因（推测）让给它
-    raise(session, text, &s.detail, |cur| cur == NOT_PRO_LOST || cur == NOT_PRO_CHANNEL_FAILED);
+    raise(session, notice, &s.detail, Notice::is_guess);
     // 丢掉通道，写线程随之关管道，专业窗口读到断开就自己退出（它报「会话让它关的」，不再改提示）
     if let Some(l) = links().lock().unwrap().get_mut(&key(session)) {
         l.down = None;
     }
 }
 
-/// 收到对端信息时记下远程当前屏的编号和位置尺寸（专业窗口换算鼠标坐标要用）。
+/// 收到对端信息时记下远程当前屏的编号和各块屏的位置尺寸（专业窗口换算鼠标坐标要用）。
 pub fn remember_display<T: InvokeUiSession>(pi: &PeerInfo, session: &Session<T>) {
-    let rect = usize::try_from(pi.current_display)
-        .ok()
-        .and_then(|i| pi.displays.get(i))
-        .map(|d| (d.x, d.y, d.width.max(0) as u32, d.height.max(0) as u32))
-        .unwrap_or_default();
     let mut links = links().lock().unwrap();
     let link = links.entry(key(session)).or_default();
     link.index = pi.current_display;
-    link.display = rect;
+    link.rects = (0..)
+        .zip(&pi.displays)
+        .map(|(i, d)| (i, (d.x, d.y, d.width.max(0) as u32, d.height.max(0) as u32)))
+        .collect();
+}
+
+/// 用户在 RustDesk 里切屏：换到别的屏、而专业窗口开着（或上次因和屏有关的故障没进专业模式）时关掉专业窗口，
+/// 返回新屏的编号，由调用方对新屏重新发起专业请求。
+pub fn on_switch_display<T: InvokeUiSession>(session: &Session<T>, display: i32) -> Option<i32> {
+    let mut links = links().lock().unwrap();
+    let link = links.entry(key(session)).or_default();
+    if link.index == display {
+        return None;
+    }
+    link.index = display;
+    // 丢掉通道，写线程随之关管道，专业窗口读到断开就告诉被控端不要了、自己退出
+    let had_view = link.down.take().is_some();
+    (had_view || link.notice.is_some_and(Notice::retry_on_switch)).then_some(display)
 }
 
 /// 本机能不能硬解 4:4:4 并在显卡上转 RGB（只探测一次）。
@@ -239,16 +300,16 @@ pub fn start<T: InvokeUiSession>(
         .lock()
         .unwrap()
         .get(&k)
-        .map(|l| l.display)
+        .and_then(|l| l.rects.get(&l.index).copied())
         .unwrap_or_default();
     if display.2 == 0 || display.3 == 0 {
-        fault(session, NOT_PRO_DISPLAY, "cannot start the pro view: the remote display size is unknown");
+        fault(session, Notice::NoDisplayInfo, "cannot start the pro view: the remote display size is unknown");
         return;
     }
     let exe = match std::env::current_exe() {
         Ok(p) => p,
         Err(e) => {
-            fault(session, NOT_PRO_DISPLAY, &format!("cannot start the pro view: {e}"));
+            fault(session, Notice::Display, &format!("cannot start the pro view: {e}"));
             return;
         }
     };
@@ -260,12 +321,12 @@ pub fn start<T: InvokeUiSession>(
     {
         Ok(c) => c,
         Err(e) => {
-            fault(session, NOT_PRO_DISPLAY, &format!("cannot start the pro view: {e}"));
+            fault(session, Notice::Display, &format!("cannot start the pro view: {e}"));
             return;
         }
     };
     let (Some(mut stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
-        fault(session, NOT_PRO_DISPLAY, "the pro view has no pipes");
+        fault(session, Notice::Display, "the pro view has no pipes");
         child.kill().ok();
         return;
     };
@@ -354,7 +415,7 @@ pub fn start<T: InvokeUiSession>(
                 Some(view_up::Union::Ready(_)) => {
                     // 专业画面出来了：这次请求成功，撤掉提示
                     links().lock().unwrap().entry(k).or_default().notice = None;
-                    push_mode(&session, "", "", "");
+                    push_mode(&session, "", None, "");
                 }
                 Some(view_up::Union::Ended(e)) => {
                     log::info!("ddpro: the pro view is ending: {}", e.detail);
@@ -382,16 +443,16 @@ pub fn start<T: InvokeUiSession>(
         match ended.map(|e| e.kind.enum_value()) {
             Some(Ok(Kind::SESSION_CLOSED)) => {}
             Some(Ok(Kind::USER_CLOSED)) => {
-                links().lock().unwrap().entry(k).or_default().notice = Some(NOT_PRO_USER_CLOSED);
-                push_mode(&session, "user", NOT_PRO_USER_CLOSED, "");
+                links().lock().unwrap().entry(k).or_default().notice = Some(Notice::UserClosed);
+                push_mode(&session, "user", Some(Notice::UserClosed), "");
             }
-            Some(Ok(Kind::CHANNEL_LOST)) => fault(&session, NOT_PRO_LOST, &detail),
-            Some(Ok(Kind::CHANNEL_FAILED)) => fault(&session, NOT_PRO_CHANNEL_FAILED, &detail),
-            Some(_) => fault(&session, NOT_PRO_DISPLAY, &detail),
+            Some(Ok(Kind::CHANNEL_LOST)) => fault(&session, Notice::Lost, &detail),
+            Some(Ok(Kind::CHANNEL_FAILED)) => fault(&session, Notice::ChannelFailed, &detail),
+            Some(_) => fault(&session, Notice::Display, &detail),
             // 没留下结束原因就退出了：多半是崩溃
             None => fault(
                 &session,
-                NOT_PRO_DISPLAY,
+                Notice::Display,
                 &format!("the pro view exited unexpectedly ({reason}; exit status {status:?})"),
             ),
         }
@@ -400,35 +461,32 @@ pub fn start<T: InvokeUiSession>(
 
 /// RustDesk 连接里收到的消息里专业窗口要的（RustDesk 自己的处理照旧）：
 /// - 光标：原样转给开着的专业窗口；
-/// - 显示变化（和 RustDesk 一样当作当前屏的变化）：同一块屏的记下新位置尺寸、原样转给专业窗口；
-///   换到了别的屏而专业窗口开着，关掉它，返回新屏的编号，由调用方对新屏重新发起专业请求。
-pub fn on_rustdesk_message<T: InvokeUiSession>(msg: &Message, session: &Session<T>) -> Option<i32> {
+/// - 显示变化：记下那块屏的新位置尺寸；是当前屏的，原样转给专业窗口。被控端发这条消息不只在用户切屏时
+///   （别的屏改了分辨率、主控端查询显示信息时也发），所以不从它推断「用户切了屏」——切屏看 [`on_switch_display`]。
+pub fn on_rustdesk_message<T: InvokeUiSession>(msg: &Message, session: &Session<T>) {
+    let switch = match &msg.union {
+        Some(message::Union::CursorData(_)) | Some(message::Union::CursorId(_)) => None,
+        Some(message::Union::Misc(m)) => match &m.union {
+            Some(misc::Union::SwitchDisplay(s)) => Some(s),
+            _ => return,
+        },
+        _ => return,
+    };
     let mut links = links().lock().unwrap();
-    match &msg.union {
-        Some(message::Union::CursorData(_)) | Some(message::Union::CursorId(_)) => {}
-        Some(message::Union::Misc(m)) => {
-            let Some(misc::Union::SwitchDisplay(s)) = &m.union else {
-                return None;
-            };
-            let link = links.entry(key(session)).or_default();
-            let same = s.display == link.index;
-            link.index = s.display;
-            if s.width > 0 && s.height > 0 {
-                link.display = (s.x, s.y, s.width as u32, s.height as u32);
-            }
-            if !same {
-                // 丢掉通道，写线程随之关管道，专业窗口读到断开就告诉被控端不要了、自己退出
-                let down = link.down.take();
-                // 对新屏重新发起专业请求，算新的一次
-                if down.is_some() {
-                    link.notice = None;
-                }
-                return down.map(|_| s.display);
-            }
+    let Some(link) = links.get_mut(&key(session)) else {
+        return;
+    };
+    if let Some(s) = switch {
+        if s.width > 0 && s.height > 0 {
+            link.rects.insert(s.display, (s.x, s.y, s.width as u32, s.height as u32));
         }
-        _ => return None,
+        if s.display != link.index {
+            return;
+        }
     }
-    let (_, down) = links.get(&key(session))?.down.as_ref()?;
+    let Some((_, down)) = link.down.as_ref() else {
+        return;
+    };
     match msg.write_to_bytes() {
         Ok(bytes) => {
             down.send(ViewDown {
@@ -443,5 +501,4 @@ pub fn on_rustdesk_message<T: InvokeUiSession>(msg: &Message, session: &Session<
             "ddpro: cannot forward a message to the pro view: {e}"
         ),
     }
-    None
 }
