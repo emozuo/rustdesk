@@ -37,7 +37,8 @@ cd flutter && flutter run     # 或者 ./run.sh，它把上面这些都做了
 `build.py` 是打包驱动（deb/rpm/dmg/pkg/portable），不是开发循环。它在唯一一处把命令行 flag
 映射成 cargo features；`python3 build.py --flutter --hwcodec --print-features` 只打印它会用的
 feature 列表而不构建，这样自己手写的 cargo 命令行就不会和它漂移。其它 flag：`--vram`、
-`--drm`、`--unix-file-copy-paste`、`--portable`、`--skip-cargo`。
+`--drm`、`--unix-file-copy-paste`、`--portable`、`--skip-cargo`，以及 DreamDesk 的 `--dd-pro`、
+`--dd-brand`（Windows 带改名的打包走 `dreamdesk/scripts/build-windows.ps1`，直接用 build.py 会被拒绝）。
 
 feature 说明：`hwcodec` / `vram` / `mediacodec` / `drm` 都转发给 `scrap`。`drm-wake` 只在 `drm`
 之上额外控制"注入合成指针事件唤醒显示器"这一段。release profile 是 `lto + codegen-units=1 +

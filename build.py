@@ -146,6 +146,17 @@ def make_parser():
              'dlopen-ed in-process by the root service). Off by default.'
     )
     parser.add_argument(
+        '--dd-pro',
+        action='store_true',
+        help='DreamDesk: enable feature dd-pro (pro mode)'
+    )
+    parser.add_argument(
+        '--dd-brand',
+        action='store_true',
+        help='DreamDesk: enable feature dd-brand (product name, intranet-only servers). '
+             'On Windows, package with dreamdesk/scripts/build-windows.ps1, which also renames the program'
+    )
+    parser.add_argument(
         '--print-features',
         action='store_true',
         help='Print the cargo feature list these flags select, and exit without building. For a '
@@ -322,6 +333,10 @@ def get_features(args):
         features.append('flutter')
     if args.unix_file_copy_paste:
         features.append('unix-file-copy-paste')
+    if args.dd_pro:
+        features.append('dd-pro')
+    if args.dd_brand:
+        features.append('dd-brand')
     if args.drm:
         # Say so rather than quietly handing back a stock build: the backend is Linux-only, so on
         # any other host the flag cannot be honoured and the resulting binary would look like a
@@ -1014,6 +1029,11 @@ def main():
             feats = ','.join(get_features(args))
         print(feats)
         return
+
+    # The renamed program and the installer named after it are made by the DreamDesk script; packing
+    # here would ship rustdesk.exe inside a build whose app name is no longer RustDesk.
+    if windows and args.flutter and args.dd_brand and not args.skip_portable_pack:
+        raise Exception('--dd-brand on Windows: package with dreamdesk/scripts/build-windows.ps1')
 
     if os.path.exists(exe_path):
         os.unlink(exe_path)
