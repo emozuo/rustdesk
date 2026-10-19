@@ -14,7 +14,7 @@ use sctk::{
     presentation_time::{PresentTime, PresentationTimeHandler, PresentationTimeState},
     reexports::{
         client::{
-            backend::ObjectId,
+            backend::{ObjectId, WaylandError},
             globals::registry_queue_init,
             protocol::{wl_buffer, wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface},
             Connection, Dispatch, EventQueue, Proxy, QueueHandle, WEnum,
@@ -48,7 +48,9 @@ use sctk::{
 };
 use std::{
     collections::HashMap,
-    fmt, mem,
+    fmt,
+    io::ErrorKind,
+    mem,
     os::fd::{AsFd, AsRawFd, BorrowedFd},
     time::Duration,
 };
@@ -88,9 +90,7 @@ pub enum Event {
         slot: usize,
         commit_ns: i64,
         present_ns: i64,
-        refresh_ns: u32,
         zero_copy: bool,
-        vsync: bool,
         /// 合成器报的时钟不是本机单调时钟，`present_ns` 不能和 `commit_ns` 直接相减
         foreign_clock: bool,
     },
@@ -271,6 +271,8 @@ impl Window {
             }
         }
         self.state.slots = (0..count).map(|_| Slot { buffer: None, busy: false }).collect();
+        // 旧提交的上屏回执带着旧槽号，晚到会被算到同槽号的新帧头上
+        self.state.pending.clear();
     }
 
     /// 把一张导出的显存画面登记到第 `slot` 个槽位（每张只登记一次，之后反复提交）。
@@ -345,6 +347,10 @@ impl Window {
     pub fn dispatch(&mut self, timeout: Duration, wake: Option<BorrowedFd<'_>>) -> Result<Vec<Event>> {
         self.queue.dispatch_pending(&mut self.state).map_err(err("handle Wayland events"))?;
         if self.state.events.is_empty() {
+            // 处理事件时排进去的请求（回合成器心跳的 pong、ack_configure、指针进来时设光标）先发出去再等：
+            // 没有新画面要提交的时段（第一帧之前、一直解码出错）它们不发，合成器会判这个窗口「无响应」。
+            // 库自带的 blocking_dispatch 也是先 flush 再等
+            self.conn.flush().map_err(err("send requests to the compositor"))?;
             if let Some(guard) = self.queue.prepare_read() {
                 let mut pfds = [
                     libc::pollfd {
@@ -361,7 +367,12 @@ impl Window {
                 let ms = timeout.as_millis().min(i32::MAX as u128) as i32;
                 let n = unsafe { libc::poll(pfds.as_mut_ptr(), pfds.len() as libc::nfds_t, ms) };
                 if n > 0 && pfds[0].revents != 0 {
-                    guard.read().map_err(err("read Wayland events"))?;
+                    match guard.read() {
+                        Ok(_) => {}
+                        // 别的读者先读走了（或被信号打断）：不是故障，下一轮再读
+                        Err(WaylandError::Io(e)) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::Interrupted) => {}
+                        Err(e) => return Err(Error(format!("read Wayland events: {e}"))),
+                    }
                 }
             }
             self.queue.dispatch_pending(&mut self.state).map_err(err("handle Wayland events"))?;
@@ -515,7 +526,7 @@ impl PresentationTimeHandler for State {
         _: &wl_surface::WlSurface,
         _: Vec<wl_output::WlOutput>,
         time: PresentTime,
-        refresh: u32,
+        _: u32,
         _: u64,
         flags: WEnum<Kind>,
     ) {
@@ -528,9 +539,7 @@ impl PresentationTimeHandler for State {
             slot: c.slot,
             commit_ns: c.commit_ns,
             present_ns: time.tv_sec as i64 * 1_000_000_000 + time.tv_nsec as i64,
-            refresh_ns: refresh,
             zero_copy: kind.contains(Kind::ZeroCopy),
-            vsync: kind.contains(Kind::Vsync),
             foreign_clock: time.clk_id != libc::CLOCK_MONOTONIC as u32,
         });
     }

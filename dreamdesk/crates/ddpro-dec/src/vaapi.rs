@@ -278,6 +278,10 @@ impl Decoder {
                 return Err(Error("out of memory creating the HEVC decoder".into()));
             }
             (*d.ctx).hw_device_ctx = ffi::av_buffer_ref(dev.buf);
+            // 引用失败（内存不够）时这里是空的，解码器就没有硬件设备可用
+            if (*d.ctx).hw_device_ctx.is_null() {
+                return Err(Error("out of memory creating the HEVC decoder".into()));
+            }
             (*d.ctx).get_format = Some(pick_vaapi);
             (*d.ctx).flags |= ffi::AV_CODEC_FLAG_LOW_DELAY as i32;
             (*d.ctx).thread_count = 1;
@@ -468,8 +472,10 @@ impl Converter {
     fn render(&self, dst: ffi::VASurfaceID, buf: &mut ffi::VABufferID) -> Result<()> {
         let display = self.dev.display();
         va_call!(self.dev, vaBeginPicture(display, self.context, dst), "start the color conversion")?;
-        va_call!(self.dev, vaRenderPicture(display, self.context, buf, 1), "submit the color conversion")?;
-        va_call!(self.dev, vaEndPicture(display, self.context), "finish the color conversion")
+        // 提交失败也要结束这次处理，不然这个处理上下文一直停在「开始了没结束」，下一次开始会被拒绝
+        let rendered = va_call!(self.dev, vaRenderPicture(display, self.context, buf, 1), "submit the color conversion");
+        let ended = va_call!(self.dev, vaEndPicture(display, self.context), "finish the color conversion");
+        rendered.and(ended)
     }
 
     /// 等显卡把第 `index` 张输出画面转完。

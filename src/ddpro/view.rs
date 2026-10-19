@@ -185,6 +185,8 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
     let mut shown: HashMap<usize, Shown> = HashMap::new();
     let mut last_report = Instant::now();
     let mut ready = false;
+    // 查过实际解码格式的画面尺寸：第一帧和尺寸变了之后（被控端重建编码器）查一次
+    let mut format_checked: Option<(u32, u32)> = None;
     // 主循环包一层：中途任何一步出错，也马上告诉被控端不要了（不让它白等 3 秒心跳超时）
     let mut main_loop = || -> ResultType<(Kind, String)> {
         Ok(loop {
@@ -222,7 +224,7 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
                     Event::Discarded { slot } => {
                         shown.remove(&slot);
                     }
-                    // 本机屏幕分辨率变了：按新尺寸重建转换输出（窗口一开始的尺寸也会报一次，相同就不动）
+                    // 本机屏幕分辨率变了：按新尺寸重建转换输出（窗口只在尺寸变了时报；尺寸相同就不动，防万一重复报）
                     Event::Resized { width, height } if (width, height) != size => {
                         log::info!(
                             "ddpro: pro view resized from {}x{} to {width}x{height}",
@@ -267,7 +269,12 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
                         }
                     }
                     Ok(FromSession::Display(x, y, w, h)) => {
-                        log::info!("ddpro: pro view: the remote display is now {w}x{h} at ({x},{y})");
+                        // 多久来一次由被控端决定，节流
+                        throttled_log!(
+                            PEER_LOG_INTERVAL,
+                            info,
+                            "ddpro: pro view: the remote display is now {w}x{h} at ({x},{y})"
+                        );
                         input.set_remote(x, y, w, h);
                     }
                     Err(_) => break,
@@ -301,6 +308,15 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
                 }
             }
             if let Some((frame, times)) = latest {
+                // 门槛按结果定（P0 设计决定 3）：实际解出来的不是谈好的 4:4:4 8bit 就大声失败，不静默降级
+                let size = (frame.width(), frame.height());
+                if format_checked != Some(size) {
+                    let f = frame.format();
+                    if !(f.chroma_444 && f.bit_depth == 8) {
+                        bail!("the decoded video is {} ({}bit, 4:4:4 {}), not the agreed 4:4:4 8bit", f.name, f.bit_depth, f.chroma_444);
+                    }
+                    format_checked = Some(size);
+                }
                 dec.wait(&frame).map_err(|e| anyhow!("{e}"))?;
                 let decoded = now_ns();
                 let Some(slot) = win.free_slot() else {
@@ -475,8 +491,12 @@ fn read_session(
         let Some(view_down::Union::Rustdesk(bytes)) = msg.union else {
             continue;
         };
-        let Ok(m) = Message::parse_from_bytes(&bytes) else {
-            continue;
+        let m = match Message::parse_from_bytes(&bytes) {
+            Ok(m) => m,
+            Err(e) => {
+                throttled_log!(PEER_LOG_INTERVAL, warn, "ddpro: pro view got a malformed message from the session: {e}");
+                continue;
+            }
         };
         let out = match m.union {
             Some(message::Union::CursorData(cd)) => {
