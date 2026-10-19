@@ -256,7 +256,8 @@ fn diag_file(var: &str) -> Option<std::fs::File> {
         .ok()
 }
 
-fn format_444_8bit() -> FormatCaps {
+/// 能解 4:4:4 8bit（真探测到了，或诊断「只收不解」时照报）。
+pub(super) fn format_444_8bit() -> FormatCaps {
     FormatCaps {
         checked: true,
         formats: vec![VideoFormat {
