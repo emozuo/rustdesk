@@ -256,6 +256,7 @@ fn tell_controller(session: &Session, e: &hbb_common::anyhow::Error) {
     let reason = match e.downcast_ref::<ChannelError>() {
         Some(ChannelError::Lost) => Reason::CHANNEL_LOST,
         Some(ChannelError::NeverOpened(_)) => Reason::CHANNEL_FAILED,
+        None if e.is::<NoImage>() => Reason::NO_IMAGE,
         None => Reason::VIDEO_ERROR,
     };
     if let Some(msg) = super::wire::wrap(ddpro::stopped(reason, e.to_string())) {
@@ -282,6 +283,18 @@ impl std::fmt::Display for ChannelError {
 }
 
 impl std::error::Error for ChannelError {}
+
+/// 建了采集器一直没有第一帧：这块屏拿不到画面（常见于没接显示器——普通画面这时会改用 CPU 截屏，专业画面没有这条路）
+#[derive(Debug)]
+struct NoImage(usize);
+
+impl std::fmt::Display for NoImage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "no first frame from display {}", self.0)
+    }
+}
+
+impl std::error::Error for NoImage {}
 
 enum Back {
     /// 连接已经关了
@@ -510,7 +523,7 @@ fn start_capture(display: usize) -> ResultType<(Capturer, Geometry, *mut std::ff
                     return Ok((c, g, t));
                 }
                 if t0.elapsed() > FIRST_FRAME_TIMEOUT {
-                    bail!("no first frame from display {display}");
+                    return Err(NoImage(display).into());
                 }
             }
         });

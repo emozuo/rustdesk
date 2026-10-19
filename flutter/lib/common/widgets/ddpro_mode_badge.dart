@@ -1,7 +1,8 @@
 // DreamDesk：对端支持专业模式、但这次会话现在不在专业模式时，远程画面左上角的常驻标签（「不静默降级」）。
 //
 // Rust 侧 `src/ddpro/view_link.rs` 推 `ddpro_mode` 事件：`level` 为 `fault`（红，故障或条件不满足）、
-// `user`（灰，用户自己关了专业窗口），空串表示撤掉；`text` 是多语言表的键，`detail` 是原始错误信息（鼠标停上去看）。
+// `user`（灰，用户自己关了专业窗口），空串表示撤掉；`text`（结论）和 `tip`（意味着什么、怎么处理）是多语言表的键，
+// `detail` 是原始错误信息。鼠标停上去先看说明，原始错误跟在后面（和日志一字不差，排查时拿它去搜）。
 // 不带专业模式的构建收不到这个事件，标签不出现。
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
@@ -11,8 +12,9 @@ import '../../common.dart';
 class _Notice {
   final bool fault;
   final String text;
+  final String tip;
   final String detail;
-  const _Notice(this.fault, this.text, this.detail);
+  const _Notice(this.fault, this.text, this.tip, this.detail);
 }
 
 final _notices = <SessionID, Rx<_Notice?>>{};
@@ -25,7 +27,7 @@ void onDdproModeEvent(SessionID sessionId, Map<String, dynamic> evt) {
   _notice(sessionId).value = level.isEmpty
       ? null
       : _Notice(level == 'fault', evt['text'] as String? ?? '',
-          evt['detail'] as String? ?? '');
+          evt['tip'] as String? ?? '', evt['detail'] as String? ?? '');
 }
 
 class DdproModeBadge extends StatelessWidget {
@@ -46,8 +48,11 @@ class DdproModeBadge extends StatelessWidget {
           child: Text(translate(n.text),
               style: const TextStyle(color: Colors.white, fontSize: 13)),
         );
-        return n.detail.isEmpty
-            ? label
-            : Tooltip(message: n.detail, child: label);
+        final hint = [
+          if (n.tip.isNotEmpty) translate(n.tip),
+          if (n.detail.isNotEmpty)
+            '${translate('Original error (for troubleshooting)')}: ${n.detail}',
+        ].join('\n\n');
+        return hint.isEmpty ? label : Tooltip(message: hint, child: label);
       });
 }

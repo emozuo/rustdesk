@@ -25,6 +25,8 @@ message Stopped {
     CHANNEL_LOST = 1;
     // 主控端一直没来打招呼，画面通道没通
     CHANNEL_FAILED = 2;
+    // 被控端这块屏拿不到画面（建了采集器一直没有第一帧，常见于没接显示器）
+    NO_IMAGE = 3;
   }
   string detail = 1;
   Reason reason = 2;
