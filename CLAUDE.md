@@ -7,7 +7,7 @@
 
 @dreamdesk/docs/AGENTS-中文.md
 
-上面导入的是仓库根目录 `AGENTS.md` 的中文译本（`GEMINI.md` 导入的是英文原文）。`AGENTS.md` 是共享规则手册，
+上面导入的是仓库根目录 `AGENTS.md` 的中文译本。`AGENTS.md` 是共享规则手册，
 由上游维护 —— 目录结构、Rust / Tokio 规则、编辑卫生、PR 评审与本地化规则都归它管，**以英文原文为准**。
 本文件不重复那些内容，只补它没写的部分。
 
