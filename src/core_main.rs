@@ -188,6 +188,11 @@ pub fn core_main() -> Option<CoreMainAction> {
     if args.len() > 0 && args[0].starts_with(&crate::get_uri_prefix()) {
         return try_send_by_dbus(args[0].clone()).map(CoreMainAction::StartUi);
     }
+    #[cfg(all(feature = "dd-pro", feature = "flutter", target_os = "linux"))]
+    if args.first().map(String::as_str) == Some("--pro-view") {
+        crate::ddpro::view::run();
+        return None;
+    }
 
     #[cfg(windows)]
     if !crate::platform::is_installed()

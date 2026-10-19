@@ -1,4 +1,5 @@
-//! 全屏 Wayland 窗口：导入显存画面（dmabuf）、提交、收「已释放」和「已上屏」回执。
+//! 全屏 Wayland 窗口：导入显存画面（dmabuf）、提交、收「已释放」和「已上屏」回执；收键鼠（键盘取原始键码，
+//! 不按键盘布局翻译：RustDesk 的映射键盘模式只要物理键码）；把远程光标设成本窗口的系统指针。
 //!
 //! 调用方自己驱动循环：`present` 提交一张画面，`dispatch` 等事件（带超时）。画面轮流用一组槽位，
 //! 合成器还拿着的槽位（没回「已释放」）不能再写，[`Window::free_slot`] 只给空闲的。
@@ -6,8 +7,8 @@
 use ddpro_dec::Exported;
 use sctk::{
     compositor::{CompositorHandler, CompositorState},
-    delegate_compositor, delegate_dmabuf, delegate_output, delegate_presentation_time, delegate_registry,
-    delegate_xdg_shell, delegate_xdg_window,
+    delegate_compositor, delegate_dmabuf, delegate_output, delegate_pointer, delegate_presentation_time,
+    delegate_registry, delegate_seat, delegate_shm, delegate_xdg_shell, delegate_xdg_window,
     dmabuf::{DmabufFeedback, DmabufHandler, DmabufState},
     output::{OutputHandler, OutputState},
     presentation_time::{PresentTime, PresentationTimeHandler, PresentationTimeState},
@@ -15,7 +16,7 @@ use sctk::{
         client::{
             backend::ObjectId,
             globals::registry_queue_init,
-            protocol::{wl_buffer, wl_output, wl_surface},
+            protocol::{wl_buffer, wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface},
             Connection, Dispatch, EventQueue, Proxy, QueueHandle, WEnum,
         },
         protocols::wp::{
@@ -32,6 +33,11 @@ use sctk::{
     },
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
+    seat::{
+        pointer::{PointerEvent, PointerEventKind, PointerHandler},
+        Capability, SeatHandler, SeatState,
+    },
+    shm::{slot::SlotPool, Shm, ShmHandler},
     shell::{
         xdg::{
             window::{Window as XdgWindow, WindowConfigure, WindowDecorations, WindowHandler},
@@ -40,7 +46,12 @@ use sctk::{
         WaylandSurface,
     },
 };
-use std::{collections::HashMap, fmt, mem, os::fd::AsFd, os::fd::AsRawFd, time::Duration};
+use std::{
+    collections::HashMap,
+    fmt, mem,
+    os::fd::{AsFd, AsRawFd, BorrowedFd},
+    time::Duration,
+};
 
 #[derive(Debug)]
 pub struct Error(String);
@@ -87,6 +98,28 @@ pub enum Event {
     Discarded { slot: usize },
     Resized { width: u32, height: u32 },
     Closed,
+    /// 按键：Linux evdev 键码（X 键码 = evdev + 8）
+    Key { evdev: u32, down: bool },
+    /// 修饰键 / 锁定键状态（XKB 修饰位：depressed 是按住的，locked 是锁定的）
+    Modifiers { depressed: u32, locked: u32 },
+    /// 键盘焦点离开窗口：还按着的键要替用户抬起，免得远程那边一直按着
+    KeyboardLeave,
+    /// 鼠标移动（窗口坐标）
+    PointerMotion { x: f64, y: f64 },
+    /// 鼠标按键（Linux BTN_* 码），带按下时的窗口坐标
+    PointerButton { button: u32, down: bool, x: f64, y: f64 },
+    /// 滚轮格数（往下 / 往右为正，和 Wayland 一致）
+    Wheel { dx: i32, dy: i32 },
+}
+
+/// 一个光标图案（RGBA，未预乘）。
+#[derive(Debug, Clone)]
+pub struct CursorImage {
+    pub width: u32,
+    pub height: u32,
+    pub hotx: u32,
+    pub hoty: u32,
+    pub rgba: Vec<u8>,
 }
 
 /// 合成器对这个窗口说的格式支持：能用的（格式, modifier），以及其中能直接送显示硬件的。
@@ -124,6 +157,16 @@ struct State {
     pending: HashMap<ObjectId, Commit>,
     events: Vec<Event>,
     import_failed: bool,
+    seat: SeatState,
+    shm: Shm,
+    pointer: Option<wl_pointer::WlPointer>,
+    keyboard: Option<wl_keyboard::WlKeyboard>,
+    /// 鼠标进入窗口时合成器给的序号，设置指针要带上它
+    pointer_serial: Option<u32>,
+    cursor_surface: wl_surface::WlSurface,
+    cursor_pool: Option<SlotPool>,
+    /// 当前的远程光标；None = 隐藏
+    cursor: Option<CursorImage>,
 }
 
 pub struct Window {
@@ -145,6 +188,8 @@ impl Window {
             return Err(Error("the compositor does not support linux-dmabuf".into()));
         }
         let presentation = PresentationTimeState::bind(&globals, &qh);
+        let shm = Shm::bind(&globals, &qh).map_err(err("bind wl_shm"))?;
+        let cursor_surface = compositor.create_surface(&qh);
         let surface = compositor.create_surface(&qh);
         let window = xdg.create_window(surface, WindowDecorations::None, &qh);
         window.set_title(title);
@@ -177,6 +222,14 @@ impl Window {
                 pending: HashMap::new(),
                 events: Vec::new(),
                 import_failed: false,
+                seat: SeatState::new(&globals, &qh),
+                shm,
+                pointer: None,
+                keyboard: None,
+                pointer_serial: None,
+                cursor_surface,
+                cursor_pool: None,
+                cursor: None,
             },
         };
         while w.state.size.is_none() || (feedback.is_some() && w.state.formats.is_none()) {
@@ -196,6 +249,13 @@ impl Window {
     /// 防黑屏是否生效（合成器支持 idle-inhibit）。
     pub fn idle_inhibited(&self) -> bool {
         self.state.idle_inhibitor.is_some()
+    }
+
+    /// 把远程光标设成本窗口的系统指针（由合成器画，和 RustDesk 界面的做法一样）；None 隐藏指针。
+    pub fn set_cursor(&mut self, cursor: Option<CursorImage>) -> Result<()> {
+        self.state.cursor = cursor;
+        self.state.apply_cursor()?;
+        self.conn.flush().map_err(err("send the cursor to the compositor"))
     }
 
     /// 合成器的格式反馈；合成器不支持 dmabuf v4 时为 None。
@@ -281,24 +341,69 @@ impl Window {
     }
 
     /// 处理合成器发来的事件，没有就最多等 `timeout`。
-    pub fn dispatch(&mut self, timeout: Duration) -> Result<Vec<Event>> {
+    /// `wake`：调用方另一个要一起等的描述符（如「新画面到了」的通知），它可读时也立即返回，不让画面干等。
+    pub fn dispatch(&mut self, timeout: Duration, wake: Option<BorrowedFd<'_>>) -> Result<Vec<Event>> {
         self.queue.dispatch_pending(&mut self.state).map_err(err("handle Wayland events"))?;
         if self.state.events.is_empty() {
             if let Some(guard) = self.queue.prepare_read() {
-                let mut pfd = libc::pollfd {
-                    fd: guard.connection_fd().as_raw_fd(),
-                    events: libc::POLLIN,
-                    revents: 0,
-                };
+                let mut pfds = [
+                    libc::pollfd {
+                        fd: guard.connection_fd().as_raw_fd(),
+                        events: libc::POLLIN,
+                        revents: 0,
+                    },
+                    libc::pollfd {
+                        fd: wake.map_or(-1, |w| w.as_raw_fd()),
+                        events: libc::POLLIN,
+                        revents: 0,
+                    },
+                ];
                 let ms = timeout.as_millis().min(i32::MAX as u128) as i32;
-                let n = unsafe { libc::poll(&mut pfd, 1, ms) };
-                if n > 0 {
+                let n = unsafe { libc::poll(pfds.as_mut_ptr(), pfds.len() as libc::nfds_t, ms) };
+                if n > 0 && pfds[0].revents != 0 {
                     guard.read().map_err(err("read Wayland events"))?;
                 }
             }
             self.queue.dispatch_pending(&mut self.state).map_err(err("handle Wayland events"))?;
         }
         Ok(mem::take(&mut self.state.events))
+    }
+}
+
+impl State {
+    /// 按当前光标设置指针；鼠标不在窗口里（没有进入序号）时等下次进入再设。
+    fn apply_cursor(&mut self) -> Result<()> {
+        let (Some(pointer), Some(serial)) = (self.pointer.clone(), self.pointer_serial) else {
+            return Ok(());
+        };
+        let Some(c) = self.cursor.clone() else {
+            pointer.set_cursor(serial, None, 0, 0);
+            return Ok(());
+        };
+        let (w, h) = (c.width as usize, c.height as usize);
+        if w == 0 || h == 0 || c.rgba.len() != w * h * 4 {
+            return Err(Error(format!("bad cursor image {w}x{h} with {} bytes", c.rgba.len())));
+        }
+        if self.cursor_pool.is_none() {
+            self.cursor_pool = Some(SlotPool::new(w * h * 4, &self.shm).map_err(err("create the cursor buffer pool"))?);
+        }
+        let Some(pool) = self.cursor_pool.as_mut() else { unreachable!() };
+        let (buffer, canvas) = pool
+            .create_buffer(w as i32, h as i32, (w * 4) as i32, wl_shm::Format::Argb8888)
+            .map_err(err("create a cursor buffer"))?;
+        // wl_shm 的 ARGB8888 在内存里按 B G R A 排，且要求预乘透明度
+        for (dst, src) in canvas.chunks_exact_mut(4).zip(c.rgba.chunks_exact(4)) {
+            let a = src[3] as u32;
+            dst[0] = (src[2] as u32 * a / 255) as u8;
+            dst[1] = (src[1] as u32 * a / 255) as u8;
+            dst[2] = (src[0] as u32 * a / 255) as u8;
+            dst[3] = src[3];
+        }
+        buffer.attach_to(&self.cursor_surface).map_err(err("attach the cursor buffer"))?;
+        self.cursor_surface.damage_buffer(0, 0, w as i32, h as i32);
+        self.cursor_surface.commit();
+        pointer.set_cursor(serial, Some(&self.cursor_surface), c.hotx as i32, c.hoty as i32);
+        Ok(())
     }
 }
 
@@ -480,3 +585,211 @@ delegate_xdg_window!(State);
 delegate_dmabuf!(State);
 delegate_presentation_time!(State);
 delegate_registry!(State);
+delegate_seat!(State);
+delegate_pointer!(State);
+delegate_shm!(State);
+
+impl ShmHandler for State {
+    fn shm_state(&mut self) -> &mut Shm {
+        &mut self.shm
+    }
+}
+
+impl SeatHandler for State {
+    fn seat_state(&mut self) -> &mut SeatState {
+        &mut self.seat
+    }
+
+    fn new_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
+
+    fn new_capability(&mut self, _: &Connection, qh: &QueueHandle<Self>, seat: wl_seat::WlSeat, capability: Capability) {
+        match capability {
+            Capability::Pointer if self.pointer.is_none() => {
+                self.pointer = self.seat.get_pointer(qh, &seat).ok();
+            }
+            // 键盘不经 sctk 的 xkb 处理，直接收原始键码（RustDesk 的映射模式只要物理键码）
+            Capability::Keyboard if self.keyboard.is_none() => {
+                self.keyboard = Some(seat.get_keyboard(qh, ()));
+            }
+            _ => {}
+        }
+    }
+
+    fn remove_capability(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat, capability: Capability) {
+        match capability {
+            Capability::Pointer => {
+                if let Some(p) = self.pointer.take() {
+                    p.release();
+                }
+                self.pointer_serial = None;
+            }
+            Capability::Keyboard => {
+                if let Some(k) = self.keyboard.take() {
+                    k.release();
+                }
+                self.events.push(Event::KeyboardLeave);
+            }
+            _ => {}
+        }
+    }
+
+    fn remove_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
+}
+
+impl PointerHandler for State {
+    fn pointer_frame(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_pointer::WlPointer, events: &[PointerEvent]) {
+        for e in events {
+            if &e.surface != self.window.wl_surface() {
+                continue;
+            }
+            let (x, y) = e.position;
+            match e.kind {
+                PointerEventKind::Enter { serial } => {
+                    self.pointer_serial = Some(serial);
+                    // 指针设置出错只影响光标样子，不中断画面
+                    self.apply_cursor().ok();
+                    self.events.push(Event::PointerMotion { x, y });
+                }
+                PointerEventKind::Leave { .. } => self.pointer_serial = None,
+                PointerEventKind::Motion { .. } => self.events.push(Event::PointerMotion { x, y }),
+                PointerEventKind::Press { button, .. } => {
+                    self.events.push(Event::PointerButton { button, down: true, x, y })
+                }
+                PointerEventKind::Release { button, .. } => {
+                    self.events.push(Event::PointerButton { button, down: false, x, y })
+                }
+                PointerEventKind::Axis { horizontal, vertical, .. } => {
+                    // 和 Flutter 窗口一样：每个滚动事件按方向算 1 格，不管幅度
+                    let steps = |a: &sctk::seat::pointer::AxisScroll| {
+                        if a.value120 != 0 {
+                            a.value120.signum()
+                        } else if a.discrete != 0 {
+                            a.discrete.signum()
+                        } else if a.absolute != 0.0 {
+                            a.absolute.signum() as i32
+                        } else {
+                            0
+                        }
+                    };
+                    let (dx, dy) = (steps(&horizontal), steps(&vertical));
+                    if dx != 0 || dy != 0 {
+                        self.events.push(Event::Wheel { dx, dy });
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl Dispatch<wl_keyboard::WlKeyboard, ()> for State {
+    fn event(
+        state: &mut Self,
+        _: &wl_keyboard::WlKeyboard,
+        event: wl_keyboard::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        match event {
+            wl_keyboard::Event::Key { key, state: WEnum::Value(s), .. } => state.events.push(Event::Key {
+                evdev: key,
+                down: s == wl_keyboard::KeyState::Pressed,
+            }),
+            wl_keyboard::Event::Modifiers { mods_depressed, mods_locked, .. } => state.events.push(Event::Modifiers {
+                depressed: mods_depressed,
+                locked: mods_locked,
+            }),
+            wl_keyboard::Event::Leave { .. } => state.events.push(Event::KeyboardLeave),
+            // 键盘布局（xkb keymap）用不上：fd 随事件丢弃即关闭
+            _ => {}
+        }
+    }
+}
+
+// ------------------------------------------------------------------ 探测
+
+/// 不开窗口，只看这台机器能不能做专业显示：在 Wayland 桌面里、合成器能用 dmabuf 的 XRGB8888 线性画面。
+/// 不能时返回原因（谈判时如实报给被控端）。
+pub fn probe() -> std::result::Result<(), String> {
+    const XRGB8888: u32 = 0x3432_5258;
+    let conn = Connection::connect_to_env()
+        .map_err(|e| format!("needs a Wayland desktop (cannot reach the Wayland display: {e})"))?;
+    let (globals, mut queue) = registry_queue_init::<Probe>(&conn).map_err(|e| format!("read the Wayland globals: {e}"))?;
+    let qh = queue.handle();
+    let dmabuf = DmabufState::new(&globals, &qh);
+    let Some(version) = dmabuf.version() else {
+        return Err("the compositor does not support linux-dmabuf".into());
+    };
+    let feedback = dmabuf.get_default_feedback(&qh).ok();
+    let mut p = Probe {
+        registry: RegistryState::new(&globals),
+        dmabuf,
+        formats: None,
+    };
+    queue.roundtrip(&mut p).map_err(|e| format!("talk to the compositor: {e}"))?;
+    if feedback.is_some() && p.formats.is_none() {
+        queue.roundtrip(&mut p).map_err(|e| format!("talk to the compositor: {e}"))?;
+    }
+    // v4 起格式在反馈里，v3 及以下在 modifier 事件里
+    let usable = match p.formats {
+        Some(f) => f.contains(&(XRGB8888, 0)),
+        None => p.dmabuf.modifiers().iter().any(|f| f.format == XRGB8888 && f.modifier == 0),
+    };
+    if !usable {
+        return Err(format!("the compositor (linux-dmabuf v{version}) cannot use XRGB8888 linear frames"));
+    }
+    Ok(())
+}
+
+struct Probe {
+    registry: RegistryState,
+    dmabuf: DmabufState,
+    formats: Option<Vec<(u32, u64)>>,
+}
+
+impl DmabufHandler for Probe {
+    fn dmabuf_state(&mut self) -> &mut DmabufState {
+        &mut self.dmabuf
+    }
+
+    fn dmabuf_feedback(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &zwp_linux_dmabuf_feedback_v1::ZwpLinuxDmabufFeedbackV1,
+        feedback: DmabufFeedback,
+    ) {
+        let table = feedback.format_table();
+        self.formats = Some(
+            feedback
+                .tranches()
+                .iter()
+                .flat_map(|t| t.formats.iter())
+                .filter_map(|i| table.get(*i as usize).map(|f| (f.format, f.modifier)))
+                .collect(),
+        );
+    }
+
+    fn created(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &zwp_linux_buffer_params_v1::ZwpLinuxBufferParamsV1,
+        _: wl_buffer::WlBuffer,
+    ) {
+    }
+
+    fn failed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &zwp_linux_buffer_params_v1::ZwpLinuxBufferParamsV1) {}
+
+    fn released(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_buffer::WlBuffer) {}
+}
+
+impl ProvidesRegistryState for Probe {
+    fn registry(&mut self) -> &mut RegistryState {
+        &mut self.registry
+    }
+    registry_handlers![];
+}
+
+delegate_dmabuf!(Probe);
+delegate_registry!(Probe);

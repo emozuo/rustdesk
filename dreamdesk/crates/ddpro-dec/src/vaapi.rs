@@ -580,20 +580,26 @@ impl Drop for Converter {
     }
 }
 
-/// 等比缩放、居中；宽高取偶数，免得驱动对奇数尺寸处理不一。
-fn fit(sw: u32, sh: u32, dw: u32, dh: u32) -> ffi::VARectangle {
-    let (sw, sh, dw, dh) = (sw as u64, sh as u64, dw as u64, dh as u64);
+/// 源画面（`sw`×`sh`）放进目标（`dw`×`dh`）里的位置：等比缩放、居中，返回 (x, y, 宽, 高)；宽高取偶数，
+/// 免得驱动对奇数尺寸处理不一。转换和窗口坐标换算都用它，两边对得上。
+pub fn fit_rect(sw: u32, sh: u32, dw: u32, dh: u32) -> (u32, u32, u32, u32) {
+    let (sw, sh, dw, dh) = (sw.max(1) as u64, sh.max(1) as u64, dw as u64, dh as u64);
     let (w, h) = if sw * dh >= sh * dw {
         (dw, sh * dw / sw)
     } else {
         (sw * dh / sh, dh)
     };
     let (w, h) = (w & !1, h & !1);
+    (((dw - w) / 2) as u32, ((dh - h) / 2) as u32, w as u32, h as u32)
+}
+
+fn fit(sw: u32, sh: u32, dw: u32, dh: u32) -> ffi::VARectangle {
+    let (x, y, width, height) = fit_rect(sw, sh, dw, dh);
     ffi::VARectangle {
-        x: ((dw - w) / 2) as i16,
-        y: ((dh - h) / 2) as i16,
-        width: w as u16,
-        height: h as u16,
+        x: x as i16,
+        y: y as i16,
+        width: width as u16,
+        height: height as u16,
     }
 }
 

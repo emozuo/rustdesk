@@ -46,6 +46,8 @@ const CTRL_KEEPALIVE: u8 = 2;
 const CTRL_TIME_ECHO: u8 = 3;
 /// 主控端 → 被控端：丢了包，请下一帧编成关键帧
 const CTRL_KEYFRAME: u8 = 4;
+/// 主控端 → 被控端：专业画面不要了（用户关了专业窗口），被控端不用等心跳超时
+const CTRL_BYE: u8 = 5;
 /// 心跳也是授时探测，所以比「判断对方还在」需要的密得多：授时只取最近 2 秒里最好的样本
 pub const KEEPALIVE_INTERVAL: Duration = Duration::from_millis(100);
 pub const PEER_TIMEOUT: Duration = Duration::from_secs(3);
@@ -276,6 +278,8 @@ pub struct Sender {
     last_peer_us: Arc<AtomicU64>,
     /// 主控端请求了关键帧，由收心跳的线程置上
     keyframe: Arc<AtomicBool>,
+    /// 主控端说不要了
+    bye: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
     control: Option<JoinHandle<()>>,
     pub stats: SendStats,
@@ -286,6 +290,7 @@ impl Sender {
         let Listener { sock, keys, epoch } = listener;
         let last_peer_us = Arc::new(AtomicU64::new(micros(epoch.elapsed()) as u64));
         let keyframe = Arc::new(AtomicBool::new(false));
+        let bye = Arc::new(AtomicBool::new(false));
         let stop = Arc::new(AtomicBool::new(false));
         let ctl = Control {
             sock: sock.try_clone()?,
@@ -297,6 +302,7 @@ impl Sender {
             epoch,
             last_peer_us: last_peer_us.clone(),
             keyframe: keyframe.clone(),
+            bye: bye.clone(),
             stop: stop.clone(),
         };
         let control = std::thread::Builder::new()
@@ -311,6 +317,7 @@ impl Sender {
             epoch,
             last_peer_us,
             keyframe,
+            bye,
             stop,
             control: Some(control),
             stats: SendStats::default(),
@@ -367,6 +374,11 @@ impl Sender {
     pub fn take_keyframe_request(&self) -> bool {
         self.keyframe.swap(false, Ordering::AcqRel)
     }
+
+    /// 主控端说专业画面不要了（关了专业窗口）。
+    pub fn peer_said_bye(&self) -> bool {
+        self.bye.load(Ordering::Acquire)
+    }
 }
 
 impl Drop for Sender {
@@ -389,6 +401,7 @@ struct Control {
     epoch: Instant,
     last_peer_us: Arc<AtomicU64>,
     keyframe: Arc<AtomicBool>,
+    bye: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
 }
 
@@ -418,6 +431,7 @@ impl Control {
                     }
                 }
                 CTRL_KEYFRAME => self.keyframe.store(true, Ordering::Release),
+                CTRL_BYE => self.bye.store(true, Ordering::Release),
                 _ => {}
             }
         }
@@ -548,6 +562,15 @@ impl Receiver {
 
     pub fn now_us(&self) -> i64 {
         micros(self.start.elapsed())
+    }
+
+    /// 告诉被控端专业画面不要了（关专业窗口时调），它立即退回普通画面。连发三次：控制包丢了也不至于让它
+    /// 白等 3 秒的心跳超时。
+    pub fn bye(&mut self) -> Result<(), Error> {
+        for _ in 0..3 {
+            self.send_control(CTRL_BYE, &[])?;
+        }
+        Ok(())
     }
 
     /// 当前的对时结果（最近 2 秒里往返最快的那次）；还没有授时样本时 None。

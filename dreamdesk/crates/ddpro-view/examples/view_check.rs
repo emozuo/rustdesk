@@ -80,7 +80,7 @@ mod linux {
         while start.elapsed() < Duration::from_secs(seconds) {
             // 到点出下一帧；没到点就处理合成器的事件
             let wait = next.saturating_duration_since(Instant::now());
-            for e in win.dispatch(wait)? {
+            for e in win.dispatch(wait, None)? {
                 match e {
                     Event::Presented { commit_ns, present_ns, zero_copy, foreign_clock, .. } => {
                         stats.presented += 1;
@@ -92,6 +92,14 @@ mod linux {
                     Event::Discarded { .. } => stats.discarded += 1,
                     Event::Resized { width, height } => println!("resized to {width}x{height} (not handled by this tool)"),
                     Event::Closed => return Ok(()),
+                    // 键鼠只打印（检查输入收得到），移动太多不打
+                    Event::Key { evdev, down } => println!("key evdev {evdev} {}", if down { "down" } else { "up" }),
+                    Event::PointerButton { button, down, x, y } => {
+                        println!("button {button:#x} {} at {x:.0},{y:.0}", if down { "down" } else { "up" })
+                    }
+                    Event::Wheel { dx, dy } => println!("wheel {dx},{dy}"),
+                    Event::Modifiers { depressed, locked } => println!("modifiers depressed {depressed:#x} locked {locked:#x}"),
+                    Event::KeyboardLeave | Event::PointerMotion { .. } => {}
                 }
             }
             if Instant::now() < next {

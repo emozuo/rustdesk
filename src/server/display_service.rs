@@ -543,7 +543,7 @@ pub fn temp_ignore_displays_changed() -> SimpleCallOnReturn {
 // The video server will then send the following messages to the client:
 //  1. the supported resolutions of the {idx} display
 //  2. the switch resolution message, so that the client can record the custom resolution.
-pub(super) fn check_display_changed(
+pub(crate) fn check_display_changed(
     ndisplay: usize,
     idx: usize,
     (x, y, w, h): (i32, i32, usize, usize),

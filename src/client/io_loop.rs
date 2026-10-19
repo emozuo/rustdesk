@@ -1526,6 +1526,8 @@ impl<T: InvokeUiSession> Remote<T> {
 
     async fn handle_msg_from_peer(&mut self, data: &[u8], peer: &mut Stream) -> bool {
         if let Ok(msg_in) = Message::parse_from_bytes(&data) {
+            #[cfg(feature = "dd-pro")]
+            crate::ddpro::client::on_rustdesk_message(&msg_in, &self.handler);
             match msg_in.union {
                 Some(message::Union::VideoFrame(vf)) => {
                     if !self.first_frame {
@@ -1596,7 +1598,7 @@ impl<T: InvokeUiSession> Remote<T> {
                         }
                         #[cfg(feature = "dd-pro")]
                         if let Some(msg) =
-                            crate::ddpro::client::on_peer_info(&pi, self.handler.is_default())
+                            crate::ddpro::client::on_peer_info(&pi, self.handler.is_default(), &self.handler)
                         {
                             allow_err!(peer.send(&msg).await);
                         }
@@ -2360,7 +2362,7 @@ impl<T: InvokeUiSession> Remote<T> {
                 }
                 #[cfg(feature = "dd-pro")]
                 Some(message::Union::DdPro(data)) => {
-                    crate::ddpro::client::on_message(&data, &self.sender)
+                    crate::ddpro::client::on_message(&data, &self.sender, &self.handler)
                 }
                 _ => {}
             }

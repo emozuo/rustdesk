@@ -1,11 +1,14 @@
-//! 主控端：看名片、发请求、读答复、收专业画面。
+//! 主控端：看名片、发请求、读答复，同意后拉起专业窗口（Linux，见 `view_link`）。
 //!
-//! 第 5 步之前主控端还不能解码显示。诊断开关 `DDPRO_DIAG_RECEIVE_ONLY=1` 打开「只收不解」：
-//! 解码 / 显示能力报成 4:4:4 8bit 可用（日志里写明是诊断），收到的码流写进 `DDPRO_DIAG_DUMP` 指定的文件，
-//! 用来验证画面通道。不开这个开关时如实报「未探测」，被控端不会开通道。
+//! 能力如实报：Linux（Flutter 版）探测硬解和专业显示；其它平台还没有专业显示，报「未探测」，被控端不会开通道。
+//! 诊断开关 `DDPRO_DIAG_RECEIVE_ONLY=1` 打开「只收不解」：解码 / 显示能力报成 4:4:4 8bit 可用（日志里写明是诊断），
+//! 本进程自己收专业画面、记延迟，码流写进 `DDPRO_DIAG_DUMP` 指定的文件，用来在没有专业显示的机器上验证画面通道。
 
 use super::wire::{wrap, PEER_LOG_INTERVAL};
-use crate::client::Data;
+use crate::{
+    client::Data,
+    ui_session_interface::{InvokeUiSession, Session},
+};
 use base::message_proto::{Message, PeerInfo};
 use ddpro::{
     dd_pro,
@@ -34,10 +37,12 @@ fn receive_only() -> bool {
 
 /// 收到被控端的登录应答后决定要不要发起专业会话，返回要发出的请求。
 /// 只在远程桌面会话里发起；文件传输、终端、端口转发等会话不发。
-pub fn on_peer_info(pi: &PeerInfo, is_remote_desktop: bool) -> Option<Message> {
+pub fn on_peer_info<T: InvokeUiSession>(pi: &PeerInfo, is_remote_desktop: bool, _session: &Session<T>) -> Option<Message> {
     if !is_remote_desktop {
         return None;
     }
+    #[cfg(all(feature = "flutter", target_os = "linux"))]
+    super::view_link::remember_display(pi, _session);
     let card = serde_json::from_str::<Value>(&pi.platform_additions)
         .ok()
         .and_then(|v| v.get(ddpro::NAME_CARD_KEY).and_then(Value::as_u64));
@@ -55,8 +60,9 @@ pub fn on_peer_info(pi: &PeerInfo, is_remote_desktop: bool) -> Option<Message> {
     wrap(ddpro::hello(decode_caps(), display_caps(), display))
 }
 
-/// 处理被控端的答复。同意且带画面通道时起接收线程；`sender` 是 RustDesk 消息循环的发送端，它关了说明会话已结束。
-pub fn on_message(data: &[u8], sender: &UnboundedSender<Data>) {
+/// 处理被控端的答复。同意且带画面通道时拉起专业窗口（诊断「只收不解」时本进程自己收）；
+/// `sender` 是 RustDesk 消息循环的发送端，它关了说明会话已结束。
+pub fn on_message<T: InvokeUiSession>(data: &[u8], sender: &UnboundedSender<Data>, _session: &Session<T>) {
     let msg = match ddpro::decode(data) {
         Ok(msg) => msg,
         Err(err) => {
@@ -84,7 +90,14 @@ pub fn on_message(data: &[u8], sender: &UnboundedSender<Data>) {
                 "ddpro: pro session accepted, format {}",
                 ddpro::describe_format(&accept.format)
             );
-            start_receiver(&accept.media, sender.clone());
+            if receive_only() {
+                start_receiver(&accept.media, sender.clone());
+            } else {
+                #[cfg(all(feature = "flutter", target_os = "linux"))]
+                super::view_link::start(&accept.media, sender.clone(), _session);
+                #[cfg(not(all(feature = "flutter", target_os = "linux")))]
+                log::error!("ddpro: this build has no pro view; the peer should not have accepted");
+            }
         }
         Some(dd_pro::Union::Accept(_)) => throttled_log!(
             PEER_LOG_INTERVAL,
@@ -211,20 +224,43 @@ fn format_444_8bit() -> FormatCaps {
     }
 }
 
-/// 本机能解的格式。硬解探测在第 5 步接入，在那之前如实报「未探测」（诊断「只收不解」时除外）。
+/// 本机能解的格式：Linux 探测硬解，其它平台如实报「未探测」（诊断「只收不解」时除外）。
 fn decode_caps() -> FormatCaps {
     if receive_only() {
         log::warn!("ddpro: {DIAG_RECEIVE_ONLY}=1: reporting 4:4:4 decode for a receive-only diagnostic, nothing will be displayed");
         return format_444_8bit();
     }
+    #[cfg(all(feature = "flutter", target_os = "linux"))]
+    return super::view_link::decode_caps();
+    #[cfg(not(all(feature = "flutter", target_os = "linux")))]
     FormatCaps::default()
 }
 
-/// 专业显示能不能用。原生窗口在第 5 步接入，在那之前如实报「未探测」（诊断「只收不解」时除外）。
+/// 专业显示能不能用：Linux 探测 Wayland 和合成器，其它平台如实报「未探测」（诊断「只收不解」时除外）。
 fn display_caps() -> DisplayCaps {
-    DisplayCaps {
-        checked: receive_only(),
-        available: receive_only(),
-        ..Default::default()
+    if receive_only() {
+        return DisplayCaps {
+            checked: true,
+            available: true,
+            ..Default::default()
+        };
+    }
+    #[cfg(all(feature = "flutter", target_os = "linux"))]
+    return super::view_link::display_caps();
+    #[cfg(not(all(feature = "flutter", target_os = "linux")))]
+    DisplayCaps::default()
+}
+
+/// RustDesk 连接里收到的每条消息都过一下（RustDesk 自己的处理照旧）：光标、显示变化转给开着的专业窗口；
+/// 用户换到了别的屏时，专业窗口已经关掉，这里对新屏重新发起专业请求（「同屏不共享」照旧由被控端检查）。
+pub fn on_rustdesk_message<T: InvokeUiSession>(_msg: &Message, _session: &Session<T>) {
+    #[cfg(all(feature = "flutter", target_os = "linux"))]
+    if let Some(display) = super::view_link::on_rustdesk_message(_msg, _session) {
+        log::info!("ddpro: the remote display switched to {display}; requesting a pro session for it");
+        let display = u32::try_from(display).unwrap_or(0);
+        if let Some(m) = wrap(ddpro::hello(decode_caps(), display_caps(), display)) {
+            use crate::client::Interface;
+            _session.send(Data::Message(m));
+        }
     }
 }

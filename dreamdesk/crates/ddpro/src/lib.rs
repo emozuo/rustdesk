@@ -11,6 +11,11 @@ pub use protos::ddpro::*;
 // RustDesk 只依赖门面这一个 crate，编码器和画面通道经这里拿
 pub use ddpro_enc as enc;
 pub use ddpro_media as media;
+// 主控端专业显示（硬解 + 窗口）目前只有 Linux 版
+#[cfg(target_os = "linux")]
+pub use ddpro_dec as dec;
+#[cfg(target_os = "linux")]
+pub use ddpro_view as view;
 
 use protobuf::Message as _;
 
@@ -221,4 +226,35 @@ pub fn describe_caps(caps: &FormatCaps) -> String {
         .map(describe_format)
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// 会话进程 ↔ 专业窗口进程之间的一条消息不会超过这么大（光标图案最大 512×512 RGBA 压缩后远小于此）
+const VIEW_FRAME_MAX: usize = 4 << 20;
+
+/// 写一条消息：4 字节长度（小端）+ protobuf。
+pub fn write_frame(w: &mut impl std::io::Write, msg: &impl protobuf::Message) -> std::io::Result<()> {
+    let data = msg.write_to_bytes().map_err(std::io::Error::other)?;
+    w.write_all(&(data.len() as u32).to_le_bytes())?;
+    w.write_all(&data)?;
+    w.flush()
+}
+
+/// 读一条消息；对端关了管道返回 `Ok(None)`。
+pub fn read_frame<M: protobuf::Message>(r: &mut impl std::io::Read) -> std::io::Result<Option<M>> {
+    let mut len = [0u8; 4];
+    match r.read_exact(&mut len) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
+        Err(e) => return Err(e),
+    }
+    let len = u32::from_le_bytes(len) as usize;
+    if len > VIEW_FRAME_MAX {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("pro view message too large: {len} bytes"),
+        ));
+    }
+    let mut data = vec![0u8; len];
+    r.read_exact(&mut data)?;
+    M::parse_from_bytes(&data).map(Some).map_err(std::io::Error::other)
 }
