@@ -909,6 +909,8 @@ pub fn get_langs() -> String {
         .filter(|a| !hide_cjk || !crate::lang::is_cjk_lang(a.0))
         .map(|a| (a.0, format!("{} ({})", a.1, a.0)))
         .collect();
+    #[cfg(feature = "dd-brand")]
+    x.retain(|a| crate::ddpro::brand::lang_offered(a.0));
     x.sort_by(|a, b| a.0.cmp(b.0));
     json!(x).to_string()
 }

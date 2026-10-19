@@ -41,3 +41,13 @@ pub fn apply() {
         [keys::OPTION_ENABLE_IPV6_PUNCH, keys::OPTION_ENABLE_WEBRTC].map(|k| (k.to_owned(), "N".to_owned())),
     );
 }
+
+/// 产品版只维护简体中文和英文（用户 2026-10-19 定）：设置页的语言列表只给这两种。
+pub fn lang_offered(code: &str) -> bool {
+    matches!(code, "en" | "zh-cn")
+}
+
+/// 按系统语言自动选、或配置里存着别的语言时：中文（含繁体）用简体中文，其余一律英文。
+pub fn product_lang(lang: String) -> String {
+    if lang.starts_with("zh") { "zh-cn" } else { "en" }.to_owned()
+}

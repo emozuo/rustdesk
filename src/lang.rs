@@ -187,6 +187,8 @@ pub fn translate_locale(name: String, locale: &str) -> String {
         locale,
         cjk_ui_unavailable(),
     );
+    #[cfg(feature = "dd-brand")]
+    let lang = crate::ddpro::brand::product_lang(lang);
     let m = match lang.as_str() {
         "fr" => fr::T.deref(),
         "zh-cn" => cn::T.deref(),
