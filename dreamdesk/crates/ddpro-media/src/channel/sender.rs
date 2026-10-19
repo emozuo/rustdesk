@@ -115,18 +115,20 @@ impl Listener {
         let deadline = Instant::now() + timeout;
         self.sock.set_read_timeout(Some(CONTROL_POLL))?;
         let mut buf = vec![0u8; 2048];
+        // 先收一次再看截止时间：重建后接着等时剩下的时间可能已经是 0，但主控端的招呼可能早就在缓冲里了
         loop {
+            match self.sock.recv_from(&mut buf) {
+                Ok((n, from)) => {
+                    let hello = open(&mut dec, &buf[..n]).is_some_and(|p| matches!(control(&p, &self.keys), Some((CTRL_HELLO, _))));
+                    if hello {
+                        return Sender::start(self, from, dec);
+                    }
+                }
+                Err(e) if is_timeout(&e) => {}
+                Err(e) => return Err(e.into()),
+            }
             if Instant::now() >= deadline {
                 return Err(Error::Timeout("no hello from the controller on the pro channel"));
-            }
-            let (n, from) = match self.sock.recv_from(&mut buf) {
-                Ok(r) => r,
-                Err(e) if is_timeout(&e) => continue,
-                Err(e) => return Err(e.into()),
-            };
-            let hello = open(&mut dec, &buf[..n]).is_some_and(|p| matches!(control(&p, &self.keys), Some((CTRL_HELLO, _))));
-            if hello {
-                return Sender::start(self, from, dec);
             }
         }
     }
