@@ -248,6 +248,7 @@ fn run(ps: ProService) -> ResultType<()> {
         Ok((End::ControllerClosed, _)) => match back_to_general(display, &session) {
             Back::General => log::info!("ddpro: the controller closed the pro view on display {display}; back to general view"),
             Back::OtherDisplay => log::info!("ddpro: the controller closed the pro view on display {display}; the connection already watches other displays"),
+            Back::Superseded => log::info!("ddpro: the pro view on display {display} ended; a newer pro session took the display"),
             Back::Closed => {}
         },
         Err(e) => match back_to_general(display, &session) {
@@ -259,6 +260,7 @@ fn run(ps: ProService) -> ResultType<()> {
                 log::warn!("ddpro: pro video on display {display} failed: {e}; the connection already watches other displays");
                 tell_controller(&session, display, &e);
             }
+            Back::Superseded => log::warn!("ddpro: pro video on display {display} failed: {e}; a newer pro session took the display"),
             Back::Closed => log::warn!("ddpro: pro video on display {display} failed: {e}; the connection is already closed"),
         },
     }
@@ -338,6 +340,9 @@ enum Back {
     General,
     /// 连接已经在看别的屏（主控端切过屏，或在普通窗口里选了看多块屏），不订回这块屏
     OtherDisplay,
+    /// 这块屏已经登记了新的专业会话（主控端快速切走又切回）：订阅归它，本会话什么都不动、也不对主控端报停——
+    /// 主控端此刻又在这块屏上，报了会把新会话的专业窗口关掉
+    Superseded,
 }
 
 /// 专业会话结束且连接还开着（还订阅着专业服务）：退订专业服务；连接没在看别的屏才订回这块屏的普通画面
@@ -350,7 +355,7 @@ fn back_to_general(display: usize, session: &Session) -> Back {
     // 主控端快速切走又切回（A→B→A）时，这块屏已经登记了新的专业会话，专业服务的订阅归它，不能退。
     // 在服务器锁外查：登记和订阅不在同一把锁里，这里只防这个常见的先后顺序
     if !SESSIONS.lock().unwrap().get(&display).is_some_and(|s| std::ptr::eq(Arc::as_ptr(s), session)) {
-        return Back::OtherDisplay;
+        return Back::Superseded;
     }
     // 枚举显示器要几毫秒，放在服务器锁外
     let ndisplay = Display::all().map_or(0, |d| d.len()).max(display + 1);

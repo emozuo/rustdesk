@@ -1,7 +1,9 @@
-//! 被控端：递名片、答复主控端的请求、开专业画面通道、处理关键帧请求。
+//! 被控端：递名片、答复主控端的请求、开专业画面通道（关键帧请求 v4 起走画面通道，不经这里）。
 
-use super::wire::{wrap, PEER_LOG_INTERVAL};
-use crate::server::{ConnInner, ServerPtrWeak};
+use crate::{
+    ddpro::wire::{wrap, PEER_LOG_INTERVAL},
+    server::{ConnInner, ServerPtrWeak},
+};
 use base::message_proto::Message;
 use ddpro::{dd_pro, reject, FormatCaps, Hello};
 use hbb_common::{log, throttled_log, tokio};
@@ -37,7 +39,8 @@ pub struct ConnCtx {
 }
 
 /// 处理主控端发来的专业协议消息，返回要回给它的消息。
-/// 探测编码器、开端口要一两百毫秒，放到阻塞线程里做，不卡 RustDesk 的异步运行时。
+/// 探测编码器、开端口要一两百毫秒，放到阻塞线程里做，不卡 RustDesk 的异步运行时；但这个连接自己的消息循环
+/// 在等答复，这期间本连接的普通画面和输入会停一两百毫秒（只发生在开会话、换屏时）。
 pub async fn on_message(data: &[u8], ctx: ConnCtx) -> Option<Message> {
     let data = data.to_vec();
     match tokio::task::spawn_blocking(move || handle(&data, &ctx)).await {
@@ -89,7 +92,7 @@ fn answer(hello: &Hello, ctx: &ConnCtx) -> dd_pro::Union {
         return reject(reject::Reason::DISPLAY_BUSY, why);
     }
 
-    let answer = ddpro::answer_hello(hello, &encode_caps(display));
+    let answer = ddpro::answer_hello(hello, || encode_caps(display));
     let mut reply = answer.reply;
     if let dd_pro::Union::Accept(accept) = &mut reply {
         if accept.format.is_some() {

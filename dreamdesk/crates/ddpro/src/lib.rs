@@ -120,7 +120,8 @@ pub struct Answer {
 
 /// 被控端拍板：按「专业」档的要求，在本机能编的和对端能解的格式里挑一个。
 /// 任何一方的能力还没探测时，只确认协议谈通，不选格式。
-pub fn answer_hello(hello: &Hello, encode: &FormatCaps) -> Answer {
+/// `encode` 是现查本机编码能力（要建采集器、开一次编码器，一两百毫秒）：只看请求内容就能定的先定，用得着才查。
+pub fn answer_hello(hello: &Hello, encode: impl FnOnce() -> FormatCaps) -> Answer {
     let answer = |reply| Answer {
         reply,
         unchecked: Vec::new(),
@@ -143,34 +144,46 @@ pub fn answer_hello(hello: &Hello, encode: &FormatCaps) -> Answer {
             .iter()
             .any(|f| f.chroma.enum_value() == Ok(chroma) && f.bit_depth == depth)
     };
-    // 已经探测过、明确做不到的一方先判：不必等另一方探测完才拒绝
-    for (side, caps) in [("encoder", encode), ("decoder", &*hello.decode)] {
-        if caps.checked && !PRO_PREFERENCE.into_iter().any(|want| supports(caps, want)) {
-            return answer(reject(
+    let cannot = |side: &str, caps: &FormatCaps| {
+        (caps.checked && !PRO_PREFERENCE.into_iter().any(|want| supports(caps, want))).then(|| {
+            answer(reject(
                 reject::Reason::NO_COMMON_FORMAT,
                 format!("the {side} cannot do 4:4:4 (has: {})", describe_caps(caps)),
-            ));
-        }
+            ))
+        })
+    };
+    // 已经探测过、明确做不到的一方先判；对端那边没探测完就只谈通协议——这两种都用不着查本机
+    if let Some(no) = cannot("decoder", &hello.decode) {
+        return no;
     }
-
-    let unchecked: Vec<&'static str> = [
-        (!encode.checked).then_some("encoder"),
+    let peer_unchecked: Vec<&'static str> = [
         (!hello.decode.checked).then_some("decoder"),
         (!hello.display.checked).then_some("display"),
     ]
     .into_iter()
     .flatten()
     .collect();
-    if !unchecked.is_empty() {
+    if !peer_unchecked.is_empty() {
         return Answer {
             reply: dd_pro::Union::Accept(Accept::default()),
-            unchecked,
+            unchecked: peer_unchecked,
+        };
+    }
+
+    let encode = encode();
+    if let Some(no) = cannot("encoder", &encode) {
+        return no;
+    }
+    if !encode.checked {
+        return Answer {
+            reply: dd_pro::Union::Accept(Accept::default()),
+            unchecked: vec!["encoder"],
         };
     }
 
     match PRO_PREFERENCE
         .into_iter()
-        .find(|&want| supports(encode, want) && supports(&hello.decode, want))
+        .find(|&want| supports(&encode, want) && supports(&hello.decode, want))
     {
         Some((chroma, bit_depth)) => answer(dd_pro::Union::Accept(Accept {
             format: Some(VideoFormat {
@@ -185,7 +198,7 @@ pub fn answer_hello(hello: &Hello, encode: &FormatCaps) -> Answer {
             reject::Reason::NO_COMMON_FORMAT,
             format!(
                 "no 4:4:4 format both sides support; encoder: {}, decoder: {}",
-                describe_caps(encode),
+                describe_caps(&encode),
                 describe_caps(&hello.decode)
             ),
         )),
@@ -241,9 +254,16 @@ pub fn describe_caps(caps: &FormatCaps) -> String {
 /// 会话进程 ↔ 专业窗口进程之间的一条消息不会超过这么大（光标图案最大 512×512 RGBA 压缩后远小于此）
 const VIEW_FRAME_MAX: usize = 4 << 20;
 
-/// 写一条消息：4 字节长度（小端）+ protobuf。
+/// 写一条消息：4 字节长度（小端）+ protobuf。超过对端肯收的上限时什么都不写、返回 `InvalidInput`：
+/// 管道里的消息边界不乱，调用方跳过这一条即可，不必断开。
 pub fn write_frame(w: &mut impl std::io::Write, msg: &impl protobuf::Message) -> std::io::Result<()> {
     let data = msg.write_to_bytes().map_err(std::io::Error::other)?;
+    if data.len() > VIEW_FRAME_MAX {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("message of {} bytes exceeds the {VIEW_FRAME_MAX}-byte limit", data.len()),
+        ));
+    }
     w.write_all(&(data.len() as u32).to_le_bytes())?;
     w.write_all(&data)?;
     w.flush()

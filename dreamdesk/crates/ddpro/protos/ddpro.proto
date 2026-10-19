@@ -72,7 +72,8 @@ message Hello {
   uint32 display_index = 4;
 }
 
-// 专业画面通道的连接信息。经 RustDesk 已加密的连接传送，不出现在明文里。
+// 专业画面通道的连接信息（含密钥）。经 RustDesk 的连接传送：RustDesk 连接加密时（配了服务器公钥、校验通过）
+// 不出现在明文里；RustDesk 退回明文连接时它也是明文——和普通画面、键鼠同等。
 message MediaChannel {
   // 被控端的地址：RustDesk 连接在被控端这一侧的地址，主控端连得到它
   string host = 1;

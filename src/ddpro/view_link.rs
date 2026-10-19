@@ -353,12 +353,17 @@ pub fn start<T: InvokeUiSession>(
     // 写：启动参数、光标；会话结束或专业窗口结束时停，关掉管道
     std::thread::spawn(move || loop {
         match rx.recv_timeout(Duration::from_millis(500)) {
-            Ok(m) => {
-                if let Err(e) = ddpro::write_frame(&mut stdin, &m) {
+            Ok(m) => match ddpro::write_frame(&mut stdin, &m) {
+                Ok(()) => {}
+                // 超长的一条（比如超大的光标图案）跳过，管道里什么都没写，不用断开
+                Err(e) if e.kind() == std::io::ErrorKind::InvalidInput => {
+                    throttled_log!(PEER_LOG_INTERVAL, warn, "ddpro: not forwarding a message to the pro view: {e}");
+                }
+                Err(e) => {
                     log::warn!("ddpro: cannot write to the pro view: {e}");
                     break;
                 }
-            }
+            },
             Err(RecvTimeoutError::Timeout) => {
                 if rustdesk.is_closed() {
                     break;

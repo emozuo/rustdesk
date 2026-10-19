@@ -855,8 +855,6 @@ impl<T: InvokeUiSession> Session<T> {
     }
 
     pub fn switch_display(&self, display: i32) {
-        #[cfg(feature = "dd-pro")]
-        crate::ddpro::client::on_switch_display(self, display);
         let (w, h) = match self.lc.read().unwrap().get_custom_resolution(display) {
             Some((w, h)) => (w, h),
             None => (0, 0),
@@ -872,6 +870,9 @@ impl<T: InvokeUiSession> Session<T> {
         let mut msg_out = Message::new();
         msg_out.set_misc(misc);
         self.send(Data::Message(msg_out));
+        // 切屏消息排进发送通道之后：专业请求随后排在它后面，被控端先切屏再谈专业
+        #[cfg(feature = "dd-pro")]
+        crate::ddpro::client::on_switch_display(self, display);
 
         if !use_texture_render() {
             self.capture_displays(vec![], vec![], vec![display]);
