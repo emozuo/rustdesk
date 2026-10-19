@@ -155,7 +155,8 @@ impl Depacketizer {
     }
 }
 
-/// 把码流切成一帧一帧（access unit）：一帧从参数集 / SEI 或首个分片（first_slice_segment_in_pic_flag）开始。
+/// 把码流切成一帧一帧（access unit）：按 H.265 7.4.2.4.4，一帧从分隔符 / 参数集 / 前缀 SEI 或首个分片
+/// （first_slice_segment_in_pic_flag）开始；结束符、填充、后缀 SEI 跟在本帧后面，不开新帧。
 /// 只给验证工具回放录好的码流用；编码器每次本来就只交出一帧。
 pub fn split_access_units(data: &[u8]) -> Vec<Vec<u8>> {
     let mut aus: Vec<Vec<u8>> = Vec::new();
@@ -165,8 +166,9 @@ pub fn split_access_units(data: &[u8]) -> Vec<Vec<u8>> {
         let t = nal_type(nal);
         let vcl = t < 32;
         let first_slice = vcl && nal.len() > NAL_HEADER && nal[NAL_HEADER] & 0x80 != 0;
-        // 新一帧的开始：已经有画面数据之后，又遇到非画面 NAL 或新一帧的首个分片
-        if cur_has_vcl && (!vcl || first_slice) {
+        let opens_au = matches!(t, 32..=35 | 39 | 41..=44 | 48..=55);
+        // 新一帧的开始：已经有画面数据之后，又遇到能开新帧的非画面 NAL 或新一帧的首个分片
+        if cur_has_vcl && (opens_au || first_slice) {
             aus.push(std::mem::take(&mut cur));
             cur_has_vcl = false;
         }
