@@ -53,10 +53,14 @@ pub fn on_peer_info<T: InvokeUiSession>(pi: &PeerInfo, is_remote_desktop: bool, 
     let peer_version = u32::try_from(peer_version).unwrap_or(u32::MAX);
     if let Some(mismatch) = ddpro::version_mismatch(peer_version) {
         log::error!("ddpro: not starting a pro session: {mismatch}");
+        #[cfg(all(feature = "flutter", target_os = "linux"))]
+        super::view_link::version_mismatch(_session, &mismatch);
         return None;
     }
     let display = u32::try_from(pi.current_display).unwrap_or(0);
     log::info!("ddpro: the peer offers pro protocol v{peer_version}, requesting a pro session for display {display}");
+    #[cfg(all(feature = "flutter", target_os = "linux"))]
+    super::view_link::begin_attempt(_session);
     wrap(ddpro::hello(decode_caps(), display_caps(), display))
 }
 
@@ -80,6 +84,8 @@ pub fn on_message<T: InvokeUiSession>(data: &[u8], sender: &UnboundedSender<Data
             error,
             "ddpro: pro session failed: {mismatch}"
         );
+        #[cfg(all(feature = "flutter", target_os = "linux"))]
+        super::view_link::version_mismatch(_session, &mismatch);
         return;
     }
     match msg.union {
@@ -105,13 +111,27 @@ pub fn on_message<T: InvokeUiSession>(data: &[u8], sender: &UnboundedSender<Data
             "ddpro: pro protocol agreed (v{}); capabilities not probed yet",
             ddpro::PROTOCOL_VERSION
         ),
-        Some(dd_pro::Union::Reject(r)) => throttled_log!(
-            PEER_LOG_INTERVAL,
-            error,
-            "ddpro: pro session refused ({:?}): {}",
-            r.reason,
-            r.detail
-        ),
+        Some(dd_pro::Union::Reject(r)) => {
+            throttled_log!(
+                PEER_LOG_INTERVAL,
+                error,
+                "ddpro: pro session refused ({:?}): {}",
+                r.reason,
+                r.detail
+            );
+            #[cfg(all(feature = "flutter", target_os = "linux"))]
+            super::view_link::rejected(_session, &r);
+        }
+        Some(dd_pro::Union::Stopped(s)) => {
+            throttled_log!(
+                PEER_LOG_INTERVAL,
+                warn,
+                "ddpro: the peer stopped pro video: {}",
+                s.detail
+            );
+            #[cfg(all(feature = "flutter", target_os = "linux"))]
+            super::view_link::peer_stopped(_session, &s);
+        }
         _ => throttled_log!(
             PEER_LOG_INTERVAL,
             warn,

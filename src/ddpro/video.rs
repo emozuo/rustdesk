@@ -16,7 +16,7 @@ use crate::{
     },
     server::{
         display_service,
-        service::{GenericService, Service, ServiceTmpl},
+        service::{GenericService, Service, ServiceTmpl, Subscriber},
         video_service::{self, VideoSource},
         ConnInner, ServerPtrWeak,
     },
@@ -230,8 +230,14 @@ fn run(ps: ProService) -> ResultType<()> {
             Back::Closed => {}
         },
         Err(e) => match back_to_general(display, &session) {
-            Back::General => log::warn!("ddpro: pro video on display {display} failed: {e}; back to general view"),
-            Back::OtherDisplay => log::warn!("ddpro: pro video on display {display} failed: {e}; the connection already watches other displays"),
+            Back::General => {
+                log::warn!("ddpro: pro video on display {display} failed: {e}; back to general view");
+                tell_controller(&session, &e);
+            }
+            Back::OtherDisplay => {
+                log::warn!("ddpro: pro video on display {display} failed: {e}; the connection already watches other displays");
+                tell_controller(&session, &e);
+            }
             Back::Closed => log::warn!("ddpro: pro video on display {display} failed: {e}; the connection is already closed"),
         },
     }
@@ -242,6 +248,40 @@ fn run(ps: ProService) -> ResultType<()> {
     // 失败已经切回普通画面并写了日志；不让服务框架按出错重试
     Ok(())
 }
+
+/// 被控端这一侧出错、已退回普通画面：经 RustDesk 原连接告诉主控端原因，它马上关专业窗口、挂提示
+/// （不必等画面通道 3 秒没画面才发现，原因也不丢）
+fn tell_controller(session: &Session, e: &hbb_common::anyhow::Error) {
+    use ddpro::stopped::Reason;
+    let reason = match e.downcast_ref::<ChannelError>() {
+        Some(ChannelError::Lost) => Reason::CHANNEL_LOST,
+        Some(ChannelError::NeverOpened(_)) => Reason::CHANNEL_FAILED,
+        None => Reason::VIDEO_ERROR,
+    };
+    if let Some(msg) = super::wire::wrap(ddpro::stopped(reason, e.to_string())) {
+        session.conn.clone().send(Arc::new(msg));
+    }
+}
+
+/// 画面通道本身的问题（不是采集、编码出错）：告诉主控端时要分开说，它挂的提示不一样
+#[derive(Debug)]
+enum ChannelError {
+    /// 通了之后主控端 3 秒没心跳（防火墙挡了回程、网络断了、主控端那边没了）
+    Lost,
+    /// 主控端一直没来打招呼
+    NeverOpened(String),
+}
+
+impl std::fmt::Display for ChannelError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ChannelError::Lost => write!(f, "the controller stopped answering on the pro channel"),
+            ChannelError::NeverOpened(e) => write!(f, "the controller never opened the pro channel: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for ChannelError {}
 
 enum Back {
     /// 连接已经关了
@@ -324,7 +364,9 @@ fn stream(ps: &ProService, channel: Channel) -> ResultType<(End, Channel)> {
     .map_err(|e| anyhow!("{e}"))?;
     let Open { mut sender, epoch } = match channel {
         Channel::Waiting(listener, _) => Open {
-            sender: listener.accept(CHANNEL_TIMEOUT).map_err(|e| anyhow!("{e}"))?,
+            sender: listener
+                .accept(CHANNEL_TIMEOUT)
+                .map_err(|e| ChannelError::NeverOpened(e.to_string()))?,
             epoch: Instant::now(),
         },
         Channel::Open(open) => open,
@@ -399,7 +441,7 @@ fn stream(ps: &ProService, channel: Channel) -> ResultType<(End, Channel)> {
             break End::ControllerClosed;
         }
         if !sender.peer_alive() {
-            bail!("the controller stopped answering on the pro channel");
+            return Err(ChannelError::Lost.into());
         }
         i += 1;
         if let Some(d) = (first + interval * i as u32).checked_duration_since(Instant::now()) {

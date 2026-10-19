@@ -780,6 +780,15 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("RustDesk could not load a GStreamer component needed for screen capture ({})", "RustDesk nu a putut încărca o componentă GStreamer necesară pentru capturarea ecranului ({})"),
         ("Relay fallback delay in seconds", "Întârziere înainte de trecerea la releu în secunde"),
         ("relay-fallback-delay-tip", "Cât timp așteaptă o conexiune prin releu deja stabilită conexiunea directă WebRTC înainte de a fi folosită în locul ei. Măriți valoarea pentru a acorda mai mult timp unei conexiuni directe lente; micșorați-o pentru a trece mai repede la releu în rețelele în care o conexiune directă nu este posibilă. Lăsați gol pentru valoarea implicită de 2.5 secunde."),
-        ("To start a voice call, enable \"Audio capture\" on the \"Share screen\" page.", "")
+        ("To start a voice call, enable \"Audio capture\" on the \"Share screen\" page.", ""),
+        ("Not in pro mode: the controlled side failed to capture or encode", ""),
+        ("Not in pro mode: the pro channel was interrupted", ""),
+        ("Not in pro mode: the pro channel could not be opened", ""),
+        ("Not in pro mode: this computer cannot show the pro view", ""),
+        ("Not in pro mode: this computer does not support pro mode", ""),
+        ("Not in pro mode: the controlled side cannot provide pro video", ""),
+        ("Not in pro mode: this display is already in use", ""),
+        ("Not in pro mode: the pro protocol versions do not match", ""),
+        ("Not in pro mode: you closed the pro view", "")
     ].iter().cloned().collect();
 }

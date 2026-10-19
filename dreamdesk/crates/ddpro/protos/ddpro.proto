@@ -9,9 +9,25 @@ message DdPro {
     Hello hello = 2;
     Accept accept = 3;
     Reject reject = 4;
+    Stopped stopped = 6;
   }
   // v2–v3 的「请求关键帧」（经 RustDesk 原连接）；v4 起改在画面通道上回发，编号不再使用
   reserved 5;
+}
+
+// 被控端 → 主控端（v5 起）：被控端这一侧的专业画面停了、已退回普通画面。
+// 主控端据此马上关专业窗口、挂提示写明原因，不必等画面通道 3 秒没画面才发现。
+message Stopped {
+  enum Reason {
+    // 采集、编码等被控端自己的环节出错
+    VIDEO_ERROR = 0;
+    // 画面通道通了又断了（被控端 3 秒收不到主控端的心跳，如防火墙挡了回程）
+    CHANNEL_LOST = 1;
+    // 主控端一直没来打招呼，画面通道没通
+    CHANNEL_FAILED = 2;
+  }
+  string detail = 1;
+  Reason reason = 2;
 }
 
 enum Tier {
@@ -118,9 +134,29 @@ message ViewUp {
   oneof union {
     ViewKey key = 1;
     ViewMouse mouse = 2;
-    // 专业窗口要结束了，写明原因（用户关窗、出错）
-    string ended = 3;
+    // 专业窗口要结束了：为什么（会话进程据此决定挂不挂「非专业模式」提示）
+    ViewEnded ended = 3;
+    // 第一帧专业画面已经显示出来（会话进程据此撤掉提示）
+    bool ready = 4;
   }
+}
+
+message ViewEnded {
+  enum Kind {
+    KIND_UNSPECIFIED = 0;
+    // 用户关了专业窗口
+    USER_CLOSED = 1;
+    // 会话进程让它关的（会话结束、换屏、被控端报告出错）
+    SESSION_CLOSED = 2;
+    // 画面通道通过之后又断了（3 秒没有画面）
+    CHANNEL_LOST = 3;
+    // 画面通道一直没通
+    CHANNEL_FAILED = 4;
+    // 本机显示不了（窗口、硬解、颜色转换、提交出错）
+    DISPLAY_ERROR = 5;
+  }
+  Kind kind = 1;
+  string detail = 2;
 }
 
 // 和 Flutter 窗口交给 RustDesk 的一样：位置码是 X 键码（evdev + 8）

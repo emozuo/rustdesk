@@ -38,6 +38,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:vector_math/vector_math.dart' show Vector2;
 
 import '../common.dart';
+import '../common/widgets/ddpro_mode_badge.dart';
 import '../utils/image.dart' as img;
 import '../common/widgets/dialog.dart';
 import 'input_model.dart';
@@ -396,6 +397,8 @@ class FfiModel with ChangeNotifier {
         parent.target?.qualityMonitorModel.updateQualityStatus(evt);
       } else if (name == 'update_block_input_state') {
         updateBlockInputState(evt, peerId);
+      } else if (name == 'ddpro_mode') {
+        onDdproModeEvent(sessionId, evt);
       } else if (name == 'update_privacy_mode') {
         updatePrivacyMode(evt, sessionId, peerId);
       } else if (name == 'show_elevation') {

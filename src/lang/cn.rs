@@ -780,6 +780,15 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("RustDesk could not load a GStreamer component needed for screen capture ({})", "RustDesk 无法加载屏幕捕获所需的 GStreamer 组件 ({})"),
         ("Relay fallback delay in seconds", "回落到中继前的等待时间（秒）"),
         ("relay-fallback-delay-tip", "已经建立的中继连接会等待直连的 WebRTC 多久，超过这个时间就改用中继。调大可以让较慢的直连有更多机会胜出；调小则在无法直连的网络上更快回落到中继。留空表示使用默认值 2.5 秒。"),
-        ("To start a voice call, enable \"Audio capture\" on the \"Share screen\" page.", "开始语音通话前请在\"共享屏幕\"页面启用\"音频录制\"。")
+        ("To start a voice call, enable \"Audio capture\" on the \"Share screen\" page.", "开始语音通话前请在\"共享屏幕\"页面启用\"音频录制\"。"),
+        ("Not in pro mode: the controlled side failed to capture or encode", "非专业模式：被控端采集或编码失败"),
+        ("Not in pro mode: the pro channel was interrupted", "非专业模式：专业通道中断"),
+        ("Not in pro mode: the pro channel could not be opened", "非专业模式：专业通道无法建立"),
+        ("Not in pro mode: this computer cannot show the pro view", "非专业模式：本机无法显示专业画面"),
+        ("Not in pro mode: this computer does not support pro mode", "非专业模式：本机不支持专业模式"),
+        ("Not in pro mode: the controlled side cannot provide pro video", "非专业模式：被控端无法提供专业画面"),
+        ("Not in pro mode: this display is already in use", "非专业模式：这块屏已被占用"),
+        ("Not in pro mode: the pro protocol versions do not match", "非专业模式：两端专业协议版本不一致"),
+        ("Not in pro mode: you closed the pro view", "非专业模式：你关闭了专业窗口")
     ].iter().cloned().collect();
 }

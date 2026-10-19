@@ -15,7 +15,8 @@ use ddpro::{
     dec::{fit_rect, Converter, Decoder, Device, RgbStandard},
     media::{Event as MediaEvent, Ledger, Receiver, Stage},
     view::{now_ns, CursorImage, Event, Window},
-    view_down, view_up, ViewDown, ViewKey, ViewMouse, ViewStart, ViewUp,
+    view_down, view_ended::Kind, view_up, ViewDown, ViewEnded, ViewKey, ViewMouse, ViewStart,
+    ViewUp,
 };
 use hbb_common::{anyhow::anyhow, bail, log, protobuf::Message as _, throttled_log, ResultType};
 use std::{
@@ -96,17 +97,22 @@ pub fn run() {
         File::from_raw_fd(fd)
     };
     let up = Arc::new(Mutex::new(up));
-    let reason = match run_(&up) {
-        Ok(reason) => {
-            log::info!("ddpro: pro view ended: {reason}");
-            reason
+    let (kind, detail) = match run_(&up) {
+        Ok((kind, detail)) => {
+            log::info!("ddpro: pro view ended: {detail}");
+            (kind, detail)
         }
         Err(e) => {
             log::error!("ddpro: pro view failed: {e}");
-            e.to_string()
+            (Kind::DISPLAY_ERROR, e.to_string())
         }
     };
-    send_up(&up, view_up::Union::Ended(reason)).ok();
+    let ended = ViewEnded {
+        kind: kind.into(),
+        detail,
+        ..Default::default()
+    };
+    send_up(&up, view_up::Union::Ended(ended)).ok();
 }
 
 fn send_up(up: &Mutex<File>, union: view_up::Union) -> ResultType<()> {
@@ -118,7 +124,14 @@ fn send_up(up: &Mutex<File>, union: view_up::Union) -> ResultType<()> {
     Ok(())
 }
 
-fn run_(up: &Arc<Mutex<File>>) -> ResultType<String> {
+/// 收包线程记下的画面通道情况：通过了没有、为什么结束（专业窗口结束时据此说清是「没通」还是「通了又断」）
+#[derive(Default)]
+struct ChannelEnd {
+    opened: bool,
+    why: String,
+}
+
+fn run_(up: &Arc<Mutex<File>>) -> ResultType<(Kind, String)> {
     let mut stdin = BufReader::new(std::io::stdin());
     let start: ViewStart = match ddpro::read_frame::<ViewDown>(&mut stdin)? {
         Some(ViewDown {
@@ -134,15 +147,16 @@ fn run_(up: &Arc<Mutex<File>>) -> ResultType<String> {
     // 这期间到的画面在队列里等着（第一帧总是关键帧）。收包线程每收到一帧往 `wake` 写一个字节叫醒主线程
     let quit = Arc::new(AtomicBool::new(false));
     let bye = Arc::new(AtomicBool::new(false));
+    let channel = Arc::new(Mutex::new(ChannelEnd::default()));
     let (frame_tx, frame_rx) = mpsc::channel();
     let (wake_rx, wake_tx) = UnixStream::pair()?;
     wake_rx.set_nonblocking(true)?;
     wake_tx.set_nonblocking(true)?;
     let receiver = {
-        let (quit, bye) = (quit.clone(), bye.clone());
+        let (quit, bye, channel) = (quit.clone(), bye.clone(), channel.clone());
         std::thread::Builder::new()
             .name("ddpro-view-recv".into())
-            .spawn(move || receive(peer, keys, frame_tx, wake_tx, quit, bye))?
+            .spawn(move || receive(peer, keys, frame_tx, wake_tx, quit, bye, channel))?
     };
     let (mut win, dev, mut dec, mut conv) = match open_display(&start) {
         Ok(v) => v,
@@ -168,13 +182,14 @@ fn run_(up: &Arc<Mutex<File>>) -> ResultType<String> {
     let mut ledger = Ledger::default();
     let mut shown: HashMap<usize, Shown> = HashMap::new();
     let mut last_report = Instant::now();
+    let mut ready = false;
     // 主循环包一层：中途任何一步出错，也马上告诉被控端不要了（不让它白等 3 秒心跳超时）
-    let mut main_loop = || -> ResultType<String> {
+    let mut main_loop = || -> ResultType<(Kind, String)> {
         Ok(loop {
             if session_gone.load(Ordering::Acquire) {
                 // 会话结束或会话进程要换屏：告诉被控端不要了，它马上结束这一路（不等 3 秒心跳超时）
                 bye.store(true, Ordering::Release);
-                break "the session closed the pro view".to_owned();
+                break (Kind::SESSION_CLOSED, "the session closed the pro view".to_owned());
             }
             for e in win
                 .dispatch(IDLE_WAIT, Some(wake_rx.as_fd()))
@@ -228,10 +243,14 @@ fn run_(up: &Arc<Mutex<File>>) -> ResultType<String> {
                 }
             }
             if quit.load(Ordering::Acquire) {
-                break if bye.load(Ordering::Acquire) {
-                    "the user closed the pro view".to_owned()
+                if bye.load(Ordering::Acquire) {
+                    break (Kind::USER_CLOSED, "the user closed the pro view".to_owned());
+                }
+                let c = channel.lock().unwrap();
+                break if c.opened {
+                    (Kind::CHANNEL_LOST, format!("the pro channel ended: {}", c.why))
                 } else {
-                    "the pro channel ended".to_owned()
+                    (Kind::CHANNEL_FAILED, format!("the pro channel never opened: {}", c.why))
                 };
             }
             loop {
@@ -295,6 +314,13 @@ fn run_(up: &Arc<Mutex<File>>) -> ResultType<String> {
                 conv.wait(slot).map_err(|e| anyhow!("{e}"))?;
                 let converted = now_ns();
                 win.present(slot).map_err(|e| anyhow!("{e}"))?;
+                if !ready {
+                    // 第一帧专业画面交给合成器了：会话进程据此撤掉「非专业模式」提示
+                    ready = true;
+                    if send_up(up, view_up::Union::Ready(true)).is_err() {
+                        session_gone.store(true, Ordering::Release);
+                    }
+                }
                 if let Some(times) = times {
                     shown.insert(
                         slot,
@@ -365,16 +391,19 @@ fn receive(
     wake: UnixStream,
     quit: Arc<AtomicBool>,
     bye: Arc<AtomicBool>,
+    channel: Arc<Mutex<ChannelEnd>>,
 ) {
     let mut r = match Receiver::connect(peer, keys, CONNECT_TIMEOUT, 0) {
         Ok(r) => r,
         Err(e) => {
             log::error!("ddpro: pro view cannot open the pro channel to {peer}: {e}");
+            channel.lock().unwrap().why = e.to_string();
             quit.store(true, Ordering::Release);
             return;
         }
     };
     log::info!("ddpro: pro view channel open from {peer}");
+    channel.lock().unwrap().opened = true;
     let mut last_stats = Instant::now();
     let end = loop {
         if quit.load(Ordering::Acquire) {
@@ -421,6 +450,7 @@ fn receive(
         "ddpro: pro view channel closed ({end}); totals {:?}",
         r.stats
     );
+    channel.lock().unwrap().why = end;
     quit.store(true, Ordering::Release);
 }
 

@@ -20,7 +20,7 @@ pub use ddpro_view as view;
 use protobuf::Message as _;
 
 /// 专业协议版本。两端必须完全一致，不一致就拒绝。
-pub const PROTOCOL_VERSION: u32 = 4;
+pub const PROTOCOL_VERSION: u32 = 5;
 
 /// 被控端名片在 RustDesk「平台附加信息」里的键，值是 [`PROTOCOL_VERSION`]。
 pub const NAME_CARD_KEY: &str = "ddpro";
@@ -92,6 +92,14 @@ pub fn media_endpoint(m: &MediaChannel) -> Option<(std::net::SocketAddr, media::
         ssrc_control: m.ssrc_control,
     };
     Some(((ip, port).into(), keys))
+}
+
+pub fn stopped(reason: stopped::Reason, detail: String) -> dd_pro::Union {
+    dd_pro::Union::Stopped(Stopped {
+        reason: reason.into(),
+        detail,
+        ..Default::default()
+    })
 }
 
 pub fn reject(reason: reject::Reason, detail: String) -> dd_pro::Union {

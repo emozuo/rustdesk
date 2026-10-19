@@ -781,5 +781,14 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Relay fallback delay in seconds", "Затримка перед переходом на ретранслятор у секундах"),
         ("relay-fallback-delay-tip", "Скільки часу вже встановлене з'єднання через ретранслятор чекає на пряме з'єднання WebRTC, перш ніж буде використане замість нього. Збільште, щоб дати повільному прямому з'єднанню більше часу; зменште, щоб швидше переходити на ретранслятор у мережах, де пряме з'єднання неможливе. Залиште порожнім для типового значення 2.5 секунди."),
         ("To start a voice call, enable \"Audio capture\" on the \"Share screen\" page.", "Щоб розпочати голосовий виклик, увімкніть «Захоплення аудіо» на сторінці «Поділитися екраном»."),
+        ("Not in pro mode: the controlled side failed to capture or encode", ""),
+        ("Not in pro mode: the pro channel was interrupted", ""),
+        ("Not in pro mode: the pro channel could not be opened", ""),
+        ("Not in pro mode: this computer cannot show the pro view", ""),
+        ("Not in pro mode: this computer does not support pro mode", ""),
+        ("Not in pro mode: the controlled side cannot provide pro video", ""),
+        ("Not in pro mode: this display is already in use", ""),
+        ("Not in pro mode: the pro protocol versions do not match", ""),
+        ("Not in pro mode: you closed the pro view", "")
     ].iter().cloned().collect();
 }
