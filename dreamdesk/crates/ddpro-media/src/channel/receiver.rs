@@ -109,6 +109,8 @@ pub struct Receiver {
     waiting_irap: bool,
     /// 等关键帧期间，关键帧的包已经开始到了（还没到齐）
     keyframe_arriving: bool,
+    /// 正在收的这一帧（上一个帧结束标记之后）没出过救不回来的丢包
+    frame_clean: bool,
     last_loss_event: Option<Instant>,
     pending: VecDeque<Event>,
     drop_permille: u32,
@@ -149,6 +151,7 @@ impl Receiver {
             // 刚连上就在等关键帧（被控端第一帧就是关键帧）；记下时间，200 ms 内没等到再请求
             waiting_irap: true,
             keyframe_arriving: false,
+            frame_clean: true,
             last_loss_event: Some(now),
             pending: VecDeque::new(),
             drop_permille,
@@ -459,10 +462,18 @@ impl Receiver {
         let done = self.now_us().max(arrival);
         let first = self.frame_first.take().unwrap_or(arrival);
         let stamp = self.frame_stamp.take();
+        // 这一帧收的过程中出过救不回来的丢包：后面的包哪怕拼得起来，缺的可能正是开头的参数集
+        // （拼出一个缺参数集的「关键帧」交给解码器），整帧不要。帧结束，下一帧重新算
+        let clean = std::mem::replace(&mut self.frame_clean, true);
         let frame = match self.depack.take_frame() {
-            Ok(f) => f,
+            Ok(f) if clean => f,
+            Ok(_) => {
+                self.stats.discarded_frames += 1;
+                return;
+            }
             Err(_) => {
                 self.loss(0);
+                self.frame_clean = true;
                 return;
             }
         };
@@ -491,6 +502,7 @@ impl Receiver {
         self.stats.lost_packets += packets as u64;
         self.depack.reset();
         self.keyframe_arriving = false;
+        self.frame_clean = false;
         // 残帧的首包时间和被控端时间都作废，不能带到下一帧
         self.frame_first = None;
         self.frame_stamp = None;

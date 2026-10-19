@@ -3,7 +3,7 @@
 use super::{
     control, is_timeout, micros, micros_u32, open, read_i64, rtp_packet, rtx_packet, seal, srtp, udp, Error, Keys,
     CTRL_BYE, CTRL_HELLO, CTRL_KEEPALIVE, CTRL_KEYFRAME, CTRL_NACK, CTRL_TIME_ECHO, HISTORY, PEER_TIMEOUT, PT_CONTROL,
-    PT_VIDEO, RTP_PAYLOAD_MAX, UDP_PAYLOAD,
+    PT_VIDEO, RTP_HEADER, RTP_PAYLOAD_MAX, SRTP_GCM_TAG, UDP_PAYLOAD,
 };
 use crate::{
     hevc,
@@ -248,8 +248,17 @@ impl Sender {
     /// 发一帧（带起始码的 H.265 码流）。`ts` 是 90 kHz 的 RTP 时间戳；`stamp` 有值时在首包里带上
     /// 这一帧的被控端时间（重复上一帧画面等不代表新画面的帧不带）。
     pub fn send_frame(&mut self, annexb: &[u8], ts: u32, stamp: Option<Stamp>) -> Result<(), Error> {
+        let nals = hevc::split_annexb(annexb);
+        if nals.is_empty() {
+            return Err(Error::BadFrame("no NAL unit in the frame".into()));
+        }
+        // 接收端只认单个 NAL 和分片两种包：比 NAL 头还短的、类型落在聚合包 / 分片 / 保留区间（48–63）的，
+        // 原样发过去会被当成别的包解析
+        if let Some(nal) = nals.iter().find(|n| n.len() < hevc::NAL_HEADER || hevc::nal_type(n) >= 48) {
+            return Err(Error::BadFrame(format!("unsendable NAL unit (type {}, {} bytes)", hevc::nal_type(nal), nal.len())));
+        }
         let mut payloads = Vec::new();
-        for (k, nal) in hevc::split_annexb(annexb).into_iter().enumerate() {
+        for (k, nal) in nals.into_iter().enumerate() {
             // 首包要给包头扩展留位置，整个包仍不超过 UDP_PAYLOAD
             let max = if k == 0 && stamp.is_some() {
                 RTP_PAYLOAD_MAX - EXT_OVERHEAD
@@ -261,7 +270,12 @@ impl Sender {
         let last = payloads.len().saturating_sub(1);
         for (i, p) in payloads.into_iter().enumerate() {
             let mut pkt = rtp_packet(PT_VIDEO, self.keys.ssrc_media, self.seq, ts, i == last, p);
-            if let (0, Some(s)) = (i, stamp) {
+            let stamped = i == 0 && stamp.is_some();
+            // 带时间的首包先过发包节奏再打时间戳：被节奏挡住的等待算进「发出」一段，不落进跨机器的「网络」一段
+            if stamped {
+                self.wait_pace(RTP_HEADER + pkt.payload.len() + EXT_OVERHEAD + SRTP_GCM_TAG);
+            }
+            if let (true, Some(s)) = (stamped, stamp) {
                 let st = SenderStamp {
                     captured_us: micros(s.captured.saturating_duration_since(self.epoch)) as u64,
                     encode_us: micros_u32(s.encoded.saturating_duration_since(s.captured)),
@@ -274,8 +288,8 @@ impl Sender {
             self.seq = self.seq.wrapping_add(1);
             let data = seal(&mut self.enc, &pkt)?;
             self.history.lock().unwrap().put(pkt);
-            if let Some(p) = self.pacer.as_mut() {
-                p.take(data.len());
+            if !stamped {
+                self.wait_pace(data.len());
             }
             self.sock.send_to(&data, self.peer)?;
             self.stats.packets += 1;
@@ -285,6 +299,12 @@ impl Sender {
         self.stats.retransmitted = self.rtx.sent.load(Ordering::Relaxed);
         self.stats.retransmit_failed = self.rtx.failed.load(Ordering::Relaxed);
         Ok(())
+    }
+
+    fn wait_pace(&mut self, len: usize) {
+        if let Some(p) = self.pacer.as_mut() {
+            p.take(len);
+        }
     }
 
     /// 主控端是否还在（3 秒内收到过它的心跳）。

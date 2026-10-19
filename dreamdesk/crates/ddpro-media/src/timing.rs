@@ -221,7 +221,6 @@ impl Ledger {
                 let pick = |q: f64| v[((v.len() - 1) as f64 * q).round() as usize];
                 let summary = StageSummary {
                     stage: s,
-                    avg_us: v.iter().sum::<i64>() / v.len() as i64,
                     p50_us: pick(0.5),
                     p95_us: pick(0.95),
                     max_us: v[v.len() - 1],
@@ -245,7 +244,6 @@ impl Ledger {
 #[derive(Debug, Clone)]
 pub struct StageSummary {
     pub stage: Stage,
-    pub avg_us: i64,
     pub p50_us: i64,
     pub p95_us: i64,
     pub max_us: i64,
@@ -255,7 +253,8 @@ pub struct StageSummary {
 #[derive(Debug, Clone)]
 pub struct LedgerSummary {
     pub frames: u64,
-    /// 分段之和与总数对不上的帧数，应为 0
+    /// 分段之和与总数对不上的帧数，应为 0。各段和总数取自同一组时刻，相加按代数必然等于总数——
+    /// 这只能查出某段算错了（漏段、单位换错），不是独立对账
     pub mismatches: u64,
     pub stages: Vec<StageSummary>,
 }

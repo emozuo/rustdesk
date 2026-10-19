@@ -105,6 +105,8 @@ pub enum Error {
     Timeout(&'static str),
     /// 通道建立后对方不再发包
     PeerGone,
+    /// 要发的帧发不了（没有 NAL、或 NAL 的类型 / 长度接收端认不出）
+    BadFrame(String),
 }
 
 impl std::fmt::Display for Error {
@@ -114,6 +116,7 @@ impl std::fmt::Display for Error {
             Error::Srtp(e) => write!(f, "srtp: {e}"),
             Error::Timeout(what) => write!(f, "timed out: {what}"),
             Error::PeerGone => write!(f, "the peer stopped sending for {PEER_TIMEOUT:?}"),
+            Error::BadFrame(e) => write!(f, "bad frame: {e}"),
         }
     }
 }

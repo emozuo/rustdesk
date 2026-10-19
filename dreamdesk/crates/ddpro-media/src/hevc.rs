@@ -3,7 +3,7 @@
 //! 没用 rtp 库自带的 HevcPayloader：它遇到不认识的 NAL 类型会悄悄丢掉，3 / 4 字节起始码混用时也会
 //! 切错——和「不静默降级」「传输无损」冲突。这里任何 NAL 都原样送达，收到看不懂的包就报错。
 
-const NAL_HEADER: usize = 2;
+pub(crate) const NAL_HEADER: usize = 2;
 const TYPE_AP: u8 = 48;
 const TYPE_FU: u8 = 49;
 const START_CODE: [u8; 4] = [0, 0, 0, 1];
@@ -114,6 +114,10 @@ impl Depacketizer {
                 let fu = p[2];
                 let data = &p[3..];
                 if fu & 0x80 != 0 {
+                    // 上一个分片 NAL 还没收到结尾就来了新的开头：中间丢了包，不能悄悄扔掉半个 NAL 接着拼
+                    if self.fu.take().is_some() {
+                        return Err(DepacketizeError::BrokenFragment);
+                    }
                     let mut nal = vec![(p[0] & 0x81) | ((fu & 0x3f) << 1), p[1]];
                     nal.extend_from_slice(data);
                     self.fu = Some(nal);
