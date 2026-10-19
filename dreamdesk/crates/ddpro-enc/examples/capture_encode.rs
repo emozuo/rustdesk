@@ -8,8 +8,18 @@
 //!       第 ref-frame 帧的原始画面存 DIR\ref_<宽>x<高>.bgra，用于和解码结果比颜色
 //!   capture_encode compare REF.bgra DEC.rgb WIDTH HEIGHT
 //!       原始画面（BGRA）和 ffmpeg 解出的同一帧（rgb24）逐像素比，报每通道最大误差、平均误差、PSNR
+//!   capture_encode synth --out DIR [--move-seconds 2] [--still-seconds 3] [--speed 8]
+//!                        [--fps 60] [--bitrate 30000] [--preset 4] [--dither 1] [--noise 0]
+//!       P1 静止收敛：工具自己生成 CG 类测试图（色卡、渐变、1 像素细线、彩色棋盘、彩色小字），先平移 N 秒、再完全静止
+//!       N 秒，按专业模式的方式编码（静止时不给新画面、编码器重编上一帧）。出 DIR\out.h265、DIR\frames.csv、DIR\synth.txt。
+//!       --noise A 在运动段每帧叠加 ±A 的随机噪声（剧烈运动，P1 实测用 24）；不加时纯平移，码控一直压得很低，测不出收敛
+//!   capture_encode curve DIR < 解码出的 rgb24 帧流
+//!       逐帧和原图比（原图按 synth.txt 重画），出 DIR\curve.csv 和静止段的汇总：多久回到颜色换算下限、
+//!       最终画质、有没有回退（闪）、静止段最大单帧。解码：
+//!       ffmpeg -i DIR\out.h265 -vf "scale=in_range=pc:in_color_matrix=bt709:out_range=pc:flags=accurate_rnd+full_chroma_int+bitexact,format=rgb24" -f rawvideo - | capture_encode curve DIR
 //!
-//! 必须在有人登录的桌面会话里跑：远程管理通道那种后台会话采集不到屏幕。
+//! probe / run / synth 必须在有人登录的桌面会话里跑：远程管理通道那种后台会话采集不到屏幕（synth 只借采集器拿 N 卡的设备）。
+//! compare / curve 不碰显卡，哪里都能跑。
 
 #[cfg(not(windows))]
 fn main() {
@@ -24,7 +34,9 @@ fn main() {
         Some("probe") => win::probe(),
         Some("run") => win::run(&args[1..]),
         Some("compare") => win::compare(&args[1..]),
-        _ => Err("usage: capture_encode probe | run --out DIR [...] | compare REF.bgra DEC.rgb W H".into()),
+        Some("synth") => win::synth(&args[1..]),
+        Some("curve") => win::curve(&args[1..]),
+        _ => Err("usage: capture_encode probe | run --out DIR [...] | compare REF.bgra DEC.rgb W H | synth --out DIR [...] | curve DIR".into()),
     };
     if let Err(e) = result {
         eprintln!("error: {e}");
@@ -237,6 +249,383 @@ mod win {
             sum[1] as f64 / n,
             sum[2] as f64 / n
         );
+        Ok(())
+    }
+
+    /// 「先动后停」场景的参数：synth 写进 DIR\synth.txt，curve 读回来按同样的参数重画原图。
+    struct Synth {
+        w: u32,
+        h: u32,
+        fps: u32,
+        bitrate: u32,
+        move_frames: u32,
+        still_frames: u32,
+        speed: u32,
+        dither: bool,
+        /// 运动段每帧叠加的随机噪声幅度（0 = 不加）。纯平移能被运动矢量完美预测、码控一直压得很低，
+        /// 加噪声模拟「拖动大图、滚动网页」这类预测不了的运动，停下时画面才真是糊的
+        noise: u32,
+    }
+
+    impl Synth {
+        fn save(&self, path: PathBuf) -> std::io::Result<()> {
+            let s = self;
+            fs::write(
+                path,
+                format!(
+                    "{} {} {} {} {} {} {} {} {}\n",
+                    s.w, s.h, s.fps, s.bitrate, s.move_frames, s.still_frames, s.speed, s.dither as u32, s.noise
+                ),
+            )
+        }
+
+        fn load(path: PathBuf) -> Result<Self, Box<dyn std::error::Error>> {
+            let v: Vec<u32> = fs::read_to_string(path)?
+                .split_whitespace()
+                .map(str::parse)
+                .collect::<Result<_, _>>()?;
+            let [w, h, fps, bitrate, move_frames, still_frames, speed, dither, noise] = v[..] else {
+                return Err("synth.txt needs 9 numbers".into());
+            };
+            Ok(Self { w, h, fps, bitrate, move_frames, still_frames, speed, dither: dither != 0, noise })
+        }
+
+        /// 第 i 帧的原图。噪声只加在运动段、最后一个运动帧之前：停下的那一帧是干净的测试图
+        fn frame(&self, base: &[u8], i: u32, out: &mut [u8]) {
+            shifted(base, self.w as usize, self.h as usize, self.offset(i), out);
+            if self.noise == 0 || i + 1 >= self.move_frames {
+                return;
+            }
+            let a = self.noise as i32;
+            let mut seed = i.wrapping_mul(2_654_435_761).wrapping_add(1);
+            for px in out.chunks_exact_mut(4) {
+                for c in &mut px[..3] {
+                    seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                    let n = (seed >> 16) as i32 % (2 * a + 1) - a;
+                    *c = (*c as i32 + n).clamp(0, 255) as u8;
+                }
+            }
+        }
+
+        /// 第 i 帧的原图是测试图平移多少：运动段每帧向右走 speed、向下走 speed / 3 像素（循环卷动），之后停在最后的位置
+        fn offset(&self, i: u32) -> (usize, usize) {
+            let k = i.min(self.move_frames.saturating_sub(1)) as usize;
+            let s = self.speed as usize;
+            ((k * s) % self.w as usize, (k * s / 3) % self.h as usize)
+        }
+    }
+
+    /// CG 类测试图（BGRA），从上到下四段：色卡（1 像素白格线）、红 / 绿 / 蓝 / 灰渐变、1 像素彩色竖线和最高频的
+    /// 红蓝棋盘（4:2:0 会把它抹成紫色）、彩色小字形状（5×7 点阵，前景色 / 背景色随格子变）。固定随机种子，每次一样。
+    fn test_pattern(w: usize, h: usize) -> Vec<u8> {
+        const PALETTE: [[u8; 3]; 6] = [[220, 30, 30], [30, 180, 40], [40, 60, 220], [240, 200, 20], [200, 40, 200], [20, 190, 200]];
+        let mut seed: u32 = 0x1234_5678;
+        let glyphs: Vec<u64> = (0..64)
+            .map(|_| {
+                let mut g = 0u64;
+                for _ in 0..35 {
+                    seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                    g = (g << 1) | (seed >> 31) as u64;
+                }
+                g
+            })
+            .collect();
+        let band = (h / 4).max(1);
+        let mut p = vec![0u8; w * h * 4];
+        for y in 0..h {
+            let yb = y % band;
+            for x in 0..w {
+                let rgb = match y / band {
+                    0 => {
+                        let (cw, ch) = ((w / 8).max(1), (band / 3).max(1));
+                        if x % cw == 0 || yb % ch == 0 {
+                            [255, 255, 255]
+                        } else {
+                            let c = PALETTE[(x / cw) % 6];
+                            match yb / ch {
+                                0 => c,
+                                1 => [c[0] / 2 + 64, c[1] / 2 + 64, c[2] / 2 + 64],
+                                _ => [c[0] / 3, c[1] / 3, c[2] / 3],
+                            }
+                        }
+                    }
+                    1 => {
+                        let q = (w / 4).max(1);
+                        let v = ((x % q) * 255 / q) as u8;
+                        match x / q {
+                            0 => [v, 0, 0],
+                            1 => [0, v, 0],
+                            2 => [0, 0, v],
+                            _ => [v, v, v],
+                        }
+                    }
+                    2 => {
+                        if x < w / 2 {
+                            PALETTE[x % 6]
+                        } else if (x + y) % 2 == 0 {
+                            [255, 0, 0]
+                        } else {
+                            [0, 0, 255]
+                        }
+                    }
+                    _ => {
+                        let cell = (x / 6) * 131 + (yb / 9) * 977;
+                        let (cx, cy) = (x % 6, yb % 9);
+                        let on = cx < 5 && cy < 7 && (glyphs[cell % 64] >> (cy * 5 + cx)) & 1 == 1;
+                        if on {
+                            PALETTE[cell % 6]
+                        } else {
+                            match cell % 3 {
+                                0 => [255, 255, 255],
+                                1 => [0, 0, 0],
+                                _ => PALETTE[(cell + 3) % 6],
+                            }
+                        }
+                    }
+                };
+                let i = (y * w + x) * 4;
+                p[i..i + 4].copy_from_slice(&[rgb[2], rgb[1], rgb[0], 255]);
+            }
+        }
+        p
+    }
+
+    /// 测试图循环平移 (dx, dy) 后的画面
+    fn shifted(base: &[u8], w: usize, h: usize, (dx, dy): (usize, usize), out: &mut [u8]) {
+        for y in 0..h {
+            let src = &base[((y + dy) % h) * w * 4..][..w * 4];
+            let dst = &mut out[y * w * 4..][..w * 4];
+            dst[..(w - dx) * 4].copy_from_slice(&src[dx * 4..]);
+            dst[(w - dx) * 4..].copy_from_slice(&src[..dx * 4]);
+        }
+    }
+
+    pub fn synth(args: &[String]) -> Res {
+        use windows::{
+            core::Interface,
+            Win32::Graphics::{Direct3D11::*, Dxgi::Common::*},
+        };
+        let (mut out, mut move_s, mut still_s, mut speed) = (PathBuf::new(), 2u32, 3u32, 8u32);
+        let (mut fps, mut bitrate, mut preset, mut dither) = (60u32, 30_000u32, 4u8, true);
+        let mut noise = 0u32;
+        let mut it = args.iter();
+        while let Some(k) = it.next() {
+            let v = it.next().ok_or_else(|| format!("{k} needs a value"))?;
+            match k.as_str() {
+                "--out" => out = PathBuf::from(v),
+                "--move-seconds" => move_s = v.parse()?,
+                "--still-seconds" => still_s = v.parse()?,
+                "--speed" => speed = v.parse()?,
+                "--noise" => noise = v.parse()?,
+                "--fps" => fps = v.parse()?,
+                "--bitrate" => bitrate = v.parse()?,
+                "--preset" => preset = v.parse()?,
+                "--dither" => dither = v != "0",
+                _ => return Err(format!("unknown option {k}").into()),
+            }
+        }
+        if out.as_os_str().is_empty() {
+            return Err("--out DIR is required".into());
+        }
+        fs::create_dir_all(&out)?;
+        // 采集器只用来拿 N 卡上的设备（编码器要和画面在同一个设备上）；画面是自己生成的
+        let (cap, w, h) = nvidia_capturer()?;
+        let s = Synth { w, h, fps, bitrate, move_frames: move_s * fps, still_frames: still_s * fps, speed, dither, noise };
+        s.save(out.join("synth.txt"))?;
+        let (wu, hu) = (w as usize, h as usize);
+        let base = test_pattern(wu, hu);
+        let mut frame = vec![0u8; base.len()];
+
+        let device = cap.device().device;
+        let (tex, ctx) = unsafe {
+            let dev = ID3D11Device::from_raw_borrowed(&device).ok_or("null capture device")?;
+            let desc = D3D11_TEXTURE2D_DESC {
+                Width: w,
+                Height: h,
+                MipLevels: 1,
+                ArraySize: 1,
+                Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+                Usage: D3D11_USAGE_DEFAULT,
+                BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
+                CPUAccessFlags: 0,
+                MiscFlags: 0,
+            };
+            let mut tex = None;
+            dev.CreateTexture2D(&desc, None, Some(&mut tex))?;
+            (tex.ok_or("CreateTexture2D returned nothing")?, dev.GetImmediateContext()?)
+        };
+        let cfg = Config { width: w, height: h, fps, bitrate_kbps: bitrate, preset, dither };
+        println!("{cfg:?}; move {} frames at {speed} px/frame, then still {} frames", s.move_frames, s.still_frames);
+        let mut enc = Encoder::new(device, cfg)?;
+        let mut stream = fs::File::create(out.join("out.h265"))?;
+        let mut csv = String::from("frame,phase,bytes,idr,encode_ms,avg_qp\n");
+        for i in 0..s.move_frames + s.still_frames {
+            let moving = i < s.move_frames;
+            // 静止段和专业模式一样不给新画面，编码器重编上一帧
+            let src = if moving || i == 0 {
+                s.frame(&base, i, &mut frame);
+                unsafe { ctx.UpdateSubresource(&tex, 0, None, frame.as_ptr() as _, w * 4, 0) };
+                Some(tex.as_raw())
+            } else {
+                None
+            };
+            let t0 = Instant::now();
+            let f = enc.encode(src, false)?;
+            let ms = t0.elapsed().as_secs_f64() * 1000.0;
+            stream.write_all(&f.data)?;
+            let phase = if moving { "move" } else { "still" };
+            csv += &format!("{i},{phase},{},{},{ms:.2},{}\n", f.data.len(), f.is_idr as u8, f.avg_qp);
+        }
+        fs::write(out.join("frames.csv"), csv)?;
+        println!("done: {}", out.display());
+        Ok(())
+    }
+
+    /// 只有颜色换算、不编码时的误差（相当于无损编码的上限）：按 shaders/rgb_to_yuv444.hlsl 的公式把 BGRA 换成 8bit YUV，
+    /// 再按 BT.709 全范围换回 RGB。返回 (PSNR, 最大误差, 换出来的 YUV 4:4:4 平面排布)；YUV 用来单独核对解码那一段
+    /// （用同一条 ffmpeg 命令换回 RGB，应当得到同样的下限）。
+    fn conversion_floor(bgra: &[u8], w: usize, dither: bool) -> (f64, u8, Vec<u8>) {
+        let n = bgra.len() / 4;
+        let mut yuv = vec![0u8; n * 3];
+        const BAYER8: [u8; 64] = [
+            0, 32, 8, 40, 2, 34, 10, 42, 48, 16, 56, 24, 50, 18, 58, 26, 12, 44, 4, 36, 14, 46, 6, 38, 60, 28, 52, 20, 62, 30,
+            54, 22, 3, 35, 11, 43, 1, 33, 9, 41, 51, 19, 59, 27, 49, 17, 57, 25, 15, 47, 7, 39, 13, 45, 5, 37, 63, 31, 55,
+            23, 61, 29, 53, 21,
+        ];
+        let (mut max, mut sq) = (0u8, 0u64);
+        for (p, px) in bgra.chunks_exact(4).enumerate() {
+            let (x, y) = (p % w, p / w);
+            let [b, g, r] = [px[0], px[1], px[2]].map(|c| c as f64 / 255.0);
+            let t = if dither { (BAYER8[(y & 7) * 8 + (x & 7)] as f64 + 0.5) / 64.0 } else { 0.5 };
+            let q = |v: f64| (v + t).floor().clamp(0.0, 255.0);
+            let luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+            let yy = q(luma * 255.0);
+            let cb = q((b - luma) / 1.8556 * 255.0 + 128.0) - 128.0;
+            let cr = q((r - luma) / 1.5748 * 255.0 + 128.0) - 128.0;
+            yuv[p] = yy as u8;
+            yuv[n + p] = (cb + 128.0) as u8;
+            yuv[2 * n + p] = (cr + 128.0) as u8;
+            let r2 = yy + 1.5748 * cr;
+            let b2 = yy + 1.8556 * cb;
+            let g2 = (yy - 0.2126 * r2 - 0.0722 * b2) / 0.7152;
+            for (orig, back) in [px[2], px[1], px[0]].into_iter().zip([r2, g2, b2]) {
+                let e = orig.abs_diff(back.round().clamp(0.0, 255.0) as u8);
+                max = max.max(e);
+                sq += (e as u64) * (e as u64);
+            }
+        }
+        let mse = sq as f64 / (n * 3) as f64;
+        (if mse == 0.0 { 99.0 } else { 10.0 * (255.0 * 255.0 / mse).log10() }, max, yuv)
+    }
+
+    pub fn curve(args: &[String]) -> Res {
+        use std::io::Read;
+        let [dir] = args else {
+            return Err("curve DIR  (decoded rgb24 frames on stdin)".into());
+        };
+        let dir = PathBuf::from(dir);
+        let s = Synth::load(dir.join("synth.txt"))?;
+        let (w, h) = (s.w as usize, s.h as usize);
+        let sizes: Vec<usize> = fs::read_to_string(dir.join("frames.csv"))?
+            .lines()
+            .skip(1)
+            .filter_map(|l| l.split(',').nth(2)?.parse().ok())
+            .collect();
+        let base = test_pattern(w, h);
+        let (mut reff, mut dec) = (vec![0u8; w * h * 4], vec![0u8; w * h * 3]);
+        let mut stdin = std::io::stdin().lock();
+        // 每帧：PSNR、最大误差（三个通道里最大的）、平均误差
+        let mut rows: Vec<(f64, u8, f64)> = Vec::new();
+        let mut last_dec = Vec::new();
+        while stdin.read_exact(&mut dec).is_ok() {
+            last_dec.clone_from(&dec);
+            s.frame(&base, rows.len() as u32, &mut reff);
+            let (mut max, mut sum, mut sq) = (0u8, 0u64, 0u64);
+            for p in 0..w * h {
+                for c in 0..3 {
+                    let e = reff[p * 4 + 2 - c].abs_diff(dec[p * 3 + c]);
+                    max = max.max(e);
+                    sum += e as u64;
+                    sq += (e as u64) * (e as u64);
+                }
+            }
+            let n = (w * h * 3) as f64;
+            let mse = sq as f64 / n;
+            let psnr = if mse == 0.0 { 99.0 } else { 10.0 * (255.0 * 255.0 / mse).log10() };
+            rows.push((psnr, max, sum as f64 / n));
+        }
+        if rows.len() <= s.move_frames as usize {
+            return Err(format!("only {} decoded frames, the still phase starts at {}", rows.len(), s.move_frames).into());
+        }
+        let mut csv = String::from("frame,phase,bytes,psnr,max_err,mean_err\n");
+        for (i, (psnr, max, mean)) in rows.iter().enumerate() {
+            let phase = if i < s.move_frames as usize { "move" } else { "still" };
+            csv += &format!("{i},{phase},{},{psnr:.2},{max},{mean:.4}\n", sizes.get(i).copied().unwrap_or(0));
+        }
+        fs::write(dir.join("curve.csv"), csv)?;
+
+        let still = &rows[s.move_frames as usize..];
+        let ms = |k: usize| k as f64 * 1000.0 / s.fps as f64;
+        let first = |ok: &dyn Fn(&(f64, u8, f64)) -> bool| {
+            still.iter().position(ok).map_or("never".to_owned(), |k| format!("frame +{k} ({:.0} ms)", ms(k)))
+        };
+        let regress = still.windows(2).filter(|p| p[1].0 < p[0].0 - 0.5).count();
+        let still_sizes = &sizes[(s.move_frames as usize).min(sizes.len())..];
+        let budget = s.bitrate as usize * 1000 / 8 / s.fps.max(1) as usize;
+        let last = still[still.len() - 1];
+        s.frame(&base, s.move_frames, &mut reff);
+        let floor = conversion_floor(&reff, w, s.dither);
+        fs::write(dir.join("still_ref.bgra"), &reff)?;
+        fs::write(dir.join("still_floor.yuv"), &floor.2)?;
+        let report = format!(
+            "dither {}; conversion floor of the still picture (no coding loss): PSNR {:.2} dB, max err {}\n\
+             still phase: {} frames ({:.1} s)\n\
+             at stop (still +0): PSNR {:.2} dB, max err {}, mean err {:.3}\n\
+             reach the floor (max err <= {}, PSNR >= {:.2} dB): {}\n\
+             final (still +{}): PSNR {:.2} dB, max err {}, mean err {:.4}\n\
+             regressions (PSNR drop > 0.5 dB between consecutive still frames): {regress}\n\
+             largest still frame: {} bytes (one-frame budget at {} kbps / {} fps: {budget} bytes); \
+             still phase total {} bytes\n",
+            if s.dither { "on" } else { "off" },
+            floor.0,
+            floor.1,
+            still.len(),
+            ms(still.len()) / 1000.0,
+            still[0].0,
+            still[0].1,
+            still[0].2,
+            floor.1,
+            floor.0 - 0.5,
+            first(&|r| r.1 <= floor.1 && r.0 >= floor.0 - 0.5),
+            still.len() - 1,
+            last.0,
+            last.1,
+            last.2,
+            still_sizes.iter().max().copied().unwrap_or(0),
+            s.bitrate,
+            s.fps,
+            still_sizes.iter().sum::<usize>(),
+        );
+        // 最后一帧按测试图的四段分别算，看剩下的误差集中在哪类内容上
+        let band = (h / 4).max(1);
+        let names = ["color chart + grid", "gradients", "1px lines + red/blue checkerboard", "glyphs"];
+        let report = (0..4).fold(report, |acc, b| {
+            let (mut max, mut sq, mut n) = (0u8, 0u64, 0u64);
+            for p in b * band * w..((b + 1) * band).min(h) * w {
+                for c in 0..3 {
+                    let e = reff[p * 4 + 2 - c].abs_diff(last_dec[p * 3 + c]);
+                    max = max.max(e);
+                    sq += (e as u64) * (e as u64);
+                    n += 1;
+                }
+            }
+            let mse = sq as f64 / n.max(1) as f64;
+            let psnr = if mse == 0.0 { 99.0 } else { 10.0 * (255.0 * 255.0 / mse).log10() };
+            acc + &format!("  final, band {}: PSNR {psnr:.2} dB, max err {max}\n", names[b])
+        });
+        print!("{report}");
+        fs::write(dir.join("summary.txt"), report)?;
         Ok(())
     }
 }

@@ -202,6 +202,8 @@ pub struct Config {
 pub struct EncodedFrame {
     pub data: Vec<u8>,
     pub is_idr: bool,
+    /// 编码器报告的这一帧平均量化参数（验证工具看码控行为用）。
+    pub avg_qp: u32,
 }
 
 /// HEVC 4:4:4 8bit 编码器。只能在创建它的线程上使用。
@@ -289,9 +291,6 @@ impl Encoder {
         // 码率缓冲只给一帧的量：单帧不会大到要排队好几帧才发得完
         c.rcParams.vbvBufferSize = bitrate / cfg.fps.max(1);
         c.rcParams.vbvInitialDelay = c.rcParams.vbvBufferSize;
-        // 逐块调质量（P1 静止收敛要用）。「只能在创建时打开、运行中打不开」是旧实现的说法，未核实，P1 做静止收敛时
-        // 实测（运行中重配编码器能否打开）；现在不传逐块质量表，开着不起作用，第 3 步的画质就是开着测的
-        c.rcParams.qpMapMode = _NV_ENC_QP_MAP_MODE::NV_ENC_QP_MAP_DELTA;
 
         let hevc = &mut c.encodeCodecConfig.hevcConfig;
         hevc.set_chromaFormatIDC(3);
@@ -381,9 +380,10 @@ impl Encoder {
         let s = nv!(self.session.api, nvEncLockBitstream)(self.session.enc, &mut l);
         self.session.check(s, "nvEncLockBitstream")?;
         let data = std::slice::from_raw_parts(l.bitstreamBufferPtr as *const u8, l.bitstreamSizeInBytes as usize).to_vec();
+        let avg_qp = l.frameAvgQP;
         let s = nv!(self.session.api, nvEncUnlockBitstream)(self.session.enc, self.bitstream);
         self.session.check(s, "nvEncUnlockBitstream")?;
-        Ok(EncodedFrame { data, is_idr })
+        Ok(EncodedFrame { data, is_idr, avg_qp })
     }
 
     /// 把最近一次载入的源画面读回内存（BGRA，逐行紧排）。只给颜色比对用，正常编码不走这里。
