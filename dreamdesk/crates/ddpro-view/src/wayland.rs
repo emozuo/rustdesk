@@ -131,7 +131,20 @@ pub struct FormatSupport {
 
 struct Slot {
     buffer: Option<wl_buffer::WlBuffer>,
+    /// 建这个缓冲用的参数对象：留到缓冲换掉时才销毁——立刻销毁就收不到合成器「导入失败」的事件
+    params: Option<zwp_linux_buffer_params_v1::ZwpLinuxBufferParamsV1>,
     busy: bool,
+}
+
+impl Slot {
+    fn clear(&mut self) {
+        if let Some(b) = self.buffer.take() {
+            b.destroy();
+        }
+        if let Some(p) = self.params.take() {
+            p.destroy();
+        }
+    }
 }
 
 struct Commit {
@@ -265,12 +278,16 @@ impl Window {
 
     /// 准备 `count` 个槽位（丢掉以前导入的画面）。
     pub fn reset_slots(&mut self, count: usize) {
-        for s in self.state.slots.drain(..) {
-            if let Some(b) = s.buffer {
-                b.destroy();
-            }
+        for mut s in self.state.slots.drain(..) {
+            s.clear();
         }
-        self.state.slots = (0..count).map(|_| Slot { buffer: None, busy: false }).collect();
+        self.state.slots = (0..count)
+            .map(|_| Slot {
+                buffer: None,
+                params: None,
+                busy: false,
+            })
+            .collect();
         // 旧提交的上屏回执带着旧槽号，晚到会被算到同槽号的新帧头上
         self.state.pending.clear();
     }
@@ -296,7 +313,7 @@ impl Window {
                 .ok_or_else(|| Error("the exported image refers to a missing object".into()))?;
             params.add(fd.as_fd(), i as u32, p.offset, p.pitch, modifier);
         }
-        let (buffer, _) =
+        let (buffer, params) =
             params.create_immed(image.width as i32, image.height as i32, layer.drm_format, Flags::empty(), &qh);
         self.conn.flush().map_err(err("send the dmabuf to the compositor"))?;
         let s = self
@@ -304,9 +321,9 @@ impl Window {
             .slots
             .get_mut(slot)
             .ok_or_else(|| Error(format!("no slot {slot}")))?;
-        if let Some(old) = s.buffer.replace(buffer) {
-            old.destroy();
-        }
+        s.clear();
+        s.buffer = Some(buffer);
+        s.params = Some(params);
         s.busy = false;
         Ok(())
     }
@@ -702,10 +719,15 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for State {
         _: &QueueHandle<Self>,
     ) {
         match event {
-            wl_keyboard::Event::Key { key, state: WEnum::Value(s), .. } => state.events.push(Event::Key {
-                evdev: key,
-                down: s == wl_keyboard::KeyState::Pressed,
-            }),
+            wl_keyboard::Event::Key { key, state: WEnum::Value(s), .. } => {
+                let down = match s {
+                    wl_keyboard::KeyState::Pressed => true,
+                    wl_keyboard::KeyState::Released => false,
+                    // wl_seat v10 起合成器会发「重复」：远程系统按住键自己会重复，这里不转发（当成抬起会让远程松键）
+                    _ => return,
+                };
+                state.events.push(Event::Key { evdev: key, down });
+            }
             wl_keyboard::Event::Modifiers { mods_depressed, mods_locked, .. } => state.events.push(Event::Modifiers {
                 depressed: mods_depressed,
                 locked: mods_locked,
