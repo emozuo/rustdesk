@@ -466,8 +466,13 @@ fn desktop_changed() -> bool {
 }
 
 /// 隐私模式开着且用的是放大镜实现：它靠专门的截屏方式绕开遮罩，专业采集只会拍到黑屏
-/// （默认的「截屏时排除」实现不影响专业采集，见 P0 实施记录）
+/// （默认的「截屏时排除」实现不影响专业采集，见 P0 实施记录）。
+/// 支持「截屏时排除」的系统上 RustDesk 根本不提供放大镜实现，直接跳过：查隐私模式要拿它的锁，打开隐私模式时
+/// 这把锁要被持有好几秒，每帧去等会让专业画面停发、主控端 3 秒后判定断开（2026-10-19 在 209.32 上实撞）
 fn mag_privacy_mode() -> bool {
+    if crate::privacy_mode::win_exclude_from_capture::is_supported() {
+        return false;
+    }
     get_privacy_mode_conn_id().is_some_and(|id| id != INVALID_PRIVACY_MODE_CONN_ID)
         && is_current_privacy_mode_impl(PRIVACY_MODE_IMPL_WIN_MAG)
 }
