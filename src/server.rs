@@ -474,6 +474,11 @@ impl Server {
             if Self::is_video_service_name(&name) && name != monitor_service_name {
                 continue;
             }
+            // Subscribed only once a pro session is agreed (src/ddpro/video.rs).
+            #[cfg(feature = "dd-pro")]
+            if crate::ddpro::server::is_pro_service(&name) {
+                continue;
+            }
             if !noperms.contains(&(&name as _)) {
                 s.on_subscribe(conn.clone());
             }

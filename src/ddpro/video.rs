@@ -95,7 +95,7 @@ lazy_static::lazy_static! {
 }
 
 fn service_name(display: usize) -> String {
-    format!("ddpro_monitor{display}")
+    format!("{}{display}", super::server::PRO_SERVICE_PREFIX)
 }
 
 fn general_name(display: usize) -> String {

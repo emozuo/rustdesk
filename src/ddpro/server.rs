@@ -8,6 +8,15 @@ use hbb_common::{log, throttled_log, tokio};
 use serde_json::{json, Map, Value};
 use std::net::IpAddr;
 
+/// 专业视频服务名的前缀（后面接屏号）
+pub(super) const PRO_SERVICE_PREFIX: &str = "ddpro_monitor";
+
+/// 是不是专业视频服务。RustDesk 在连接登录时把它订阅到所有服务上（只按名字跳过它自己的视频服务）；
+/// 专业视频服务只能在谈成专业会话时显式订阅，不然只看普通画面的连接也会挂在上面（服务空转、显示变化消息发错人）。
+pub fn is_pro_service(name: &str) -> bool {
+    name.starts_with(PRO_SERVICE_PREFIX)
+}
+
 /// 登录应答的名片：只写专业协议版本，详细能力在请求 / 答复里谈。
 pub fn add_name_card(platform_additions: &mut Map<String, Value>) {
     platform_additions.insert(
