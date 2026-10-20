@@ -14,7 +14,7 @@ use std::net::IpAddr;
 pub(super) const PRO_SERVICE_PREFIX: &str = "ddpro_monitor";
 
 /// 是不是专业视频服务。RustDesk 在连接登录时把它订阅到所有服务上（只按名字跳过它自己的视频服务）；
-/// 专业视频服务只能在谈成专业会话时显式订阅，不然只看普通画面的连接也会挂在上面（服务空转、显示变化消息发错人）。
+/// 专业视频服务只能在谈成专业会话时显式订阅，不然只看通用画面的连接也会挂在上面（服务空转、显示变化消息发错人）。
 pub fn is_pro_service(name: &str) -> bool {
     name.starts_with(PRO_SERVICE_PREFIX)
 }
@@ -40,7 +40,7 @@ pub struct ConnCtx {
 
 /// 处理主控端发来的专业协议消息，返回要回给它的消息。
 /// 探测编码器、开端口要一两百毫秒，放到阻塞线程里做，不卡 RustDesk 的异步运行时；但这个连接自己的消息循环
-/// 在等答复，这期间本连接的普通画面和输入会停一两百毫秒（只发生在开会话、换屏时）。
+/// 在等答复，这期间本连接的通用画面和输入会停一两百毫秒（只发生在开会话、换屏时）。
 pub async fn on_message(data: &[u8], ctx: ConnCtx) -> Option<Message> {
     let data = data.to_vec();
     match tokio::task::spawn_blocking(move || handle(&data, &ctx)).await {
@@ -143,7 +143,7 @@ fn answer(hello: &Hello, ctx: &ConnCtx) -> dd_pro::Union {
     reply
 }
 
-/// 同一块屏专业模式不共享：已有别的专业会话，或有别的连接在用普通模式看，都拒绝。
+/// 同一块屏专业模式不共享：已有别的专业会话，或有别的连接在用通用模式看，都拒绝。
 /// 这里是谈判前的早拒绝（免得白探测显卡）；开通道时在服务器锁内还会再查一遍，那次才是准的。
 fn busy(display: usize, ctx: &ConnCtx) -> Option<String> {
     #[cfg(all(windows, feature = "vram"))]

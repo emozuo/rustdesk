@@ -99,7 +99,7 @@ pub fn set_dither<T: InvokeUiSession>(_session: &Session<T>, _on: bool) {
     }
 }
 
-/// RustDesk 每秒推质量面板数据之前（`io_loop` 的钩子）：专业窗口开着时，当前屏的帧率、编码、色度是普通画面那条链路的，
+/// RustDesk 每秒推质量面板数据之前（`io_loop` 的钩子）：专业窗口开着时，当前屏的帧率、编码、色度是通用画面那条链路的，
 /// 换成专业画面的实测值。
 pub fn quality_status<T: InvokeUiSession>(_session: &Session<T>, _status: &mut crate::client::QualityStatus) {
     #[cfg(all(feature = "flutter", target_os = "linux"))]

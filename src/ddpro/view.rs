@@ -4,7 +4,7 @@
 //! 由会话进程走 RustDesk 原有的输入入口发给被控端。会话进程退出时标准输入断开，本进程随之退出。
 //!
 //! 三个线程：
-//! - 收包：收画面、发心跳（兼授时、关键帧请求）。和解码显示分开——心跳停 3 秒被控端就退回普通画面，
+//! - 收包：收画面、发心跳（兼授时、关键帧请求）。和解码显示分开——心跳停 3 秒被控端就退回通用画面，
 //!   解码或显示偶尔慢一下不能被当成通道断了（第 5a 步长时间运行得出的约束）；
 //! - 读标准输入：光标、远程这块屏的显示变化、会话进程退出；
 //! - 主线程：窗口事件、解码、转 RGB、提交、键鼠。
@@ -44,7 +44,7 @@ use std::{
 const SLOTS: usize = 4;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const REPORT: Duration = Duration::from_secs(5);
-/// 质量面板多久报一次实测值（和 RustDesk 普通画面那条链路推面板数据的间隔一样）
+/// 质量面板多久报一次实测值（和 RustDesk 通用画面那条链路推面板数据的间隔一样）
 const PANEL: Duration = Duration::from_secs(1);
 /// 显示链路多久查一次（用户开关夜灯、改分辨率后几秒内面板就跟上）
 const DISPLAY_CHECK: Duration = Duration::from_secs(5);
@@ -395,7 +395,7 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
     let (mut win, dev, mut dec, mut conv) = match open_display(&start) {
         Ok(v) => v,
         Err(e) => {
-            // 显示不了：马上告诉被控端不要了（不让它白等 3 秒心跳超时），它退回普通画面
+            // 显示不了：马上告诉被控端不要了（不让它白等 3 秒心跳超时），它退回通用画面
             bye.store(true, Ordering::Release);
             quit.store(true, Ordering::Release);
             receiver.join().ok();
@@ -666,7 +666,7 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
 
 /// 开全屏窗口、显卡解码器和转换器（设备留着，本机屏幕分辨率变了要按新尺寸重建转换器）。
 fn open_display(start: &ViewStart) -> ResultType<(Window, Device, Decoder, Converter)> {
-    // 桌面文件按应用名装（产品版 dreamdesk-pro.desktop，原版 rustdesk.desktop），和 RustDesk 远程窗口同一个应用名
+    // 桌面文件按应用名装（产品版 dreamdesk-pro.desktop，原版 rustdesk.desktop），和通用窗口同一个应用名
     let app_id = crate::get_app_name().to_lowercase();
     let mut win = Window::open(
         if start.title.is_empty() { &app_id } else { &start.title },

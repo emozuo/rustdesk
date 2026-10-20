@@ -5,7 +5,7 @@
 //! 专业窗口交回的键鼠走 RustDesk 原有的输入入口（和 Flutter 窗口同一个入口、同一种键码）。
 //!
 //! 「非专业模式」提示（不静默降级，P0 实施记录「P0 收尾：模式提示」）也在这里：对端支持专业模式、但这次会话
-//! 现在不在专业模式时，往 RustDesk 远程窗口推 `ddpro_mode` 事件，界面在画面左上角挂常驻标签。
+//! 现在不在专业模式时，往通用窗口推 `ddpro_mode` 事件，界面在画面左上角挂常驻标签。
 
 use crate::{
     client::{Data, Interface},
@@ -123,22 +123,22 @@ impl Notice {
     }
 }
 
-/// 专业会话期间屏幕上只有一种窗口（P1 第 2 项）：专业画面出来后隐藏 RustDesk 远程窗口（它所在的进程照常承载会话），
+/// 专业会话期间屏幕上只有一种窗口（P1 第 2 项）：专业画面出来后隐藏通用窗口（它所在的进程照常承载会话），
 /// 专业模式出故障时显示回来，用户关掉专业画面就结束这次远程。`action` 为 `hide` / `show` / `close`。
 /// 诊断开关 `DDPRO_DIAG_KEEP_WINDOW=1` 不隐藏，两个窗口并排对比用
 fn push_window<T: InvokeUiSession>(session: &Session<T>, action: &str) {
     if action == "hide" && std::env::var("DDPRO_DIAG_KEEP_WINDOW").is_ok_and(|v| v == "1") {
-        log::info!("ddpro: RustDesk remote window kept (DDPRO_DIAG_KEEP_WINDOW)");
+        log::info!("ddpro: general window kept (DDPRO_DIAG_KEEP_WINDOW)");
         return;
     }
-    log::info!("ddpro: RustDesk remote window: {action}");
+    log::info!("ddpro: general window: {action}");
     let conn_type = session.lc.read().unwrap().conn_type;
     if let Some(s) = crate::flutter::sessions::get_session_by_peer_id(session.get_id(), conn_type) {
         s.push_event("ddpro_window", &[("action", action)], &[]);
     }
 }
 
-/// 推给 RustDesk 远程窗口：`level` 为 `fault`（红），空串表示撤掉提示
+/// 推给通用窗口：`level` 为 `fault`（红），空串表示撤掉提示
 fn push_mode<T: InvokeUiSession>(session: &Session<T>, level: &str, notice: Option<Notice>, detail: &str) {
     let (text, tip) = notice.map_or(("", ""), |n| (n.text(), n.tip()));
     let conn_type = session.lc.read().unwrap().conn_type;
@@ -230,7 +230,7 @@ fn raise<T: InvokeUiSession>(session: &Session<T>, notice: Notice, detail: &str,
     }
     log::warn!("ddpro: {} ({detail})", notice.text());
     push_mode(session, "fault", Some(notice), detail);
-    // 不在专业模式了：RustDesk 远程窗口必须看得见（专业画面出来前出的故障，窗口本来就开着）
+    // 不在专业模式了：通用窗口必须看得见（专业画面出来前出的故障，窗口本来就开着）
     push_window(session, "show");
 }
 
@@ -268,7 +268,7 @@ pub fn rejected<T: InvokeUiSession>(session: &Session<T>, r: &Reject) {
     fault(session, notice, &r.detail);
 }
 
-/// 被控端报告它那一侧的专业画面出错、已退回普通画面：挂提示，关掉专业窗口（不等通道 3 秒没画面）。
+/// 被控端报告它那一侧的专业画面出错、已退回通用画面：挂提示，关掉专业窗口（不等通道 3 秒没画面）。
 /// 说的不是当前屏（主控端切过屏，旧屏晚到的消息）就只记日志，不动新屏的专业窗口和提示。
 pub fn peer_stopped<T: InvokeUiSession>(session: &Session<T>, s: &Stopped) {
     use stopped::Reason;
@@ -591,7 +591,7 @@ pub fn start<T: InvokeUiSession>(
         }
         let detail = ended.as_ref().map_or(String::new(), |e| e.detail.clone());
         match ended.map(|e| e.kind.enum_value()) {
-            // 还挂着的窗口因为会话结束而关（RustDesk 连接断了）：RustDesk 的断开 / 重连提示在远程窗口里，要让人看得见
+            // 还挂着的窗口因为会话结束而关（RustDesk 连接断了）：RustDesk 的断开 / 重连提示在通用窗口里，要让人看得见
             Some(Ok(Kind::SESSION_CLOSED)) => push_window(&session, "show"),
             // 关专业画面就是结束这次远程（专业会话期间只有这一个窗口）
             Some(Ok(Kind::USER_CLOSED)) => push_window(&session, "close"),

@@ -173,8 +173,8 @@ struct State {
     /// 窗口在屏上时不让桌面因「没有本机键鼠操作」而黑屏 / 锁屏：远程会话里本机常常长时间没有输入
     /// （比如盯着远程渲染），GNOME 默认几分钟就会黑屏（2026-10-13 瘦客户机 10 分钟测试第 4 分钟实撞）
     idle_inhibitor: Option<ZwpIdleInhibitorV1>,
-    /// 申请把系统快捷键让给本窗口（RustDesk 自己的远程窗口在 Linux 上用的是同一个协议）。
-    /// 和 RustDesk 远程窗口一样（flutter/linux/wayland_shortcuts_inhibit.cc）：拿到键盘焦点时申请、失去时撤掉，
+    /// 申请把系统快捷键让给本窗口（通用窗口在 Linux 上用的是同一个协议）。
+    /// 和通用窗口一样（flutter/linux/wayland_shortcuts_inhibit.cc）：拿到键盘焦点时申请、失去时撤掉，
     /// 这样用户按 Win+Esc 收回快捷键后，切走再切回来又让给远程（只申请一次的话 GNOME 不再自动恢复，2026-10-20 实测）。
     /// 合成器不支持时照常运行，系统快捷键留在本机
     shortcuts_manager: Option<ZwpKeyboardShortcutsInhibitManagerV1>,
@@ -271,7 +271,7 @@ impl Window {
         let surface = compositor.create_surface(&qh);
         let window = xdg.create_window(surface, WindowDecorations::None, &qh);
         window.set_title(title);
-        // 和 RustDesk 远程窗口同一个应用名（= 已安装的桌面文件名）：GNOME 只对认得出是哪个已安装应用的窗口记住
+        // 和通用窗口同一个应用名（= 已安装的桌面文件名）：GNOME 只对认得出是哪个已安装应用的窗口记住
         // 「允许禁用快捷键」（RustDesk 设置页「清除快捷键授权」也按这个名字找），对不上时每开一个专业窗口（切显示器就会开新的）
         // 都要问一次
         window.set_app_id(app_id);

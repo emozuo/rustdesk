@@ -1,11 +1,11 @@
-//! 被控端专业视频服务：每块屏一个，和 RustDesk 的普通画面服务同一个模式（按屏按需注册、订阅驱动启停）。
+//! 被控端专业视频服务：每块屏一个，和 RustDesk 的通用画面服务同一个模式（按屏按需注册、订阅驱动启停）。
 //! 服务线程里：RustDesk 采集器取画面 → NVENC 4:4:4 → 专业画面通道（UDP + SRTP）。
 //!
 //! 同一块屏专业模式不共享：一块屏同一时间只有一个专业会话（[`SESSIONS`] 按屏登记）。
 //! 连接关闭时 RustDesk 在服务器锁内统一退订，服务随之停止；专业通道本身失败（心跳超时）时，
-//! 确认连接还订阅着专业服务（即还开着）才把它切回普通画面。
+//! 确认连接还订阅着专业服务（即还开着）才把它切回通用画面。
 //!
-//! 画面源变了（分辨率、位置、Windows 桌面切换）和 RustDesk 普通画面服务一样处理：用同样的函数发现、
+//! 画面源变了（分辨率、位置、Windows 桌面切换）和 RustDesk 通用画面服务一样处理：用同样的函数发现、
 //! 把同样的显示变化消息发给主控端，等一会儿、切到当前桌面后在本线程里重建（退避和 RustDesk 服务框架的出错重跑
 //! 一样）。专业通道跨重建保留，只按新尺寸重建采集器和编码器（P0 实施记录第 5 步「专业模式跟随画面源变化」）。
 
@@ -47,13 +47,13 @@ const PRESET: u8 = 4;
 const CHANNEL_TIMEOUT: Duration = Duration::from_secs(3);
 /// 一个采集器建好后第一帧最多等多久（DXGI 开始采集后第一次取帧总会给出整屏）
 const FIRST_FRAME_TIMEOUT: Duration = Duration::from_secs(1);
-/// 启动阶段（等普通画面服务放开这块屏）总共重试多久
+/// 启动阶段（等通用画面服务放开这块屏）总共重试多久
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(3);
 /// 诊断：被控端把发出的码流存到这个文件（和主控端同名的开关，见 `client.rs`）
 const DIAG_DUMP: &str = "DDPRO_DIAG_DUMP";
 /// 诊断：每隔这么多秒故意弄坏一帧非关键帧中间的一个字节，验证主控端解码出错后能不能自己恢复
 const DIAG_CORRUPT: &str = "DDPRO_DIAG_CORRUPT_SECS";
-/// 显示变化检查的间隔（和 RustDesk 普通画面服务一样）
+/// 显示变化检查的间隔（和 RustDesk 通用画面服务一样）
 const DISPLAY_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 /// 画面源变了之后重建前等多久：和 RustDesk 服务框架出错重跑的退避一样（30 毫秒起、加倍、最多 1 秒）
 const REBUILD_BACKOFF_MIN: Duration = Duration::from_millis(30);
@@ -314,11 +314,11 @@ fn run(ps: ProService) -> ResultType<()> {
     if sessions.get(&display).is_some_and(|s| Arc::ptr_eq(s, &session)) {
         sessions.remove(&display);
     }
-    // 失败已经切回普通画面并写了日志；不让服务框架按出错重跑
+    // 失败已经切回通用画面并写了日志；不让服务框架按出错重跑
     Ok(())
 }
 
-/// 被控端这一侧出错、已退回普通画面：经 RustDesk 原连接告诉主控端原因，它马上关专业窗口、挂提示
+/// 被控端这一侧出错、已退回通用画面：经 RustDesk 原连接告诉主控端原因，它马上关专业窗口、挂提示
 /// （不必等画面通道 3 秒没画面才发现，原因也不丢）
 /// 带上屏号：主控端切过屏的话，它据此认出这是旧屏的消息、不去动新屏的专业窗口
 fn tell_controller(session: &Session, display: usize, e: &hbb_common::anyhow::Error) {
@@ -355,7 +355,7 @@ impl std::fmt::Display for ChannelError {
 
 impl std::error::Error for ChannelError {}
 
-/// 建了采集器一直没有第一帧：这块屏拿不到画面（常见于没接显示器——普通画面这时会改用 CPU 截屏，专业画面没有这条路）
+/// 建了采集器一直没有第一帧：这块屏拿不到画面（常见于没接显示器——通用画面这时会改用 CPU 截屏，专业画面没有这条路）
 #[derive(Debug)]
 struct NoImage(usize);
 
@@ -382,17 +382,17 @@ impl std::error::Error for MagPrivacy {}
 enum Back {
     /// 连接已经关了
     Closed,
-    /// 切回了这块屏的普通画面
+    /// 切回了这块屏的通用画面
     General,
-    /// 连接已经在看别的屏（主控端切过屏，或在普通窗口里选了看多块屏），不订回这块屏
+    /// 连接已经在看别的屏（主控端切过屏，或在通用窗口里选了看多块屏），不订回这块屏
     OtherDisplay,
     /// 这块屏已经登记了新的专业会话（主控端快速切走又切回）：订阅归它，本会话什么都不动、也不对主控端报停——
     /// 主控端此刻又在这块屏上，报了会把新会话的专业窗口关掉
     Superseded,
 }
 
-/// 专业会话结束且连接还开着（还订阅着专业服务）：退订专业服务；连接没在看别的屏才订回这块屏的普通画面
-/// （主控端切屏后才结束的专业会话，不能把旧屏的普通画面订回来）。连接关闭时 RustDesk 在同一把锁里退订
+/// 专业会话结束且连接还开着（还订阅着专业服务）：退订专业服务；连接没在看别的屏才订回这块屏的通用画面
+/// （主控端切屏后才结束的专业会话，不能把旧屏的通用画面订回来）。连接关闭时 RustDesk 在同一把锁里退订
 /// 所有服务，所以这里在锁内检查不会和关闭交错。
 fn back_to_general(display: usize, session: &Session) -> Back {
     let Some(server) = session.server.upgrade() else {
@@ -427,7 +427,7 @@ fn back_to_general(display: usize, session: &Session) -> Back {
 enum End {
     /// 连接退订了专业服务（关闭或切走）
     Unsubscribed,
-    /// 主控端关了专业窗口，要回普通画面
+    /// 主控端关了专业窗口，要回通用画面
     ControllerClosed,
     /// 画面源变了：通道留着（还没接通的也留着），重建后接着用
     SourceChanged(String),
@@ -436,7 +436,7 @@ enum End {
 fn stream(ps: &ProService, session: &Session, channel: Channel) -> ResultType<(End, Channel)> {
     let display = ps.display;
     // 服务线程不在当前桌面（比如被控端停在锁屏界面时开始专业会话）时采集器建不起来：
-    // 和画面传输中途一样，切到当前桌面后重建。主控端已经不等了的就不再重建，按故障退回普通画面
+    // 和画面传输中途一样，切到当前桌面后重建。主控端已经不等了的就不再重建，按故障退回通用画面
     if desktop_changed() && channel.usable() {
         return Ok((End::SourceChanged("desktop changed".into()), channel));
     }
@@ -519,7 +519,7 @@ fn stream(ps: &ProService, session: &Session, channel: Channel) -> ResultType<(E
             src = match next_texture(&mut cap, wait) {
                 Ok(t) => t,
                 Err(e) => {
-                    // 和 RustDesk 普通画面服务一样：采集出错先立刻刷新显示列表，是画面源变了就重建
+                    // 和 RustDesk 通用画面服务一样：采集出错先立刻刷新显示列表，是画面源变了就重建
                     display_service::check_displays_changed().ok();
                     if display_changed(ps, &geometry) {
                         break End::SourceChanged(format!("display changed ({e})"));
@@ -528,7 +528,7 @@ fn stream(ps: &ProService, session: &Session, channel: Channel) -> ResultType<(E
                         break End::SourceChanged(format!("desktop changed ({e})"));
                     }
                     // 屏幕复制被系统收回（解锁 / 登录过程中、切桌面前后都会发生，2026-10-19 在 209.32 上实撞）：
-                    // 和 RustDesk 普通画面服务一样重建采集器
+                    // 和 RustDesk 通用画面服务一样重建采集器
                     if e.kind() == ErrorKind::ConnectionReset {
                         break End::SourceChanged(format!("capture access lost ({e})"));
                     }
@@ -591,7 +591,7 @@ fn stream(ps: &ProService, session: &Session, channel: Channel) -> ResultType<(E
     Ok((end, Channel::Open(Open { sender, epoch })))
 }
 
-/// Windows 桌面切换了（锁屏、UAC、登录界面）：和 RustDesk 普通画面服务同一个判断
+/// Windows 桌面切换了（锁屏、UAC、登录界面）：和 RustDesk 通用画面服务同一个判断
 fn desktop_changed() -> bool {
     crate::platform::windows::desktop_changed() && !crate::portable_service::client::running()
 }
@@ -609,7 +609,7 @@ fn mag_privacy_mode() -> bool {
         && is_current_privacy_mode_impl(PRIVACY_MODE_IMPL_WIN_MAG)
 }
 
-/// 和 RustDesk 普通画面服务同一个检查；变了就把同一条显示变化消息发给主控端
+/// 和 RustDesk 通用画面服务同一个检查；变了就把同一条显示变化消息发给主控端
 fn display_changed(ps: &ProService, g: &Geometry) -> bool {
     let Some(info) = display_service::check_display_changed(
         g.ndisplay,
@@ -626,9 +626,9 @@ fn display_changed(ps: &ProService, g: &Geometry) -> bool {
 
 /// 建好采集器并取到第一帧（编码器要按第一帧的尺寸创建）。
 ///
-/// 同一个进程里同一块屏同时只能有一路 DXGI 屏幕复制。刚切过来时，这个连接的普通画面服务要到它下一轮
+/// 同一个进程里同一块屏同时只能有一路 DXGI 屏幕复制。刚切过来时，这个连接的通用画面服务要到它下一轮
 /// 循环才放开这块屏，这期间新建的采集器取不到画面（scrap 报 AddrNotAvailable，2026-10-13 在 209.32 上
-/// 实撞）。所以「建采集器 + 取第一帧」整体重试：取不到就丢掉采集器重建，和 RustDesk 普通画面服务遇到
+/// 实撞）。所以「建采集器 + 取第一帧」整体重试：取不到就丢掉采集器重建，和 RustDesk 通用画面服务遇到
 /// 采集错误时重建采集器的做法一致。
 fn start_capture(display: usize) -> ResultType<(Capturer, Geometry, *mut std::ffi::c_void)> {
     let deadline = Instant::now() + STARTUP_TIMEOUT;

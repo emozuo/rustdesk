@@ -23,7 +23,7 @@ message SetDither {
   bool dither = 2;
 }
 
-// 被控端 → 主控端（v5 起）：被控端这一侧的专业画面停了、已退回普通画面。
+// 被控端 → 主控端（v5 起）：被控端这一侧的专业画面停了、已退回通用画面。
 // 主控端据此马上关专业窗口、挂提示写明原因，不必等画面通道 3 秒没画面才发现。
 message Stopped {
   enum Reason {
@@ -81,7 +81,7 @@ message Hello {
 }
 
 // 专业画面通道的连接信息（含密钥）。经 RustDesk 的连接传送：RustDesk 连接加密时（配了服务器公钥、校验通过）
-// 不出现在明文里；RustDesk 退回明文连接时它也是明文——和普通画面、键鼠同等。
+// 不出现在明文里；RustDesk 退回明文连接时它也是明文——和通用画面、键鼠同等。
 message MediaChannel {
   // 被控端的地址：RustDesk 连接在被控端这一侧的地址，主控端连得到它
   string host = 1;
@@ -110,7 +110,7 @@ message Reject {
     NO_COMMON_FORMAT = 3;
     DISPLAY_UNAVAILABLE = 4;
     MALFORMED = 5;
-    // 这块屏已经有别的专业会话，或有别的连接在用普通模式看（同一块屏专业模式不共享）
+    // 这块屏已经有别的专业会话，或有别的连接在用通用模式看（同一块屏专业模式不共享）
     DISPLAY_BUSY = 6;
     // 被控端这一侧准备不了（采集、编码器、开端口失败），原因在 detail 里
     UNAVAILABLE = 7;

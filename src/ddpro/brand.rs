@@ -37,7 +37,7 @@ pub fn apply() {
         .map(|(k, v)| (k.to_owned(), v.to_owned())),
     );
     // 注册服务器不是官方的时候 RustDesk 已把这两项默认关掉，但用户手动打开后仍会去连写死的公网 STUN，所以强制关
-    // 「新连接在标签页中打开」也强制关：专业会话期间要隐藏整个 RustDesk 远程窗口，同一窗口里的别的会话会被一起藏掉，
+    // 「新连接在标签页中打开」也强制关：专业会话期间要隐藏整个通用窗口，同一窗口里的别的会话会被一起藏掉，
     // 所以一个连接一个窗口（P1 第 2 项）
     config::OVERWRITE_LOCAL_SETTINGS.write().unwrap().extend(
         [
