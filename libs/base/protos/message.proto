@@ -1030,6 +1030,8 @@ message Message {
     TerminalAction terminal_action = 31;
     TerminalResponse terminal_response = 32;
     PortForwardChannel port_forward_channel = 33;
+    // Auto Login: the peer types the password only if it is at its logon or lock screen.
+    OSLogin os_login = 34;
     // DreamDesk pro protocol, opaque here; a high number stays clear of upstream's next fields.
     bytes dd_pro = 1000;
   }

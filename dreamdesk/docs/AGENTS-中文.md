@@ -1,6 +1,6 @@
 # RustDesk 开发指南（AGENTS.md 中文译本）
 
-> 译自仓库根目录 `AGENTS.md`（上游提交 `4812a9815`，2026-09-28）。**以英文原文为准**；原文更新后本译本可能过时。
+> 译自仓库根目录 `AGENTS.md`（上游提交 `256dc9bc1`，2026-10-14）。**以英文原文为准**；原文更新后本译本可能过时。
 
 ## 项目结构
 
@@ -71,6 +71,37 @@
 * 优先用 `.await`、`tokio::spawn`、channel。
 * 阻塞工作用 `spawn_blocking` 或专用线程。
 * 异步代码里不要用 `std::thread::sleep()`。
+
+## Flutter Rust Bridge
+
+* **不要**运行 `flutter_rust_bridge_codegen`——它要一个特定的锁定版本，在本地不好配。
+* 在 `src/flutter_ffi.rs` 里加新的 FFI 函数时，手写对应的 Dart 封装，不要重新生成。
+* Web 端桥接（已提交进仓库）：直接改 `flutter/lib/web/bridge.dart`，照那里已有的 `SyncReturn<T>` / `Future<T>` 写法和
+  `dart:js` 胶水代码写。
+* 原生端桥接（`flutter/lib/generated_bridge.dart`、`src/bridge_generated.rs`、`src/bridge_generated.io.rs`）：这几个文件被
+  gitignore、由项目 CI 的 codegen 重新生成。本地开发测试时手改可以，但这些改动进不了提交。
+
+## Web（Flutter Web）架构
+
+本仓库的 Flutter Web **不是**「只靠 Flutter 把 Dart 编成 JS」。运行时是分开的：
+
+* **原生平台（Win/Mac/Linux/Android/iOS）**：Rust 通过 `flutter_rust_bridge` 驱动会话；Dart 只负责画界面。
+* **Web**：Rust **不运行**。另有一套手写的 TypeScript / JavaScript 客户端在 `flutter/web/js/`（被 gitignore，不在本仓库里，
+  在维护者本地的目录里）。连接、编解码、键盘、剪贴板等都归它管——基本就是 Rust 客户端的 JS 移植。Dart 界面通过
+  `flutter/lib/web/bridge.dart` 和它打交道：用 `dart:js` 调 JS 那边的函数，并在 `window.*` 上注册 Dart 这边的回调。
+
+加任何会话运行时的功能（键盘、剪贴板、音频……）时的影响：
+
+* `src/` 里的 Rust 实现**只给原生平台用**。不要试图把它编成 wasm。
+* 对应的 Web 端逻辑要用 TS/JS 写在 `flutter/web/js/src/` 下。它是 Rust 逻辑的翻译，通常更简单——Web 只有一个窗口，
+  所以 Rust 里按会话号分发的那些管线在 Web 上收成一个全局变量。
+* `flutter/lib/web/bridge.dart` 是 Dart 唯一能看到 JS 的地方。其它 Dart 代码保持与平台无关、都走 `bind`。不要在共享的
+  Dart 文件里到处加 `if (isWeb)` 运行时分支去调 Web 专用逻辑——平台差异放进桥接层。
+* JS → Dart 的事件（比如 Web 端的匹配器触发了）约定是：Dart 在启动时（通常在 `mainInit`）设一次
+  `js.context['onFooBar'] = (...) {...}`；JS 那边调 `window.onFooBar(...)`。参考 `onLoadAbFinished`、`onLoadGroupFinished`。
+* 维护者不太方便运行 `flutter_rust_bridge_codegen`，所以 `src/flutter_ffi.rs` 里加了新的 FFI 函数时：
+  1. 手工在 `flutter/lib/web/bridge.dart` 里加上 Web 端的对应函数；
+  2. 注意在 Web 上它可能需要是空操作，或是一次 JS 桥接调用，而不是真的调 Rust。
 
 ## 改动规范
 
@@ -178,6 +209,16 @@
 * 如果测试 diff 超过修复本身的两倍，砍到只剩钉住被报告行为的那几个测试。需要很长准备才能到达的状态，
   通常罕见到不值得修。
 * 描述行为所需的测试数量不断增长时，说明实现太复杂了：去简化实现，而不是继续加测试。
+* Dart 测试只放在 `flutter/test/*_test.dart`，不放别处：CI 对这个目录跑 `flutter test`，目录外的一概不跑。它在 VM 上跑，
+  所以 `@TestOn('browser')` 的测试套件在任何 CI 任务里都不会跑。
+* Rust 单元测试放在被测代码旁边的 `#[cfg(test)]` 模块里。CI 在 x86_64 Linux 上用默认 feature 跑
+  `cargo test --workspace`；在 macOS 和 Windows 上用发布版的 feature 组合对根包跑 `cargo test --lib`，外加 `-p clipboard`；
+  在 Linux 上按名字跑 `drm` 测试模块，外加带 `unix-file-copy-paste` 的 `clipboard` 包。在 macOS 和 Windows 上，别的 workspace
+  crate 里按平台门控的测试，只有那个平台的任务用 `-p` 点名了这个 crate 才会跑。只有被测代码本身是门控的，才给测试模块加
+  feature 或 `target_os` 门控；只被某条门控路径调用的纯辅助函数，用 `#[cfg(any(feature = "...", test))]`，让它的测试在所有平台都跑。
+* 挂在某个 CI 构建都不开启的 feature 后面的测试，要在 `.github/workflows/flutter-build.yml` 里加一行点名它的 `cargo test`。
+  在 Linux 的 drm 任务里，用 `run_drm_tests` 包起来，这样过滤条件一个都没匹配上时会失败，而不是悄悄通过。
+* Web 核心的测试是 `flutter/web/js/src/*.test.ts`，在那个仓库自己的 CI 里由 jest 跑。
 
 ## 评审 PR
 

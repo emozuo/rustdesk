@@ -45,7 +45,9 @@ cargo build --locked --features flutter
 cd flutter && flutter run     # 或者 ./run.sh，它把上面这些都做了
 ```
 
-每次改动 `src/flutter_ffi.rs` 后都要重跑 codegen。
+每次改动 `src/flutter_ffi.rs` 后都要重跑 codegen（包括合并上游带进来的改动）。上游 `AGENTS.md` 写的「不要跑 codegen、
+手写 Dart 封装」是给上游维护者的环境说的（那边生成的桥接文件由 CI 产出）；本分支本地打包要用生成的桥接文件，照旧用上面
+锁定的 1.80.1 跑。
 
 `build.py` 是打包驱动（deb/rpm/dmg/pkg/portable），不是开发循环。它在唯一一处把命令行 flag
 映射成 cargo features；`python3 build.py --flutter --hwcodec --print-features` 只打印它会用的

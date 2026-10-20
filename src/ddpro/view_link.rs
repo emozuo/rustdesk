@@ -397,7 +397,10 @@ pub fn start<T: InvokeUiSession>(
                         }
                         mode = map;
                     }
+                    // 会话号给键盘快捷键用（快捷键作用到哪个标签页）：专业窗口是本会话进程的子窗口，取本进程当前的标签页，
+                    // 和 RustDesk 自己不经 Flutter 的全局键盘那条路（`keyboard::client::process_event`）一样
                     session.handle_flutter_raw_key_event(
+                        crate::flutter::get_cur_session_id(),
                         &mode,
                         "",
                         0,
