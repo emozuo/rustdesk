@@ -48,6 +48,8 @@ const FIRST_FRAME_TIMEOUT: Duration = Duration::from_secs(1);
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(3);
 /// 诊断：被控端把发出的码流存到这个文件（和主控端同名的开关，见 `client.rs`）
 const DIAG_DUMP: &str = "DDPRO_DIAG_DUMP";
+/// 诊断：每隔这么多秒故意弄坏一帧非关键帧中间的一个字节，验证主控端解码出错后能不能自己恢复
+const DIAG_CORRUPT: &str = "DDPRO_DIAG_CORRUPT_SECS";
 /// 显示变化检查的间隔（和 RustDesk 普通画面服务一样）
 const DISPLAY_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 /// 画面源变了之后重建前等多久：和 RustDesk 服务框架出错重跑的退避一样（30 毫秒起、加倍、最多 1 秒）
@@ -406,6 +408,11 @@ fn stream(ps: &ProService, channel: Channel) -> ResultType<(End, Channel)> {
     let mut dump = std::env::var(DIAG_DUMP)
         .ok()
         .and_then(|p| std::fs::File::create(p).ok());
+    let corrupt_every = std::env::var(DIAG_CORRUPT)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .map(Duration::from_secs);
+    let mut last_corrupt = Instant::now();
     let mut src = Some(first_frame);
     let (w, h) = texture_size(src)?;
     let mut enc = Encoder::new(
@@ -491,9 +498,18 @@ fn stream(ps: &ProService, channel: Channel) -> ResultType<(End, Channel)> {
             encoded: Instant::now(),
         });
         let ts = (ts_base + i * 90_000 / FPS as u64) as u32;
-        sender.send_frame(&f.data, ts, stamp).map_err(|e| anyhow!("{e}"))?;
+        let mut data = f.data;
+        if let Some(every) = corrupt_every {
+            if !f.is_idr && data.len() > 64 && last_corrupt.elapsed() >= every {
+                last_corrupt = Instant::now();
+                let k = data.len() / 2;
+                data[k] ^= 0xff;
+                log::warn!("ddpro: diagnostic {DIAG_CORRUPT}: corrupted byte {k} of a {}-byte frame", data.len());
+            }
+        }
+        sender.send_frame(&data, ts, stamp).map_err(|e| anyhow!("{e}"))?;
         if let Some(d) = dump.as_mut() {
-            if std::io::Write::write_all(d, &f.data).is_err() {
+            if std::io::Write::write_all(d, &data).is_err() {
                 dump = None;
             }
         }

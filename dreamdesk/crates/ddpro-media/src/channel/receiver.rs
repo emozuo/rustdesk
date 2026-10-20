@@ -66,6 +66,8 @@ pub struct RecvStats {
     pub nacked: u64,
     /// 缺了之后又补齐的包（补发到了，或原包晚到）
     pub recovered: u64,
+    /// 解码出错后要求重新同步（等关键帧）的次数
+    pub resyncs: u64,
     /// 丢包后到关键帧之前收到、因为解不了而丢掉的帧
     pub discarded_frames: u64,
     /// 解密 / 认证失败的包（不是本会话的或被篡改的）
@@ -200,6 +202,14 @@ impl Receiver {
     /// 当前的对时结果（最近 2 秒里往返最快的那次）；还没有授时样本时 None。
     pub fn clock(&self) -> Option<ClockEstimate> {
         self.clock.estimate(self.now_us())
+    }
+
+    /// 解码那边出了错（不是丢包，比如码流坏了或驱动报错）：参考帧已经不可信，照救不回来的丢包处理——
+    /// 丢掉正在拼的帧、之后的帧在关键帧到之前都不交出去，并在通道上请求关键帧（已经在等关键帧时按原来的
+    /// 间隔再要，不会每帧都要一次）。
+    pub fn resync(&mut self) {
+        self.stats.resyncs += 1;
+        self.loss(0);
     }
 
     fn send_control(&mut self, kind: u8, body: &[u8]) -> Result<(), Error> {

@@ -149,16 +149,18 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
     // 这期间到的画面在队列里等着（第一帧总是关键帧）。收包线程每收到一帧往 `wake` 写一个字节叫醒主线程
     let quit = Arc::new(AtomicBool::new(false));
     let bye = Arc::new(AtomicBool::new(false));
+    // 主线程解码出错时置上，收包线程看到就让画面通道重新同步（等关键帧、请求关键帧）
+    let resync = Arc::new(AtomicBool::new(false));
     let channel = Arc::new(Mutex::new(ChannelEnd::default()));
     let (frame_tx, frame_rx) = mpsc::channel();
     let (wake_rx, wake_tx) = UnixStream::pair()?;
     wake_rx.set_nonblocking(true)?;
     wake_tx.set_nonblocking(true)?;
     let receiver = {
-        let (quit, bye, channel) = (quit.clone(), bye.clone(), channel.clone());
+        let (quit, bye, resync, channel) = (quit.clone(), bye.clone(), resync.clone(), channel.clone());
         std::thread::Builder::new()
             .name("ddpro-view-recv".into())
-            .spawn(move || receive(peer, keys, frame_tx, wake_tx, quit, bye, channel))?
+            .spawn(move || receive(peer, keys, frame_tx, wake_tx, quit, bye, resync, channel))?
     };
     let (mut win, dev, mut dec, mut conv) = match open_display(&start) {
         Ok(v) => v,
@@ -292,12 +294,15 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
                         match dec.decode(&f.data) {
                             Ok(Some(frame)) => latest = Some((frame, f.times)),
                             Ok(None) => {}
-                            // 丢包后参考帧缺失等：收包线程已经在请求关键帧，这里只记下，等关键帧
-                            Err(e) => throttled_log!(
-                                PEER_LOG_INTERVAL,
-                                warn,
-                                "ddpro: pro view decode error: {e}"
-                            ),
+                            // 码流坏了或驱动报错：参考帧不可信了。编码端是无限 GOP，不要关键帧就一直坏下去
+                            Err(e) => {
+                                throttled_log!(
+                                    PEER_LOG_INTERVAL,
+                                    warn,
+                                    "ddpro: pro view decode error, asking for a keyframe: {e}"
+                                );
+                                resync.store(true, Ordering::Release);
+                            }
                         }
                     }
                     Err(TryRecvError::Empty) => break,
@@ -317,7 +322,17 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
                     }
                     format_checked = Some(size);
                 }
-                dec.wait(&frame).map_err(|e| anyhow!("{e}"))?;
+                // 显卡驱动的单帧解码错误常常在这一步才报出来（iHD：等表面时报解码错误）：和上面一样丢这一帧、
+                // 要关键帧，不当成专业窗口的致命错误
+                if let Err(e) = dec.wait(&frame) {
+                    throttled_log!(
+                        PEER_LOG_INTERVAL,
+                        warn,
+                        "ddpro: pro view decode error while waiting for the GPU, asking for a keyframe: {e}"
+                    );
+                    resync.store(true, Ordering::Release);
+                    continue;
+                }
                 let decoded = now_ns();
                 let Some(slot) = win.free_slot() else {
                     throttled_log!(
@@ -409,6 +424,7 @@ fn receive(
     wake: UnixStream,
     quit: Arc<AtomicBool>,
     bye: Arc<AtomicBool>,
+    resync: Arc<AtomicBool>,
     channel: Arc<Mutex<ChannelEnd>>,
 ) {
     let mut r = match Receiver::connect(peer, keys, CONNECT_TIMEOUT, 0) {
@@ -424,6 +440,9 @@ fn receive(
     channel.lock().unwrap().opened = true;
     let mut last_stats = Instant::now();
     let end = loop {
+        if resync.swap(false, Ordering::AcqRel) {
+            r.resync();
+        }
         if quit.load(Ordering::Acquire) {
             if bye.load(Ordering::Acquire) {
                 if let Err(e) = r.bye() {
