@@ -174,6 +174,8 @@ message ViewAction {
     bool lock_screen = 3;
     // 网络状态块开 / 关：会话进程记下来，换屏开新的专业窗口时照旧
     bool show_status = 4;
+    // 切到通用模式（只对这次会话）：会话进程关掉专业窗口、显示通用窗口，被控端退回通用画面
+    bool general_mode = 5;
   }
 }
 

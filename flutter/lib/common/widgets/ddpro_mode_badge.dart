@@ -2,9 +2,10 @@
 // 以及专业会话期间通用窗口的隐藏 / 显示 / 关闭（P1 第 2 项「专业会话只有一个窗口」）。
 //
 // Rust 侧 `src/ddpro/view_link.rs` 推两种事件：
-// - `ddpro_mode`：`level` 为 `fault`（红，故障或条件不满足），空串表示撤掉；`text`（结论）和 `tip`（意味着什么、怎么处理）
-//   是多语言表的键，`detail` 是原始错误信息。鼠标停上去先看说明，原始错误跟在后面（和日志一字不差，排查时拿它去搜）。
-//   标签上带「重新进入专业模式」按钮，值不值得再试由 Rust 侧判断（不值得时点了不起作用）。
+// - `ddpro_mode`：`level` 为 `fault`（红，故障或条件不满足）、`general`（灰，用户在悬浮球菜单里切到了通用模式），
+//   空串表示撤掉；`text`（结论）和 `tip`（意味着什么、怎么处理）是多语言表的键，`detail` 是原始错误信息。
+//   鼠标停上去先看说明，原始错误跟在后面（和日志一字不差，排查时拿它去搜）。
+//   标签上带「重新进入专业模式」（故障）/「进入专业模式」（通用模式）按钮，值不值得再试由 Rust 侧判断（不值得时点了不起作用）。
 // - `ddpro_window`：`action` 为 `hide`（专业画面出来了，屏幕上只留它）、`show`（专业模式出故障或连接断了，回到这个窗口）、
 //   `close`（用户关了专业画面，结束这次远程）。
 // 不带专业模式的构建收不到这两个事件，标签不出现、窗口照常。
@@ -18,10 +19,11 @@ import '../../models/platform_model.dart';
 
 class _Notice {
   final bool fault;
+  final bool general;
   final String text;
   final String tip;
   final String detail;
-  const _Notice(this.fault, this.text, this.tip, this.detail);
+  const _Notice(this.fault, this.general, this.text, this.tip, this.detail);
 }
 
 final _notices = <SessionID, Rx<_Notice?>>{};
@@ -33,7 +35,7 @@ void onDdproModeEvent(SessionID sessionId, Map<String, dynamic> evt) {
   final level = evt['level'] as String? ?? '';
   _notice(sessionId).value = level.isEmpty
       ? null
-      : _Notice(level == 'fault', evt['text'] as String? ?? '',
+      : _Notice(level == 'fault', level == 'general', evt['text'] as String? ?? '',
           evt['tip'] as String? ?? '', evt['detail'] as String? ?? '');
 }
 
@@ -86,11 +88,13 @@ class DdproModeBadge extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               hint.isEmpty ? text : Tooltip(message: hint, child: text),
-              if (n.fault) ...[
+              if (n.fault || n.general) ...[
                 const SizedBox(width: 8),
                 InkWell(
                   onTap: () => bind.sessionDdproRetry(sessionId: sessionId),
-                  child: Text(translate('Re-enter pro mode'),
+                  child: Text(
+                      translate(
+                          n.general ? 'Enter pro mode' : 'Re-enter pro mode'),
                       style: const TextStyle(
                           color: Colors.white,
                           fontSize: 13,

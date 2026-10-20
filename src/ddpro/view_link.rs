@@ -74,12 +74,15 @@ enum Notice {
     PeerUnavailable,
     Busy,
     Version,
+    /// 不是故障：用户在悬浮球菜单里切到了通用模式（只对这次会话）
+    General,
 }
 
 impl Notice {
     /// 标签上的结论。英文本身是多语言表的键（`src/lang`），界面按它翻译
     fn text(self) -> &'static str {
         match self {
+            Notice::General => "General mode",
             Notice::PeerFailed => "Not in pro mode: the controlled side failed to capture or encode",
             Notice::NoImage => "Not in pro mode: the controlled side's screen shows no picture (no monitor connected?)",
             Notice::PrivacyMode => "Not in pro mode: privacy mode is on at the controlled side",
@@ -97,6 +100,7 @@ impl Notice {
     /// 配的说明：这意味着什么、该怎么处理（鼠标停在标签上显示，原始错误跟在后面）。同样是多语言表的键
     fn tip(self) -> &'static str {
         match self {
+            Notice::General => "You switched to general mode for this session: the remote screen is shown here with the usual RustDesk video. Click Enter pro mode to switch back.",
             Notice::PeerFailed => "The controlled side could not capture the screen or encode the pro video. Reconnect to try again; if it keeps happening, check the controlled side's graphics driver.",
             Notice::NoImage => "The controlled side has no monitor connected, or its monitor is asleep, so the graphics card produces no picture. Connect a monitor (or an HDMI dummy plug), or enable a virtual display on the controlled side, then reconnect.",
             Notice::PrivacyMode => "On this version of Windows, the controlled side's privacy mode hides the screen from pro capture. Turn privacy mode off, then reconnect.",
@@ -138,7 +142,7 @@ fn push_window<T: InvokeUiSession>(session: &Session<T>, action: &str) {
     }
 }
 
-/// 推给通用窗口：`level` 为 `fault`（红），空串表示撤掉提示
+/// 推给通用窗口：`level` 为 `fault`（红）、`general`（灰，用户自己切到通用模式），空串表示撤掉提示
 fn push_mode<T: InvokeUiSession>(session: &Session<T>, level: &str, notice: Option<Notice>, detail: &str) {
     let (text, tip) = notice.map_or(("", ""), |n| (n.text(), n.tip()));
     let conn_type = session.lc.read().unwrap().conn_type;
@@ -234,7 +238,21 @@ fn raise<T: InvokeUiSession>(session: &Session<T>, notice: Notice, detail: &str,
     push_window(session, "show");
 }
 
-/// 用户点提示上的「重新进入专业模式」：挂着的是值得再试的故障时撤掉提示，返回当前屏号，由调用方重新请求。
+/// 用户在悬浮球菜单里切到通用模式：丢掉通道（写线程随之关管道，专业窗口读到断开就告诉被控端不要了、自己退出，
+/// 被控端退回通用画面——和切屏关旧窗口同一条路），挂灰色标签、显示通用窗口。
+fn choose_general<T: InvokeUiSession>(session: &Session<T>) {
+    {
+        let mut links = links().lock().unwrap();
+        let link = links.entry(key(session)).or_default();
+        link.down = None;
+        link.notice = Some(Notice::General);
+    }
+    push_mode(session, "general", Some(Notice::General), "");
+    push_window(session, "show");
+}
+
+/// 用户点提示上的「重新进入专业模式」（故障）或「进入专业模式」（通用模式）：挂着的是值得再试的故障或通用模式时撤掉提示，
+/// 返回当前屏号，由调用方重新请求。
 pub fn retry<T: InvokeUiSession>(session: &Session<T>) -> Option<i32> {
     let index = {
         let mut links = links().lock().unwrap();
@@ -308,7 +326,7 @@ pub fn remember_display<T: InvokeUiSession>(pi: &PeerInfo, session: &Session<T>)
 }
 
 /// 用户在 RustDesk 里切屏：换到别的屏、而专业窗口开着（或上次因和屏有关的故障没进专业模式）时关掉专业窗口，
-/// 返回新屏的编号，由调用方对新屏重新发起专业请求。
+/// 返回新屏的编号，由调用方对新屏重新发起专业请求。用户切到了通用模式的，留在通用模式。
 pub fn on_switch_display<T: InvokeUiSession>(session: &Session<T>, display: i32) -> Option<i32> {
     let mut links = links().lock().unwrap();
     let link = links.entry(key(session)).or_default();
@@ -318,7 +336,7 @@ pub fn on_switch_display<T: InvokeUiSession>(session: &Session<T>, display: i32)
     link.index = display;
     // 丢掉通道，写线程随之关管道，专业窗口读到断开就告诉被控端不要了、自己退出
     let had_view = link.down.take().is_some();
-    (had_view || link.notice.is_some_and(Notice::retryable)).then_some(display)
+    (had_view || link.notice.is_some_and(|n| n.retryable() && n != Notice::General)).then_some(display)
 }
 
 /// 本机能不能硬解 4:4:4 并在显卡上转 RGB（只探测一次）。
@@ -537,6 +555,10 @@ pub fn start<T: InvokeUiSession>(
                     Some(view_action::Union::ShowStatus(on)) => {
                         log::info!("ddpro: floating menu: network status {}", if on { "shown" } else { "hidden" });
                         links().lock().unwrap().entry(k).or_default().show_status = on;
+                    }
+                    Some(view_action::Union::GeneralMode(_)) => {
+                        log::info!("ddpro: floating menu: switch to general mode");
+                        choose_general(&session);
                     }
                     _ => {}
                 },

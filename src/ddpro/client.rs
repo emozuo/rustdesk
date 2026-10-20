@@ -78,7 +78,8 @@ fn request_pro<T: InvokeUiSession>(session: &Session<T>, display: u32) {
     });
 }
 
-/// 用户点「非专业模式」提示上的「重新进入专业模式」：故障值得再试时，对当前屏重新发起专业请求。
+/// 用户点「非专业模式」提示上的「重新进入专业模式」，或通用模式标签上的「进入专业模式」：故障值得再试、
+/// 或用户切过通用模式时，对当前屏重新发起专业请求。
 pub fn retry<T: InvokeUiSession>(_session: &Session<T>) {
     #[cfg(all(feature = "flutter", target_os = "linux"))]
     if let Some(display) = super::view_link::retry(_session) {

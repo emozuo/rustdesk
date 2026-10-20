@@ -337,6 +337,7 @@ fn view_action(a: Action) -> Option<ViewAction> {
         Action::CtrlAltDel => view_action::Union::CtrlAltDel(true),
         Action::LockScreen => view_action::Union::LockScreen(true),
         Action::ShowStatus(on) => view_action::Union::ShowStatus(on),
+        Action::GeneralMode => view_action::Union::GeneralMode(true),
         Action::Disconnect => return None,
     };
     Some(ViewAction {

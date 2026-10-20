@@ -79,6 +79,7 @@ pub enum Action {
     SwitchDisplay(i32),
     /// 网络状态块开 / 关之后的状态（会话进程记下来，换屏开新窗口时照旧）
     ShowStatus(bool),
+    GeneralMode,
     CtrlAltDel,
     LockScreen,
     Disconnect,
@@ -95,21 +96,23 @@ enum Edge {
 enum Item {
     SwitchDisplay,
     Status,
+    General,
     CtrlAltDel,
     Lock,
     Disconnect,
 }
 
-const ITEMS: [Item; 5] = [Item::SwitchDisplay, Item::Status, Item::CtrlAltDel, Item::Lock, Item::Disconnect];
+const ITEMS: [Item; 6] = [Item::SwitchDisplay, Item::Status, Item::General, Item::CtrlAltDel, Item::Lock, Item::Disconnect];
 
 impl Item {
-    /// 菜单文字用 RustDesk 自己菜单里的同一批词条，叫法一致、不新增翻译
+    /// 菜单文字尽量用 RustDesk 自己菜单里的同一批词条，叫法一致、不新增翻译（切换模式是我们独有的）
     fn label(self) -> String {
         crate::lang::translate(
             match self {
                 Item::SwitchDisplay => "Switch display",
                 // 状态块里就是 RustDesk 质量面板在专业模式下显示的那份实测值，叫法跟它一致
                 Item::Status => "Show quality monitor",
+                Item::General => "Switch to general mode",
                 Item::CtrlAltDel => "Insert Ctrl + Alt + Del",
                 Item::Lock => "Insert Lock",
                 Item::Disconnect => "Disconnect",
@@ -306,6 +309,7 @@ impl Ball {
                             self.status_dirty = true;
                             Action::ShowStatus(self.show_status)
                         }
+                        Item::General => Action::GeneralMode,
                         Item::CtrlAltDel => Action::CtrlAltDel,
                         Item::Lock => Action::LockScreen,
                         _ => Action::Disconnect,
@@ -740,6 +744,21 @@ fn draw_icon(pm: &mut Pixmap, item: Item, cx: f32, cy: f32, color: [u8; 4]) {
                 let bh = 3.0 + i as f32 * 3.0;
                 fill(pm, Rect::from_xywh(cx - 6.0 + i as f32 * 4.5, cy + 5.0 - bh, 2.6, bh).map(PathBuilder::from_rect), color);
             }
+        }
+        // 上下两条反向箭头：在两种模式之间切换
+        Item::General => {
+            let mut pb = PathBuilder::new();
+            pb.move_to(cx - 6.5, cy - 3.0);
+            pb.line_to(cx + 6.5, cy - 3.0);
+            pb.move_to(cx + 4.0, cy - 5.5);
+            pb.line_to(cx + 6.5, cy - 3.0);
+            pb.line_to(cx + 4.0, cy - 0.5);
+            pb.move_to(cx + 6.5, cy + 3.5);
+            pb.line_to(cx - 6.5, cy + 3.5);
+            pb.move_to(cx - 4.0, cy + 1.0);
+            pb.line_to(cx - 6.5, cy + 3.5);
+            pb.line_to(cx - 4.0, cy + 6.0);
+            stroke(pm, pb.finish(), color, lw);
         }
         // 向右出门的箭头（旧实现「退出远控」的图标）
         Item::Disconnect => {

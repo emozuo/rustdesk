@@ -842,5 +842,9 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("The display applies a color matrix or curve to the output.", "显示输出上加了颜色矩阵或曲线。"),
         ("Re-enter pro mode", "重新进入专业模式"),
         ("The pro view is scaled, so remote pixels are not shown one to one. Set the display scale to 100% and match the remote screen's resolution.", "专业画面被缩放了，远程的像素没有一一对应显示。把显示缩放设为 100%，分辨率和远程屏一致。"),
+        ("Switch to general mode", "切换到通用模式"),
+        ("General mode", "通用模式"),
+        ("You switched to general mode for this session: the remote screen is shown here with the usual RustDesk video. Click Enter pro mode to switch back.", "这次会话已切到通用模式：远程画面在这个窗口里按 RustDesk 原有方式显示。点「进入专业模式」切回去。"),
+        ("Enter pro mode", "进入专业模式"),
     ].iter().cloned().collect();
 }
