@@ -174,9 +174,12 @@ struct State {
     /// （比如盯着远程渲染），GNOME 默认几分钟就会黑屏（2026-10-13 瘦客户机 10 分钟测试第 4 分钟实撞）
     idle_inhibitor: Option<ZwpIdleInhibitorV1>,
     /// 申请把系统快捷键让给本窗口（RustDesk 自己的远程窗口在 Linux 上用的是同一个协议）。
-    /// 有了键盘才能申请；合成器不支持时照常运行，系统快捷键留在本机
+    /// 和 RustDesk 远程窗口一样（flutter/linux/wayland_shortcuts_inhibit.cc）：拿到键盘焦点时申请、失去时撤掉，
+    /// 这样用户按 Win+Esc 收回快捷键后，切走再切回来又让给远程（只申请一次的话 GNOME 不再自动恢复，2026-10-20 实测）。
+    /// 合成器不支持时照常运行，系统快捷键留在本机
     shortcuts_manager: Option<ZwpKeyboardShortcutsInhibitManagerV1>,
     shortcuts_inhibitor: Option<ZwpKeyboardShortcutsInhibitorV1>,
+    keyboard_seat: Option<wl_seat::WlSeat>,
     size: Option<(u32, u32)>,
     closed: bool,
     slots: Vec<Slot>,
@@ -300,6 +303,7 @@ impl Window {
                 idle_inhibitor,
                 shortcuts_manager,
                 shortcuts_inhibitor: None,
+                keyboard_seat: None,
                 size: None,
                 closed: false,
                 slots: Vec::new(),
@@ -548,6 +552,13 @@ impl Window {
 }
 
 impl State {
+    /// 失去键盘焦点：撤掉快捷键申请，系统快捷键回到本机（下次拿到焦点再申请）
+    fn uninhibit_shortcuts(&mut self) {
+        if let Some(i) = self.shortcuts_inhibitor.take() {
+            i.destroy();
+        }
+    }
+
     /// 按当前光标设置指针；鼠标不在窗口里（没有进入序号）时等下次进入再设。
     fn apply_cursor(&mut self) -> Result<()> {
         let (Some(pointer), Some(serial)) = (self.pointer.clone(), self.pointer_serial) else {
@@ -829,9 +840,7 @@ impl SeatHandler for State {
             // 键盘不经 sctk 的 xkb 处理，直接收原始键码（RustDesk 的映射模式只要物理键码）
             Capability::Keyboard if self.keyboard.is_none() => {
                 self.keyboard = Some(seat.get_keyboard(qh, ()));
-                if let (Some(m), None) = (&self.shortcuts_manager, &self.shortcuts_inhibitor) {
-                    self.shortcuts_inhibitor = Some(m.inhibit_shortcuts(self.window.wl_surface(), &seat, qh, ()));
-                }
+                self.keyboard_seat = Some(seat);
             }
             _ => {}
         }
@@ -849,6 +858,8 @@ impl SeatHandler for State {
                 if let Some(k) = self.keyboard.take() {
                     k.release();
                 }
+                self.keyboard_seat = None;
+                self.uninhibit_shortcuts();
                 self.events.push(Event::KeyboardLeave);
             }
             _ => {}
@@ -910,9 +921,16 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for State {
         event: wl_keyboard::Event,
         _: &(),
         _: &Connection,
-        _: &QueueHandle<Self>,
+        qh: &QueueHandle<Self>,
     ) {
         match event {
+            wl_keyboard::Event::Enter { .. } => {
+                if let (Some(m), Some(seat), None) =
+                    (&state.shortcuts_manager, &state.keyboard_seat, &state.shortcuts_inhibitor)
+                {
+                    state.shortcuts_inhibitor = Some(m.inhibit_shortcuts(state.window.wl_surface(), seat, qh, ()));
+                }
+            }
             wl_keyboard::Event::Key { key, state: WEnum::Value(s), .. } => {
                 let down = match s {
                     wl_keyboard::KeyState::Pressed => true,
@@ -926,7 +944,10 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for State {
                 depressed: mods_depressed,
                 locked: mods_locked,
             }),
-            wl_keyboard::Event::Leave { .. } => state.events.push(Event::KeyboardLeave),
+            wl_keyboard::Event::Leave { .. } => {
+                state.uninhibit_shortcuts();
+                state.events.push(Event::KeyboardLeave);
+            }
             // 键盘布局（xkb keymap）用不上：fd 随事件丢弃即关闭
             _ => {}
         }
