@@ -124,8 +124,13 @@ impl Notice {
 }
 
 /// 专业会话期间屏幕上只有一种窗口（P1 第 2 项）：专业画面出来后隐藏 RustDesk 远程窗口（它所在的进程照常承载会话），
-/// 专业模式出故障时显示回来，用户关掉专业画面就结束这次远程。`action` 为 `hide` / `show` / `close`
+/// 专业模式出故障时显示回来，用户关掉专业画面就结束这次远程。`action` 为 `hide` / `show` / `close`。
+/// 诊断开关 `DDPRO_DIAG_KEEP_WINDOW=1` 不隐藏，两个窗口并排对比用
 fn push_window<T: InvokeUiSession>(session: &Session<T>, action: &str) {
+    if action == "hide" && std::env::var("DDPRO_DIAG_KEEP_WINDOW").is_ok_and(|v| v == "1") {
+        log::info!("ddpro: RustDesk remote window kept (DDPRO_DIAG_KEEP_WINDOW)");
+        return;
+    }
     log::info!("ddpro: RustDesk remote window: {action}");
     let conn_type = session.lc.read().unwrap().conn_type;
     if let Some(s) = crate::flutter::sessions::get_session_by_peer_id(session.get_id(), conn_type) {
