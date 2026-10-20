@@ -1,7 +1,7 @@
 // DreamDesk：专业窗口开着时，RustDesk 质量面板末尾多几行——专业画面的延迟、收到的码率、位深、丢包与补发、
-// 显示链路检查、精确模式、连接是否加密；工具栏显示菜单里多一个「精确模式」开关。
+// 显示链路检查、连接是否加密。
 //
-// Rust 侧 `src/ddpro/view_link.rs` 每秒推 `ddpro_quality` 事件；不带数据的事件表示专业窗口关了，撤掉这几行和开关。
+// Rust 侧 `src/ddpro/view_link.rs` 每秒推 `ddpro_quality` 事件；不带数据的事件表示专业窗口关了，撤掉这几行。
 // 帧率、编码、色度 RustDesk 面板本来就有，Rust 侧直接把它们换成专业画面的实测值，不在这里。
 // 面板原有的标签不翻译，这里的也保持英文；显示链路问题的说明（鼠标停在那一行上显示）是多语言表的键，要翻译。
 // 不带专业模式的构建收不到这个事件，这几行不出现。
@@ -12,8 +12,6 @@ import 'package:get/get.dart';
 
 import '../../common.dart';
 import '../../models/model.dart';
-import '../../models/platform_model.dart';
-import 'toolbar.dart';
 
 final _stats = <SessionID, Rx<Map<String, dynamic>?>>{};
 
@@ -45,7 +43,6 @@ Widget ddproQualityRows(FFI? ffi, QualityRow row) {
         row('Bit depth', '${v['bit_depth'] ?? '-'}bit'),
         row('Lost / recovered', '${v['lost'] ?? '-'} / ${v['recovered'] ?? '-'}'),
         _displayRow(v, row),
-        row('Precise mode', v['precise']?.toString() == 'true' ? 'On' : 'Off'),
         row(
             'Encryption',
             secure == null
@@ -57,21 +54,6 @@ Widget ddproQualityRows(FFI? ffi, QualityRow row) {
       ],
     );
   });
-}
-
-/// 工具栏显示菜单里的「精确模式」开关：专业窗口开着时才有。开关状态以 Rust 侧每秒推来的为准
-List<TToggleMenu> ddproToolbarToggles(FFI ffi) {
-  final v = _of(ffi.sessionId).value;
-  if (v == null) return [];
-  return [
-    TToggleMenu(
-        value: v['precise']?.toString() == 'true',
-        onChanged: (value) async {
-          if (value == null) return;
-          await bind.sessionDdproSetPrecise(sessionId: ffi.sessionId, on: value);
-        },
-        child: Text(translate('Precise mode (no dithering)'))),
-  ];
 }
 
 /// 显示链路问题的代号（Rust 侧 `src/ddpro/view.rs`）→ 面板里的短名、处理办法（多语言表的键，鼠标停上去显示）

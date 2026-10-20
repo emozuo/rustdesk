@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/common/shared_state.dart';
-import 'package:flutter_hbb/common/widgets/ddpro_quality.dart';
 import 'package:flutter_hbb/common/widgets/dialog.dart';
 import 'package:flutter_hbb/common/widgets/login.dart';
 import 'package:flutter_hbb/consts.dart';
@@ -1216,7 +1215,6 @@ Future<List<TToggleMenu>> toolbarDisplayToggle(
         },
         child: Text(translate('View Mode'))));
   }
-  v.addAll(ddproToolbarToggles(ffi));
   return _registerToggleMenuShortcuts(ffi, v,
       ownedActionIds: _kToolbarDisplayToggleActionIds);
 }

@@ -78,13 +78,13 @@ fn request_pro<T: InvokeUiSession>(session: &Session<T>, display: u32) {
     });
 }
 
-/// 用户在工具栏开 / 关精确模式（关抖动，查色带、看原始像素用）：记下来，专业窗口开着时马上告诉被控端；
-/// 之后换屏开新的专业窗口也照这个设置（见 `view_link::start`）。
-pub fn set_precise<T: InvokeUiSession>(_session: &Session<T>, _on: bool) {
+/// 开 / 关专业画面的抖动（默认不抖动；界面暂时没有入口，留给第 4 项高位深源压 8bit 时用）：记下来，专业窗口开着时
+/// 马上告诉被控端；之后换屏开新的专业窗口也照这个设置（见 `view_link::start`）。
+pub fn set_dither<T: InvokeUiSession>(_session: &Session<T>, _on: bool) {
     #[cfg(all(feature = "flutter", target_os = "linux"))]
-    if let Some(display) = super::view_link::set_precise(_session, _on) {
-        log::info!("ddpro: precise mode {} for remote display {display}", if _on { "on" } else { "off" });
-        if let Some(m) = wrap(ddpro::set_dither(u32::try_from(display).unwrap_or(0), !_on)) {
+    if let Some(display) = super::view_link::set_dither(_session, _on) {
+        log::info!("ddpro: dither {} for remote display {display}", if _on { "on" } else { "off" });
+        if let Some(m) = wrap(ddpro::set_dither(u32::try_from(display).unwrap_or(0), _on)) {
             _session.send(Data::Message(m));
         }
     }

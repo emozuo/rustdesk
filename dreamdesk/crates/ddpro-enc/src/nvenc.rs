@@ -194,7 +194,7 @@ pub struct Config {
     pub bitrate_kbps: u32,
     /// NVENC 速度预设 1–7（1 最快、7 画质最好），按实测选。
     pub preset: u8,
-    /// 颜色转换时加有序抖动；关掉就是普通四舍五入（P1 的「精确模式」）。
+    /// 颜色转换时加有序抖动；不加就是普通四舍五入（8bit 源用这个，见着色器开头的说明）。
     pub dither: bool,
 }
 
@@ -391,7 +391,7 @@ impl Encoder {
         self.conv.read_source_bgra()
     }
 
-    /// 开 / 关抖动（精确模式），下一帧生效：只改颜色转换的一个参数，不重建编码器、不出关键帧。
+    /// 开 / 关抖动，下一帧生效：只改颜色转换的一个参数，不重建编码器、不出关键帧。
     pub fn set_dither(&mut self, dither: bool) {
         if self.cfg.dither != dither {
             self.cfg.dither = dither;

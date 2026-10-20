@@ -575,11 +575,11 @@ pub fn session_set_custom_image_quality(session_id: SessionID, value: i32) {
     }
 }
 
-/// DreamDesk：工具栏的「精确模式」开关（专业模式下关抖动）。不带专业模式的构建什么也不做
-pub fn session_ddpro_set_precise(session_id: SessionID, on: bool) {
+/// DreamDesk：专业画面开 / 关抖动（默认不抖动；界面暂时没有入口，留给高位深源压 8bit 时用）。不带专业模式的构建什么也不做
+pub fn session_ddpro_set_dither(session_id: SessionID, on: bool) {
     #[cfg(feature = "dd-pro")]
     if let Some(session) = sessions::get_session_by_session_id(&session_id) {
-        crate::ddpro::client::set_precise(&session, on);
+        crate::ddpro::client::set_dither(&session, on);
     }
     #[cfg(not(feature = "dd-pro"))]
     let _ = (session_id, on);

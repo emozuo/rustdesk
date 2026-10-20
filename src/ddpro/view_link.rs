@@ -44,8 +44,8 @@ struct Link {
     notice: Option<Notice>,
     /// 开着的专业窗口最近一次报的实测值（质量面板用）
     stats: Option<ViewStats>,
-    /// 用户开了精确模式（关抖动）：本会话之后开的专业窗口都照这个设置
-    precise: bool,
+    /// 要被控端加抖动（默认不加）：本会话之后开的专业窗口都照这个设置
+    dither: bool,
 }
 
 static LINKS: OnceLock<Mutex<HashMap<u64, Link>>> = OnceLock::new();
@@ -137,24 +137,23 @@ fn push_mode<T: InvokeUiSession>(session: &Session<T>, level: &str, notice: Opti
     }
 }
 
-/// 记下精确模式开没开；专业窗口开着时返回它的屏号，由调用方马上告诉被控端。
-pub fn set_precise<T: InvokeUiSession>(session: &Session<T>, on: bool) -> Option<i32> {
+/// 记下要不要抖动；专业窗口开着时返回它的屏号，由调用方马上告诉被控端。
+pub fn set_dither<T: InvokeUiSession>(session: &Session<T>, on: bool) -> Option<i32> {
     let mut links = links().lock().unwrap();
     let l = links.entry(key(session)).or_default();
-    l.precise = on;
+    l.dither = on;
     l.down.is_some().then_some(l.index)
 }
 
-/// 质量面板里 RustDesk 原来没有的几项（专业画面的延迟、收到的码率、位深、丢包与补发、显示链路检查、精确模式），
+/// 质量面板里 RustDesk 原来没有的几项（专业画面的延迟、收到的码率、位深、丢包与补发、显示链路检查），
 /// 推给 Dart 加在面板末尾；`None` 时撤掉这几行（专业窗口关了）。
-fn push_quality<T: InvokeUiSession>(session: &Session<T>, stats: Option<(&ViewStats, bool)>) {
+fn push_quality<T: InvokeUiSession>(session: &Session<T>, stats: Option<&ViewStats>) {
     let conn_type = session.lc.read().unwrap().conn_type;
     let Some(s) = crate::flutter::sessions::get_session_by_peer_id(session.get_id(), conn_type) else {
         return;
     };
-    let fields = stats.map(|(v, precise)| {
+    let fields = stats.map(|v| {
         [
-            ("precise", precise.to_string()),
             ("latency_ms", v.latency_ms.to_string()),
             ("kbps", v.kbps.to_string()),
             ("bit_depth", v.bit_depth.to_string()),
@@ -407,20 +406,20 @@ pub fn start<T: InvokeUiSession>(
         }
     }
     let pid = child.id();
-    let precise = {
+    let dither = {
         let mut links = links().lock().unwrap();
         let l = links.entry(k).or_default();
         l.down = Some((pid, tx));
         l.stats = None;
-        // 诊断：不点工具栏也从精确模式开始，无人值守时验证「主控端 → 被控端改抖动」这条路
-        if std::env::var("DDPRO_DIAG_PRECISE").is_ok_and(|v| v == "1") {
-            l.precise = true;
+        // 诊断：界面还没有入口，用它从「加抖动」开始，验证「主控端 → 被控端改抖动」这条路
+        if std::env::var("DDPRO_DIAG_DITHER").is_ok_and(|v| v == "1") {
+            l.dither = true;
         }
-        l.precise.then_some(l.index)
+        l.dither.then_some(l.index)
     };
-    // 用户开过精确模式：新的专业会话（换屏后）也关抖动。被控端谈成时已经登记好会话，这时发得上
-    if let Some(index) = precise {
-        if let Some(m) = wrap(ddpro::set_dither(u32::try_from(index).unwrap_or(0), false)) {
+    // 本会话要过抖动：新的专业会话（换屏后）也加。被控端谈成时已经登记好会话，这时发得上
+    if let Some(index) = dither {
+        if let Some(m) = wrap(ddpro::set_dither(u32::try_from(index).unwrap_or(0), true)) {
             session.send(Data::Message(m));
         }
     }
@@ -504,10 +503,10 @@ pub fn start<T: InvokeUiSession>(
                         if current {
                             l.stats = Some(v.clone());
                         }
-                        current.then_some(l.precise)
+                        current
                     };
-                    if let Some(precise) = current {
-                        push_quality(&session, Some((&v, precise)));
+                    if current {
+                        push_quality(&session, Some(&v));
                     }
                 }
                 _ => {}

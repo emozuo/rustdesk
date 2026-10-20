@@ -38,7 +38,7 @@ impl Converter {
             device.CreateComputeShader(SHADER, None, Some(&mut cs))?;
 
             let params: [u32; 4] = [width, height, dither as u32, 0];
-            // 抖动运行中能切（精确模式），参数缓冲要可更新
+            // 抖动运行中能切（主控端「设置抖动」），参数缓冲要可更新
             let desc = D3D11_BUFFER_DESC {
                 ByteWidth: std::mem::size_of_val(&params) as u32,
                 Usage: D3D11_USAGE_DEFAULT,

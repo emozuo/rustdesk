@@ -67,7 +67,8 @@ struct Session {
     server: ServerPtrWeak,
     /// 谈成时开好的专业画面通道，服务线程开始时取走
     channel: Mutex<Option<Channel>>,
-    /// 颜色转换加不加抖动：默认加，主控端开精确模式时关（下一帧生效，重建编码器后照旧）
+    /// 颜色转换加不加抖动：默认不加——8bit 桌面转 8bit YUV 只需四舍五入（Sunshine 同样不抖动），实测抖动反而误差更大、
+    /// 码流更大。主控端可以经「设置抖动」打开（下一帧生效，重建编码器后照旧），留给第 4 项高位深源压 8bit 时用
     dither: AtomicBool,
 }
 
@@ -151,7 +152,7 @@ pub fn busy_by_other_pro(display: usize, conn_id: i32, server: &ServerPtrWeak) -
         .is_some_and(|s| s.read().unwrap().is_subscribed(&service_name(display), other.conn_id))
 }
 
-/// 主控端开 / 关精确模式：只认这块屏上本连接自己的专业会话，返回是否认了。
+/// 主控端开 / 关抖动：只认这块屏上本连接自己的专业会话，返回是否认了。
 pub fn set_dither(display: usize, conn_id: i32, dither: bool) -> bool {
     match SESSIONS.lock().unwrap().get(&display) {
         Some(s) if s.conn_id == conn_id => {
@@ -196,7 +197,7 @@ pub fn start(
         conn: conn.clone(),
         server: server.clone(),
         channel: Mutex::new(Some(Channel::Waiting(listener, Instant::now() + CHANNEL_TIMEOUT))),
-        dither: AtomicBool::new(true),
+        dither: AtomicBool::new(false),
     });
 
     let server = server.upgrade().ok_or_else(|| anyhow!("server is gone"))?;
@@ -484,7 +485,7 @@ fn stream(ps: &ProService, session: &Session, channel: Channel) -> ResultType<(E
     sender.pace(BITRATE_KBPS, FPS);
     log::info!(
         "ddpro: pro video on display {display} started: {w}x{h} 4:4:4 8bit {FPS} fps {BITRATE_KBPS} kbps, dither {} -> {}",
-        if dither { "on" } else { "off (precise mode)" },
+        if dither { "on" } else { "off" },
         sender.peer()
     );
 
@@ -540,7 +541,7 @@ fn stream(ps: &ProService, session: &Session, channel: Channel) -> ResultType<(E
         if want != dither {
             dither = want;
             enc.set_dither(dither);
-            log::info!("ddpro: pro video on display {display}: dither {}", if dither { "on" } else { "off (precise mode)" });
+            log::info!("ddpro: pro video on display {display}: dither {}", if dither { "on" } else { "off" });
         }
         let force = sender.take_keyframe_request();
         let f = enc.encode(src, force).map_err(|e| anyhow!("{e}"))?;

@@ -3,13 +3,13 @@
 //!   capture_encode probe
 //!       列出显示器和所在显卡，探测每块 N 卡的编码能力
 //!   capture_encode run --out DIR [--seconds 10] [--fps 60] [--bitrate 30000] [--preset 4]
-//!                      [--dither 1] [--ref-frame 30]
+//!                      [--dither 0] [--ref-frame 30]
 //!       编 N 秒：DIR\out.h265 码流、DIR\stats.txt 统计；
 //!       第 ref-frame 帧的原始画面存 DIR\ref_<宽>x<高>.bgra，用于和解码结果比颜色
 //!   capture_encode compare REF.bgra DEC.rgb WIDTH HEIGHT
 //!       原始画面（BGRA）和 ffmpeg 解出的同一帧（rgb24）逐像素比，报每通道最大误差、平均误差、PSNR
 //!   capture_encode synth --out DIR [--move-seconds 2] [--still-seconds 3] [--speed 8]
-//!                        [--fps 60] [--bitrate 30000] [--preset 4] [--dither 1] [--noise 0]
+//!                        [--fps 60] [--bitrate 30000] [--preset 4] [--dither 0] [--noise 0]
 //!       P1 静止收敛：工具自己生成 CG 类测试图（色卡、渐变、1 像素细线、彩色棋盘、彩色小字），先平移 N 秒、再完全静止
 //!       N 秒，按专业模式的方式编码（静止时不给新画面、编码器重编上一帧）。出 DIR\out.h265、DIR\frames.csv、DIR\synth.txt。
 //!       --noise A 在运动段每帧叠加 ±A 的随机噪声（剧烈运动，P1 实测用 24）；不加时纯平移，码控一直压得很低，测不出收敛
@@ -100,7 +100,7 @@ mod win {
             fps: 60,
             bitrate: 30_000,
             preset: 4,
-            dither: true,
+            dither: false,
             ref_frame: 30,
         };
         let mut it = args.iter();
@@ -406,7 +406,7 @@ mod win {
             Win32::Graphics::{Direct3D11::*, Dxgi::Common::*},
         };
         let (mut out, mut move_s, mut still_s, mut speed) = (PathBuf::new(), 2u32, 3u32, 8u32);
-        let (mut fps, mut bitrate, mut preset, mut dither) = (60u32, 30_000u32, 4u8, true);
+        let (mut fps, mut bitrate, mut preset, mut dither) = (60u32, 30_000u32, 4u8, false);
         let mut noise = 0u32;
         let mut it = args.iter();
         while let Some(k) = it.next() {

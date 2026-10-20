@@ -842,7 +842,6 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Night light is on and tints the whole screen. Turn it off in Settings > Displays.", "夜灯开着，整屏偏暖。在「设置 > 显示器」里关掉。"),
         ("The display's gamma curve is altered, for example by a calibrated color profile. Remove it in Settings > Color.", "显示器的伽马曲线被改过（比如校准过的颜色配置文件）。在「设置 > 颜色」里去掉它。"),
         ("The display applies a color matrix or curve to the output.", "显示输出上加了颜色矩阵或曲线。"),
-        ("Precise mode (no dithering)", "精确模式（不抖动）"),
         ("The pro view is scaled, so remote pixels are not shown one to one. Set the display scale to 100% and match the remote screen's resolution.", "专业画面被缩放了，远程的像素没有一一对应显示。把显示缩放设为 100%，分辨率和远程屏一致。"),
     ].iter().cloned().collect();
 }

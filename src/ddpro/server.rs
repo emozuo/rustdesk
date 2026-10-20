@@ -163,7 +163,7 @@ fn busy(display: usize, ctx: &ConnCtx) -> Option<String> {
     })
 }
 
-/// 主控端开 / 关精确模式（关 / 开抖动）。不是这个连接在这块屏上的专业会话就不理（多半是换屏前晚到的消息）。
+/// 主控端开 / 关抖动。不是这个连接在这块屏上的专业会话就不理（多半是换屏前晚到的消息）。
 fn set_dither(s: &ddpro::SetDither, ctx: &ConnCtx) {
     #[cfg(all(windows, feature = "vram"))]
     let applied = super::video::set_dither(s.display_index as usize, ctx.conn_id, s.dither);
