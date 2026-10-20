@@ -666,11 +666,12 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
 
 /// 开全屏窗口、显卡解码器和转换器（设备留着，本机屏幕分辨率变了要按新尺寸重建转换器）。
 fn open_display(start: &ViewStart) -> ResultType<(Window, Device, Decoder, Converter)> {
-    let mut win = Window::open(if start.title.is_empty() {
-        "dreamdesk-pro"
-    } else {
-        &start.title
-    })
+    // 桌面文件按应用名装（产品版 dreamdesk-pro.desktop，原版 rustdesk.desktop），和 RustDesk 远程窗口同一个应用名
+    let app_id = crate::get_app_name().to_lowercase();
+    let mut win = Window::open(
+        if start.title.is_empty() { &app_id } else { &start.title },
+        &app_id,
+    )
     .map_err(|e| anyhow!("{e}"))?;
     let (w, h) = win.size();
     let dev = Device::open().map_err(|e| anyhow!("{e}"))?;

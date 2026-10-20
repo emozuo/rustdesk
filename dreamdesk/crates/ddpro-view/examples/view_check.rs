@@ -49,7 +49,7 @@ mod linux {
         let aus = hevc::split_access_units(&fs::read(input)?);
         println!("{} access units from {input}, running {seconds} s", aus.len());
 
-        let mut win = Window::open("dreamdesk-pro view check")?;
+        let mut win = Window::open("dreamdesk-pro view check", "dreamdesk-pro")?;
         let (w, h) = win.size();
         println!("window: {w}x{h} (fullscreen), keeping the screen awake: {}", win.idle_inhibited());
         match win.formats() {

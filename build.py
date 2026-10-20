@@ -1034,6 +1034,10 @@ def main():
     # here would ship rustdesk.exe inside a build whose app name is no longer RustDesk.
     if windows and args.flutter and args.dd_brand and not args.skip_portable_pack:
         raise Exception('--dd-brand on Windows: package with dreamdesk/scripts/build-windows.ps1')
+    # Same on Linux: every package built here is named rustdesk, while the app it carries calls itself
+    # dreamdesk-pro (service, process and desktop file names are derived from that).
+    if not windows and not osx and args.dd_brand:
+        raise Exception('--dd-brand on Linux: package with dreamdesk/scripts/build-linux.sh')
 
     if os.path.exists(exe_path):
         os.unlink(exe_path)

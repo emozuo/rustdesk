@@ -10,7 +10,12 @@ use hbb_common::log;
 use std::collections::HashMap;
 use std::{error::Error, fmt, time::Duration};
 
+#[cfg(not(feature = "dd-brand"))]
 const DBUS_NAME: &str = "org.rustdesk.rustdesk";
+// DreamDesk 产品版用自己的名字：链接转发给已运行的实例靠它，和原版 RustDesk 在同一个桌面会话里时不抢同一个名字。
+// 它也当接口名用，接口名不许带连字符
+#[cfg(feature = "dd-brand")]
+const DBUS_NAME: &str = "com.of3d.dreamdesk_pro";
 const DBUS_PREFIX: &str = "/dbus";
 const DBUS_METHOD_NEW_CONNECTION: &str = "NewConnection";
 const DBUS_METHOD_NEW_CONNECTION_ID: &str = "id";

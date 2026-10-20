@@ -251,8 +251,8 @@ pub struct Window {
 }
 
 impl Window {
-    /// 连上 Wayland、开一个全屏无边框窗口，等合成器给出尺寸和格式支持。
-    pub fn open(title: &str) -> Result<Self> {
+    /// 连上 Wayland、开一个全屏无边框窗口，等合成器给出尺寸和格式支持。`app_id` 是已安装的桌面文件名（不带 .desktop）。
+    pub fn open(title: &str, app_id: &str) -> Result<Self> {
         let conn = Connection::connect_to_env().map_err(err("connect to the Wayland display"))?;
         let (globals, queue) = registry_queue_init::<State>(&conn).map_err(err("read the Wayland globals"))?;
         let qh = queue.handle();
@@ -268,9 +268,10 @@ impl Window {
         let surface = compositor.create_surface(&qh);
         let window = xdg.create_window(surface, WindowDecorations::None, &qh);
         window.set_title(title);
-        // 和 RustDesk 远程窗口同一个应用名（已安装的 rustdesk.desktop 里 StartupWMClass=rustdesk）：GNOME 只对认得出是哪个
-        // 已安装应用的窗口记住「允许禁用快捷键」，应用名对不上时每开一个专业窗口（切显示器就会开新的）都要问一次
-        window.set_app_id("rustdesk");
+        // 和 RustDesk 远程窗口同一个应用名（= 已安装的桌面文件名）：GNOME 只对认得出是哪个已安装应用的窗口记住
+        // 「允许禁用快捷键」（RustDesk 设置页「清除快捷键授权」也按这个名字找），对不上时每开一个专业窗口（切显示器就会开新的）
+        // 都要问一次
+        window.set_app_id(app_id);
         window.set_fullscreen(None);
         window.commit();
         // 这个窗口的格式反馈（v4 起才有）：哪些格式能用、哪些能直接送显示硬件
