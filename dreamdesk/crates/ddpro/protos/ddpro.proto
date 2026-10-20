@@ -145,6 +145,8 @@ message ViewStart {
   // 被控端有几块屏、这个专业窗口看的是哪块（悬浮球菜单「切换显示器」用）
   uint32 display_count = 7;
   int32 display_index = 8;
+  // 悬浮球菜单的网络状态块开着（本会话里用户开过，换屏开新的专业窗口时照旧）
+  bool show_status = 9;
 }
 
 // 专业窗口 → 会话进程
@@ -170,6 +172,8 @@ message ViewAction {
     int32 switch_display = 1;
     bool ctrl_alt_del = 2;
     bool lock_screen = 3;
+    // 网络状态块开 / 关：会话进程记下来，换屏开新的专业窗口时照旧
+    bool show_status = 4;
   }
 }
 

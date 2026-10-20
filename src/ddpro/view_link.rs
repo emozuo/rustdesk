@@ -46,6 +46,8 @@ struct Link {
     stats: Option<ViewStats>,
     /// 要被控端加抖动（默认不加）：本会话之后开的专业窗口都照这个设置
     dither: bool,
+    /// 悬浮球的网络状态块开着：换屏开新的专业窗口时照旧
+    show_status: bool,
 }
 
 static LINKS: OnceLock<Mutex<HashMap<u64, Link>>> = OnceLock::new();
@@ -370,11 +372,11 @@ pub fn start<T: InvokeUiSession>(
     session: &Session<T>,
 ) {
     let k = key(session);
-    let (display, display_count, display_index) = links()
+    let (display, display_count, display_index, show_status) = links()
         .lock()
         .unwrap()
         .get(&k)
-        .map(|l| (l.rects.get(&l.index).copied().unwrap_or_default(), l.rects.len() as u32, l.index))
+        .map(|l| (l.rects.get(&l.index).copied().unwrap_or_default(), l.rects.len() as u32, l.index, l.show_status))
         .unwrap_or_default();
     if display.2 == 0 || display.3 == 0 {
         fault(session, Notice::NoDisplayInfo, "cannot start the pro view: the remote display size is unknown");
@@ -420,6 +422,7 @@ pub fn start<T: InvokeUiSession>(
         title: format!("{} - pro", session.get_id()),
         display_count,
         display_index,
+        show_status,
         ..Default::default()
     })))
     .ok();
@@ -525,6 +528,10 @@ pub fn start<T: InvokeUiSession>(
                     Some(view_action::Union::LockScreen(_)) => {
                         log::info!("ddpro: floating menu: lock the remote screen");
                         session.lock_screen();
+                    }
+                    Some(view_action::Union::ShowStatus(on)) => {
+                        log::info!("ddpro: floating menu: network status {}", if on { "shown" } else { "hidden" });
+                        links().lock().unwrap().entry(k).or_default().show_status = on;
                     }
                     _ => {}
                 },

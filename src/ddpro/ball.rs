@@ -4,6 +4,7 @@
 //! 滚轮都不发给远程；Esc 关菜单；只在状态变化时重画、只画球和菜单那么大。
 //!
 //! 样式（尺寸、配色、投影、图标、字体）照旧 DreamDesk 的 `client/src/dd_ui_ball.c`（用户 2026-10-20 要求）。
+//! 右下角的网络状态块（菜单开关，默认隐藏）显示的是 RustDesk 质量面板在专业模式下的同一份实测值。
 //!
 //! 本模块只管布局、绘制和交互；画出来的图交给专业窗口的叠加图层（`ddpro::view::Window::set_layer`）。
 //! 画法照 RustDesk 白板功能（`src/whiteboard`）：tiny-skia 画形状，ttf-parser 取字形轮廓。
@@ -18,6 +19,7 @@ use ttf_parser::Face;
 /// 叠加图层的编号
 pub const LAYER_BALL: usize = 0;
 pub const LAYER_MENU: usize = 1;
+pub const LAYER_STATUS: usize = 2;
 
 const BALL: f32 = 42.0;
 const BALL_RADIUS: f32 = 13.0;
@@ -60,6 +62,12 @@ const C_BALL_H: [u8; 4] = [255, 255, 255, 252];
 const C_BAND: [u8; 4] = [227, 227, 230, 255];
 const C_BAND_H: [u8; 4] = [177, 203, 255, 255];
 const C_BALL_FG: [u8; 4] = [71, 77, 87, 255];
+/// 网络状态块：10 号等宽字（≈13.3 像素），深灰 72% 底、白字 92%；最窄 132 像素，离屏幕底边 110 像素（让开被控端任务栏）
+const STATUS_PX: f32 = 13.33;
+const STATUS_MIN_W: f32 = 132.0;
+const STATUS_BOTTOM: f32 = 110.0;
+const C_STATUS_BG: [u8; 4] = [87, 87, 94, 184];
+const C_STATUS_FG: [u8; 4] = [255, 255, 255, 235];
 
 /// Linux evdev 码
 const BTN_LEFT: u32 = 0x110;
@@ -69,6 +77,8 @@ const KEY_ESC: u32 = 1;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
     SwitchDisplay(i32),
+    /// 网络状态块开 / 关之后的状态（会话进程记下来，换屏开新窗口时照旧）
+    ShowStatus(bool),
     CtrlAltDel,
     LockScreen,
     Disconnect,
@@ -84,12 +94,13 @@ enum Edge {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Item {
     SwitchDisplay,
+    Status,
     CtrlAltDel,
     Lock,
     Disconnect,
 }
 
-const ITEMS: [Item; 4] = [Item::SwitchDisplay, Item::CtrlAltDel, Item::Lock, Item::Disconnect];
+const ITEMS: [Item; 5] = [Item::SwitchDisplay, Item::Status, Item::CtrlAltDel, Item::Lock, Item::Disconnect];
 
 impl Item {
     /// 菜单文字用 RustDesk 自己菜单里的同一批词条，叫法一致、不新增翻译
@@ -97,6 +108,8 @@ impl Item {
         crate::lang::translate(
             match self {
                 Item::SwitchDisplay => "Switch display",
+                // 状态块里就是 RustDesk 质量面板在专业模式下显示的那份实测值，叫法跟它一致
+                Item::Status => "Show quality monitor",
                 Item::CtrlAltDel => "Insert Ctrl + Alt + Del",
                 Item::Lock => "Insert Lock",
                 Item::Disconnect => "Disconnect",
@@ -129,6 +142,11 @@ struct Press {
 pub struct Ball {
     screen: (f32, f32),
     face: Option<Face<'static>>,
+    /// 网络状态块用的等宽字体（没有就用菜单字体）
+    mono: Option<Face<'static>>,
+    show_status: bool,
+    status_lines: Vec<String>,
+    status_dirty: bool,
     /// 球完全露出时的左上角
     x: f32,
     y: f32,
@@ -151,18 +169,19 @@ pub struct Ball {
 }
 
 impl Ball {
-    pub fn new((w, h): (u32, u32), display_count: u32, display_index: i32) -> Self {
-        let face = match load_face() {
-            Ok(f) => Some(f),
-            Err(e) => {
-                log::warn!("ddpro: pro view menu has no font, showing no text: {e}");
-                None
-            }
-        };
+    pub fn new((w, h): (u32, u32), display_count: u32, display_index: i32, show_status: bool) -> Self {
+        let (face, mono) = load_faces();
+        if face.is_none() {
+            log::warn!("ddpro: pro view menu has no font, showing no text");
+        }
         let screen = (w as f32, h as f32);
         Self {
             screen,
             face,
+            mono,
+            show_status,
+            status_lines: Vec::new(),
+            status_dirty: show_status,
             x: (screen.0 - RIGHT_GAP - BALL).max(0.0),
             y: 0.0,
             edge: Some(Edge::Top),
@@ -282,6 +301,11 @@ impl Ball {
                 } else {
                     self.close_menu();
                     Some(match item {
+                        Item::Status => {
+                            self.show_status = !self.show_status;
+                            self.status_dirty = true;
+                            Action::ShowStatus(self.show_status)
+                        }
                         Item::CtrlAltDel => Action::CtrlAltDel,
                         Item::Lock => Action::LockScreen,
                         _ => Action::Disconnect,
@@ -338,14 +362,27 @@ impl Ball {
         }
     }
 
-    /// 状态变了才重画：球、菜单（菜单关着时 None，表示撤掉那块图层）
-    pub fn render(&mut self) -> Option<(LayerImage, Option<LayerImage>)> {
-        if !self.dirty {
-            return None;
+    /// 网络状态块这一秒的几行字（专业窗口每秒给一次）；块开着且内容变了才重画
+    pub fn set_status(&mut self, lines: Vec<String>) {
+        if lines != self.status_lines {
+            self.status_lines = lines;
+            self.status_dirty |= self.show_status;
         }
-        self.dirty = false;
-        let ball = self.draw_ball()?;
-        Some((ball, if self.menu_open { self.draw_menu() } else { None }))
+    }
+
+    /// 状态变了才重画：返回要更新的图层（编号, 内容；None 表示撤掉那块图层）
+    pub fn render(&mut self) -> Vec<(usize, Option<LayerImage>)> {
+        let mut out = Vec::new();
+        if std::mem::take(&mut self.dirty) {
+            if let Some(ball) = self.draw_ball() {
+                out.push((LAYER_BALL, Some(ball)));
+            }
+            out.push((LAYER_MENU, if self.menu_open { self.draw_menu() } else { None }));
+        }
+        if std::mem::take(&mut self.status_dirty) {
+            out.push((LAYER_STATUS, if self.show_status { self.draw_status() } else { None }));
+        }
+        out
     }
 
     fn close_menu(&mut self) {
@@ -550,10 +587,18 @@ impl Ball {
             let cy = ry + ROW_H / 2.0;
             draw_icon(&mut pm, *item, x + ICON_X, cy, fg);
             if let Some(face) = &self.face {
-                draw_text(&mut pm, face, &item.label(), x + TEXT_X, cy, fg);
+                draw_text(&mut pm, face, &item.label(), x + TEXT_X, cy, fg, FONT_PX);
             }
             if item.has_sub() {
                 chevron(&mut pm, x + w - 16.0, cy, C_DIM);
+            }
+            // 开关项：开着时右边一个对勾
+            if *item == Item::Status && self.show_status {
+                let mut pb = PathBuilder::new();
+                pb.move_to(x + w - 21.0, cy);
+                pb.line_to(x + w - 17.5, cy + 3.5);
+                pb.line_to(x + w - 11.0, cy - 4.0);
+                stroke(&mut pm, pb.finish(), C_TEXT, 1.6);
             }
         }
 
@@ -570,12 +615,45 @@ impl Ball {
                     fill(&mut pm, PathBuilder::from_circle(sx + 18.0, cy, 3.2), C_TEXT);
                 }
                 if let Some(face) = &self.face {
-                    draw_text(&mut pm, face, &format!("{monitor} {}", i + 1), sx + 34.0, cy, C_TEXT);
+                    draw_text(&mut pm, face, &format!("{monitor} {}", i + 1), sx + 34.0, cy, C_TEXT, FONT_PX);
                 }
             }
         }
         Some(to_layer(&pm, ox as i32, oy as i32))
     }
+
+    /// 网络状态块：固定在右下角（不跟着球走），深灰半透明底、白色等宽字（照旧实现）。
+    /// 还没有数据（专业窗口刚开的第一秒）时不画
+    fn draw_status(&self) -> Option<LayerImage> {
+        let face = self.mono.as_ref().or(self.face.as_ref())?;
+        if self.status_lines.is_empty() {
+            return None;
+        }
+        let (line_h, pad) = (22.0, 12.0);
+        let text_w = self
+            .status_lines
+            .iter()
+            .map(|l| text_width(face, l, STATUS_PX))
+            .fold(0.0, f32::max);
+        let w = (text_w + 2.0 * pad).ceil().max(STATUS_MIN_W);
+        let h = self.status_lines.len() as f32 * line_h + 2.0 * pad;
+        let mut pm = Pixmap::new(w as u32, h as u32)?;
+        fill(&mut pm, rounded(0.0, 0.0, w, h, 6.0), C_STATUS_BG);
+        for (i, line) in self.status_lines.iter().enumerate() {
+            draw_text(&mut pm, face, line, pad, pad + i as f32 * line_h + line_h / 2.0, C_STATUS_FG, STATUS_PX);
+        }
+        // 右边只留一条缝；底边让开被控端的任务栏
+        let (x, y) = (self.screen.0 - w - 1.0, self.screen.1 - h - STATUS_BOTTOM);
+        Some(to_layer(&pm, x.round() as i32, y.round() as i32))
+    }
+}
+
+/// 一行字画出来有多宽
+fn text_width(face: &Face, text: &str, px: f32) -> f32 {
+    let scale = px / face.units_per_em() as f32;
+    text.chars()
+        .map(|ch| face.glyph_hor_advance(face.glyph_index(ch).unwrap_or_default()).unwrap_or(0) as f32 * scale)
+        .sum()
 }
 
 fn fill(pm: &mut Pixmap, path: Option<tiny_skia::Path>, color: [u8; 4]) {
@@ -655,6 +733,13 @@ fn draw_icon(pm: &mut Pixmap, item: Item, cx: f32, cy: f32, color: [u8; 4]) {
             pb.line_to(cx + 3.5, cy - 1.0);
             stroke(pm, pb.finish(), color, lw);
             fill(pm, PathBuilder::from_circle(cx, cy + 3.0, 1.1), color);
+        }
+        // 信号条（旧实现「网络状态」的图标）
+        Item::Status => {
+            for i in 0..3 {
+                let bh = 3.0 + i as f32 * 3.0;
+                fill(pm, Rect::from_xywh(cx - 6.0 + i as f32 * 4.5, cy + 5.0 - bh, 2.6, bh).map(PathBuilder::from_rect), color);
+            }
         }
         // 向右出门的箭头（旧实现「退出远控」的图标）
         Item::Disconnect => {
@@ -757,8 +842,8 @@ impl ttf_parser::OutlineBuilder for Outline<'_> {
 }
 
 /// 从左边 `x` 起画一行字，竖直方向以 `cy` 为中线
-fn draw_text(pm: &mut Pixmap, face: &Face, text: &str, x: f32, cy: f32, color: [u8; 4]) {
-    let scale = FONT_PX / face.units_per_em() as f32;
+fn draw_text(pm: &mut Pixmap, face: &Face, text: &str, x: f32, cy: f32, color: [u8; 4], px: f32) {
+    let scale = px / face.units_per_em() as f32;
     let baseline = cy + (face.ascender() as f32 + face.descender() as f32) * scale / 2.0;
     let mut pb = PathBuilder::new();
     let mut pen = x;
@@ -776,25 +861,42 @@ fn draw_text(pm: &mut Pixmap, face: &Face, text: &str, x: f32, cy: f32, color: [
     }
 }
 
-/// 菜单字体：优先系统里的中文字体（菜单是中文时要有中文字形），找不到再用无衬线字体。
+/// 菜单字体（优先系统里的中文字体，菜单是中文时要有中文字形，找不到再用无衬线字体）和状态块的等宽字体。
 /// 专业窗口是一次会话一个的进程，字体数据读进来后一直用到进程结束，所以直接 leak（白板功能同样做法）。
-fn load_face() -> Result<Face<'static>, String> {
+fn load_faces() -> (Option<Face<'static>>, Option<Face<'static>>) {
     let mut db = fontdb::Database::new();
     db.load_system_fonts();
-    let families = [
+    let ui = [
         fontdb::Family::Name("Noto Sans CJK SC"),
         fontdb::Family::Name("Noto Sans SC"),
         fontdb::Family::Name("WenQuanYi Micro Hei"),
         fontdb::Family::Name("Droid Sans Fallback"),
         fontdb::Family::SansSerif,
     ];
+    // 旧实现用 Consolas，装机不带时落到 Liberation Mono
+    let mono = [
+        fontdb::Family::Name("Liberation Mono"),
+        fontdb::Family::Name("DejaVu Sans Mono"),
+        fontdb::Family::Monospace,
+    ];
+    // DemiLight（350）：常规字重在小字号下发闷（旧实现的结论），没有这个字重时取最接近的
+    let load = |families: &[fontdb::Family], weight: u16| match load_face(&db, families, weight) {
+        Ok(f) => Some(f),
+        Err(e) => {
+            log::warn!("ddpro: pro view font: {e}");
+            None
+        }
+    };
+    (load(&ui, 350), load(&mono, 400))
+}
+
+fn load_face(db: &fontdb::Database, families: &[fontdb::Family], weight: u16) -> Result<Face<'static>, String> {
     let id = families
         .iter()
         .find_map(|f| {
-            // DemiLight（350）：常规字重在小字号下发闷（旧实现的结论），没有这个字重时取最接近的
             db.query(&fontdb::Query {
                 families: std::slice::from_ref(f),
-                weight: fontdb::Weight(350),
+                weight: fontdb::Weight(weight),
                 ..fontdb::Query::default()
             })
         })

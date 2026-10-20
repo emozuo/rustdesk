@@ -10,7 +10,7 @@
 //! - 主线程：窗口事件、解码、转 RGB、提交、键鼠。
 
 use crate::ddpro::{
-    ball::{Action, Ball, LAYER_BALL, LAYER_MENU},
+    ball::{Action, Ball},
     wire::PEER_LOG_INTERVAL,
 };
 use base::message_proto::{message, misc, CursorData, Message};
@@ -99,6 +99,8 @@ struct Counters {
     bytes: AtomicU64,
     lost: AtomicU64,
     recovered: AtomicU64,
+    /// 专业通道对时顺带量出的往返时间（微秒），还没对上时为 0（悬浮球的网络状态块用）
+    rtt_us: AtomicU64,
 }
 
 /// 质量面板这一秒的实测值
@@ -309,12 +311,32 @@ pub fn run() {
     send_up(&mut up, view_up::Union::Ended(ended)).ok();
 }
 
+/// 悬浮球网络状态块的几行：帧率、码率、专业通道往返、端到端延迟、丢包与补齐、画面尺寸、实际解出的格式。
+/// 画面静止时被控端只重编上一帧、不带采集时间，端到端延迟这一秒算不出，显示「-」
+fn status_lines(v: &ViewStats, rtt_us: u64, frame: Option<(u32, u32)>) -> Vec<String> {
+    let mut lines = vec![
+        format!("{} fps", v.fps),
+        format!("{:.1} Mbps", v.kbps as f64 / 1000.0),
+        if rtt_us > 0 { format!("RTT {:.1} ms", rtt_us as f64 / 1000.0) } else { "RTT -".to_owned() },
+        if v.latency_ms >= 0 { format!("e2e {} ms", v.latency_ms) } else { "e2e -".to_owned() },
+        format!("lost {} rec {}", v.lost_packets, v.recovered_packets),
+    ];
+    if let Some((w, h)) = frame {
+        lines.push(format!("{w}x{h}"));
+    }
+    if v.bit_depth > 0 {
+        lines.push(format!("H265 {} {}bit", v.chroma, v.bit_depth));
+    }
+    lines
+}
+
 /// 交给会话进程的菜单动作；「断开连接」不经会话进程（专业窗口自己按用户关窗结束），返回 None
 fn view_action(a: Action) -> Option<ViewAction> {
     let union = match a {
         Action::SwitchDisplay(i) => view_action::Union::SwitchDisplay(i),
         Action::CtrlAltDel => view_action::Union::CtrlAltDel(true),
         Action::LockScreen => view_action::Union::LockScreen(true),
+        Action::ShowStatus(on) => view_action::Union::ShowStatus(on),
         Action::Disconnect => return None,
     };
     Some(ViewAction {
@@ -398,7 +420,7 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
     }
 
     let mut input = Input::new(&start, size);
-    let mut ball = Ball::new(size, start.display_count, start.display_index);
+    let mut ball = Ball::new(size, start.display_count, start.display_index, start.show_status);
     let mut ledger = Ledger::default();
     let mut shown: HashMap<usize, Shown> = HashMap::new();
     let mut last_report = Instant::now();
@@ -491,12 +513,9 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
                 }
             }
             ball.tick(Instant::now());
-            if let Some((b, m)) = ball.render() {
+            for (index, image) in ball.render() {
                 // 叠加图层出错只影响悬浮球，不中断画面
-                if let Err(e) = win
-                    .set_layer(LAYER_BALL, Some(&b))
-                    .and_then(|_| win.set_layer(LAYER_MENU, m.as_ref()))
-                {
+                if let Err(e) = win.set_layer(index, image.as_ref()) {
                     throttled_log!(PEER_LOG_INTERVAL, warn, "ddpro: pro view cannot show the floating menu: {e}");
                 }
             }
@@ -627,7 +646,10 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
             }
             if panel.since.elapsed() >= PANEL {
                 let display = panel.display(&win, &display_watch);
-                if send_up(up, view_up::Union::Stats(panel.take(&counters, display))).is_err() {
+                let stats = panel.take(&counters, display);
+                // 悬浮球的网络状态块和 RustDesk 质量面板用同一份实测值
+                ball.set_status(status_lines(&stats, counters.rtt_us.load(Ordering::Relaxed), panel.frame));
+                if send_up(up, view_up::Union::Stats(stats)).is_err() {
                     session_gone.store(true, Ordering::Release);
                 }
             }
@@ -740,6 +762,9 @@ fn receive(
         counters.bytes.store(r.stats.bytes, Ordering::Relaxed);
         counters.lost.store(r.stats.lost_packets, Ordering::Relaxed);
         counters.recovered.store(r.stats.recovered, Ordering::Relaxed);
+        if let Some(c) = r.clock() {
+            counters.rtt_us.store(c.rtt_us.max(0) as u64, Ordering::Relaxed);
+        }
         if last_stats.elapsed() >= REPORT {
             last_stats = Instant::now();
             let clock = r.clock().map_or("no clock sync yet".to_owned(), |c| {
