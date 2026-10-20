@@ -14,7 +14,7 @@ use crate::{
 };
 use base::message_proto::{message, misc, KeyboardMode, Message, PeerInfo};
 use ddpro::{
-    reject, stopped, view_down, view_ended::Kind, view_up, DisplayCaps, FormatCaps,
+    reject, stopped, view_action, view_down, view_ended::Kind, view_up, DisplayCaps, FormatCaps,
     MediaChannel, Reject, Stopped, ViewDown, ViewEnded, ViewStart, ViewStats, ViewUp,
 };
 use hbb_common::{log, protobuf::Message as _, throttled_log, tokio::sync::mpsc::UnboundedSender};
@@ -72,7 +72,6 @@ enum Notice {
     PeerUnavailable,
     Busy,
     Version,
-    UserClosed,
 }
 
 impl Notice {
@@ -90,7 +89,6 @@ impl Notice {
             Notice::PeerUnavailable => "Not in pro mode: the controlled side cannot provide pro video",
             Notice::Busy => "Not in pro mode: this display is already in use",
             Notice::Version => "Not in pro mode: the pro protocol versions do not match",
-            Notice::UserClosed => "Not in pro mode: you closed the pro view",
         }
     }
 
@@ -108,7 +106,6 @@ impl Notice {
             Notice::PeerUnavailable => "The controlled side cannot provide pro video, for example because its graphics card cannot encode HEVC 4:4:4.",
             Notice::Busy => "Another connection is using this display of the controlled side (pro mode allows one connection per display). Reconnect after it ends, or switch to another display.",
             Notice::Version => "The two computers run different versions of the pro protocol. Upgrade the older side so both run the same version.",
-            Notice::UserClosed => "You closed the pro view, so this session is shown in general mode. Reconnect to return to pro mode.",
         }
     }
 
@@ -117,14 +114,24 @@ impl Notice {
         matches!(self, Notice::Lost | Notice::ChannelFailed)
     }
 
-    /// 用户切到别的屏时值得对新屏再请求一次：和这块屏、这次通道有关的故障。本机不支持、版本不一致换屏也一样；
-    /// 用户自己关的专业窗口不替他重开
-    fn retry_on_switch(self) -> bool {
-        !matches!(self, Notice::Unsupported | Notice::Version | Notice::UserClosed)
+    /// 值得再请求一次（用户切到别的屏、或点「重新进入专业模式」）：和这块屏、这次通道有关的故障。
+    /// 本机不支持、版本不一致，再请求也一样
+    fn retryable(self) -> bool {
+        !matches!(self, Notice::Unsupported | Notice::Version)
     }
 }
 
-/// 推给 RustDesk 远程窗口：`level` 为 `fault`（红）、`user`（灰）；`notice` 为 None 表示撤掉提示
+/// 专业会话期间屏幕上只有一种窗口（P1 第 2 项）：专业画面出来后隐藏 RustDesk 远程窗口（它所在的进程照常承载会话），
+/// 专业模式出故障时显示回来，用户关掉专业画面就结束这次远程。`action` 为 `hide` / `show` / `close`
+fn push_window<T: InvokeUiSession>(session: &Session<T>, action: &str) {
+    log::info!("ddpro: RustDesk remote window: {action}");
+    let conn_type = session.lc.read().unwrap().conn_type;
+    if let Some(s) = crate::flutter::sessions::get_session_by_peer_id(session.get_id(), conn_type) {
+        s.push_event("ddpro_window", &[("action", action)], &[]);
+    }
+}
+
+/// 推给 RustDesk 远程窗口：`level` 为 `fault`（红），空串表示撤掉提示
 fn push_mode<T: InvokeUiSession>(session: &Session<T>, level: &str, notice: Option<Notice>, detail: &str) {
     let (text, tip) = notice.map_or(("", ""), |n| (n.text(), n.tip()));
     let conn_type = session.lc.read().unwrap().conn_type;
@@ -216,6 +223,23 @@ fn raise<T: InvokeUiSession>(session: &Session<T>, notice: Notice, detail: &str,
     }
     log::warn!("ddpro: {} ({detail})", notice.text());
     push_mode(session, "fault", Some(notice), detail);
+    // 不在专业模式了：RustDesk 远程窗口必须看得见（专业画面出来前出的故障，窗口本来就开着）
+    push_window(session, "show");
+}
+
+/// 用户点提示上的「重新进入专业模式」：挂着的是值得再试的故障时撤掉提示，返回当前屏号，由调用方重新请求。
+pub fn retry<T: InvokeUiSession>(session: &Session<T>) -> Option<i32> {
+    let index = {
+        let mut links = links().lock().unwrap();
+        let link = links.entry(key(session)).or_default();
+        if link.down.is_some() || !link.notice.is_some_and(Notice::retryable) {
+            return None;
+        }
+        link.notice = None;
+        link.index
+    };
+    push_mode(session, "", None, "");
+    Some(index)
 }
 
 /// 两端专业协议版本不一致（谈判前看名片，或收到对端消息时发现）。
@@ -287,7 +311,7 @@ pub fn on_switch_display<T: InvokeUiSession>(session: &Session<T>, display: i32)
     link.index = display;
     // 丢掉通道，写线程随之关管道，专业窗口读到断开就告诉被控端不要了、自己退出
     let had_view = link.down.take().is_some();
-    (had_view || link.notice.is_some_and(Notice::retry_on_switch)).then_some(display)
+    (had_view || link.notice.is_some_and(Notice::retryable)).then_some(display)
 }
 
 /// 本机能不能硬解 4:4:4 并在显卡上转 RGB（只探测一次）。
@@ -346,11 +370,11 @@ pub fn start<T: InvokeUiSession>(
     session: &Session<T>,
 ) {
     let k = key(session);
-    let display = links()
+    let (display, display_count, display_index) = links()
         .lock()
         .unwrap()
         .get(&k)
-        .and_then(|l| l.rects.get(&l.index).copied())
+        .map(|l| (l.rects.get(&l.index).copied().unwrap_or_default(), l.rects.len() as u32, l.index))
         .unwrap_or_default();
     if display.2 == 0 || display.3 == 0 {
         fault(session, Notice::NoDisplayInfo, "cannot start the pro view: the remote display size is unknown");
@@ -394,6 +418,8 @@ pub fn start<T: InvokeUiSession>(
         remote_width: display.2,
         remote_height: display.3,
         title: format!("{} - pro", session.get_id()),
+        display_count,
+        display_index,
         ..Default::default()
     })))
     .ok();
@@ -486,10 +512,27 @@ pub fn start<T: InvokeUiSession>(
                 Some(view_up::Union::Mouse(m)) => {
                     session.send_mouse(m.mask, m.x, m.y, m.alt, m.ctrl, m.shift, m.command);
                 }
+                // 悬浮球菜单：调 RustDesk 会话已有的功能（和它自己工具栏里的同一套）
+                Some(view_up::Union::Action(a)) => match a.union {
+                    Some(view_action::Union::SwitchDisplay(i)) => {
+                        log::info!("ddpro: floating menu: switch to remote display {i}");
+                        session.switch_display(i);
+                    }
+                    Some(view_action::Union::CtrlAltDel(_)) => {
+                        log::info!("ddpro: floating menu: Ctrl+Alt+Del");
+                        session.ctrl_alt_del();
+                    }
+                    Some(view_action::Union::LockScreen(_)) => {
+                        log::info!("ddpro: floating menu: lock the remote screen");
+                        session.lock_screen();
+                    }
+                    _ => {}
+                },
                 Some(view_up::Union::Ready(_)) => {
-                    // 专业画面出来了：这次请求成功，撤掉提示
+                    // 专业画面出来了：这次请求成功，撤掉提示；屏幕上只留专业画面
                     links().lock().unwrap().entry(k).or_default().notice = None;
                     push_mode(&session, "", None, "");
+                    push_window(&session, "hide");
                 }
                 Some(view_up::Union::Ended(e)) => {
                     log::info!("ddpro: the pro view is ending: {}", e.detail);
@@ -536,11 +579,10 @@ pub fn start<T: InvokeUiSession>(
         }
         let detail = ended.as_ref().map_or(String::new(), |e| e.detail.clone());
         match ended.map(|e| e.kind.enum_value()) {
-            Some(Ok(Kind::SESSION_CLOSED)) => {}
-            Some(Ok(Kind::USER_CLOSED)) => {
-                links().lock().unwrap().entry(k).or_default().notice = Some(Notice::UserClosed);
-                push_mode(&session, "user", Some(Notice::UserClosed), "");
-            }
+            // 还挂着的窗口因为会话结束而关（RustDesk 连接断了）：RustDesk 的断开 / 重连提示在远程窗口里，要让人看得见
+            Some(Ok(Kind::SESSION_CLOSED)) => push_window(&session, "show"),
+            // 关专业画面就是结束这次远程（专业会话期间只有这一个窗口）
+            Some(Ok(Kind::USER_CLOSED)) => push_window(&session, "close"),
             Some(Ok(Kind::CHANNEL_LOST)) => fault(&session, Notice::Lost, &detail),
             Some(Ok(Kind::CHANNEL_FAILED)) => fault(&session, Notice::ChannelFailed, &detail),
             Some(_) => fault(&session, Notice::Display, &detail),

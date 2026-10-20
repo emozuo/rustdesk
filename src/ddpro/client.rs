@@ -78,6 +78,15 @@ fn request_pro<T: InvokeUiSession>(session: &Session<T>, display: u32) {
     });
 }
 
+/// 用户点「非专业模式」提示上的「重新进入专业模式」：故障值得再试时，对当前屏重新发起专业请求。
+pub fn retry<T: InvokeUiSession>(_session: &Session<T>) {
+    #[cfg(all(feature = "flutter", target_os = "linux"))]
+    if let Some(display) = super::view_link::retry(_session) {
+        log::info!("ddpro: retrying pro mode on remote display {display}");
+        request_pro(_session, u32::try_from(display).unwrap_or(0));
+    }
+}
+
 /// 开 / 关专业画面的抖动（默认不抖动；界面暂时没有入口，留给第 4 项高位深源压 8bit 时用）：记下来，专业窗口开着时
 /// 马上告诉被控端；之后换屏开新的专业窗口也照这个设置（见 `view_link::start`）。
 pub fn set_dither<T: InvokeUiSession>(_session: &Session<T>, _on: bool) {

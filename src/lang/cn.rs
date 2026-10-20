@@ -821,7 +821,6 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Not in pro mode: the controlled side cannot provide pro video", "非专业模式：被控端无法提供专业画面"),
         ("Not in pro mode: this display is already in use", "非专业模式：这块屏已被占用"),
         ("Not in pro mode: the pro protocol versions do not match", "非专业模式：两端专业协议版本不一致"),
-        ("Not in pro mode: you closed the pro view", "非专业模式：你关闭了专业窗口"),
         ("Not in pro mode: the controlled side's screen shows no picture (no monitor connected?)", "非专业模式：被控端屏幕没有画面（可能没接显示器）"),
         ("The controlled side could not capture the screen or encode the pro video. Reconnect to try again; if it keeps happening, check the controlled side's graphics driver.", "被控端截屏或专业编码出错。可以重新连接再试；反复出现时请检查被控端的显卡驱动。"),
         ("The controlled side has no monitor connected, or its monitor is asleep, so the graphics card produces no picture. Connect a monitor (or an HDMI dummy plug), or enable a virtual display on the controlled side, then reconnect.", "被控端没有接显示器，或者显示器处于休眠，显卡拿不到画面。请接上显示器（或 HDMI 假负载插头），或在被控端启用虚拟显示器后重新连接。"),
@@ -832,7 +831,6 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("The controlled side cannot provide pro video, for example because its graphics card cannot encode HEVC 4:4:4.", "被控端无法提供专业画面，比如它的显卡不支持 HEVC 4:4:4 编码。"),
         ("Another connection is using this display of the controlled side (pro mode allows one connection per display). Reconnect after it ends, or switch to another display.", "被控端这块屏正被别的连接使用（专业模式一块屏只给一个连接）。等对方断开后再连，或切换到另一块屏。"),
         ("The two computers run different versions of the pro protocol. Upgrade the older side so both run the same version.", "两端的专业协议版本不同。请把较旧的一端升级，让两端版本一致。"),
-        ("You closed the pro view, so this session is shown in general mode. Reconnect to return to pro mode.", "你关闭了专业窗口，所以这次会话改用普通模式显示。重新连接即可回到专业模式。"),
         ("Original error (for troubleshooting)", "原始错误（排查用）"),
         ("Not in pro mode: privacy mode is on at the controlled side", "非专业模式：被控端开着隐私模式"),
         ("On this version of Windows, the controlled side's privacy mode hides the screen from pro capture. Turn privacy mode off, then reconnect.", "被控端这个版本的 Windows 上，隐私模式会挡住专业模式的截屏。关掉隐私模式后重新连接。"),
@@ -842,6 +840,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Night light is on and tints the whole screen. Turn it off in Settings > Displays.", "夜灯开着，整屏偏暖。在「设置 > 显示器」里关掉。"),
         ("The display's gamma curve is altered, for example by a calibrated color profile. Remove it in Settings > Color.", "显示器的伽马曲线被改过（比如校准过的颜色配置文件）。在「设置 > 颜色」里去掉它。"),
         ("The display applies a color matrix or curve to the output.", "显示输出上加了颜色矩阵或曲线。"),
+        ("Re-enter pro mode", "重新进入专业模式"),
         ("The pro view is scaled, so remote pixels are not shown one to one. Set the display scale to 100% and match the remote screen's resolution.", "专业画面被缩放了，远程的像素没有一一对应显示。把显示缩放设为 100%，分辨率和远程屏一致。"),
     ].iter().cloned().collect();
 }

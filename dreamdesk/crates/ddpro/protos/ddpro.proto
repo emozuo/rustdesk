@@ -142,6 +142,9 @@ message ViewStart {
   uint32 remote_width = 4;
   uint32 remote_height = 5;
   string title = 6;
+  // 被控端有几块屏、这个专业窗口看的是哪块（悬浮球菜单「切换显示器」用）
+  uint32 display_count = 7;
+  int32 display_index = 8;
 }
 
 // 专业窗口 → 会话进程
@@ -155,6 +158,18 @@ message ViewUp {
     bool ready = 4;
     // 每秒一次的实测值，给 RustDesk 的质量面板
     ViewStats stats = 5;
+    // 悬浮球菜单里选的动作（「断开连接」不在这里：专业窗口直接按用户关窗结束，见 ViewEnded）
+    ViewAction action = 6;
+  }
+}
+
+// 悬浮球菜单里选的动作，由会话进程调 RustDesk 已有的会话功能
+message ViewAction {
+  oneof union {
+    // 切到被控端第几块屏
+    int32 switch_display = 1;
+    bool ctrl_alt_del = 2;
+    bool lock_screen = 3;
   }
 }
 

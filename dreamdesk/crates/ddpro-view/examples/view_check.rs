@@ -98,6 +98,7 @@ mod linux {
                         println!("button {button:#x} {} at {x:.0},{y:.0}", if down { "down" } else { "up" })
                     }
                     Event::Wheel { dx, dy } => println!("wheel {dx},{dy}"),
+                    Event::ShortcutsInhibited(on) => println!("system shortcuts inhibited: {on}"),
                     Event::Modifiers { depressed, locked } => println!("modifiers depressed {depressed:#x} locked {locked:#x}"),
                     Event::KeyboardLeave | Event::PointerMotion { .. } => {}
                 }

@@ -457,6 +457,10 @@ class RustdeskImpl {
   }
 
   // DreamDesk 专业模式只有原生 Linux 主控端，Web 上没有
+  Future<void> sessionDdproRetry({required UuidValue sessionId, dynamic hint}) {
+    return Future.value();
+  }
+
   Future<void> sessionDdproSetDither(
       {required UuidValue sessionId, required bool on, dynamic hint}) {
     return Future.value();

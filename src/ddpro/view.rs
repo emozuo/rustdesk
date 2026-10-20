@@ -9,7 +9,10 @@
 //! - 读标准输入：光标、远程这块屏的显示变化、会话进程退出；
 //! - 主线程：窗口事件、解码、转 RGB、提交、键鼠。
 
-use crate::ddpro::wire::PEER_LOG_INTERVAL;
+use crate::ddpro::{
+    ball::{Action, Ball, LAYER_BALL, LAYER_MENU},
+    wire::PEER_LOG_INTERVAL,
+};
 use base::message_proto::{message, misc, CursorData, Message};
 use ddpro::{
     dec::{fit_rect, Converter, Decoder, Device, RgbStandard},
@@ -18,8 +21,8 @@ use ddpro::{
         display_check::{Cards, Issue},
         now_ns, CursorImage, Event, Window,
     },
-    view_down, view_ended::Kind, view_up, ViewDown, ViewEnded, ViewKey, ViewMouse, ViewStart,
-    ViewStats, ViewUp,
+    view_action, view_down, view_ended::Kind, view_up, ViewAction, ViewDown, ViewEnded, ViewKey, ViewMouse,
+    ViewStart, ViewStats, ViewUp,
 };
 use hbb_common::{anyhow::anyhow, bail, log, protobuf::Message as _, throttled_log, ResultType};
 use std::{
@@ -306,6 +309,20 @@ pub fn run() {
     send_up(&mut up, view_up::Union::Ended(ended)).ok();
 }
 
+/// 交给会话进程的菜单动作；「断开连接」不经会话进程（专业窗口自己按用户关窗结束），返回 None
+fn view_action(a: Action) -> Option<ViewAction> {
+    let union = match a {
+        Action::SwitchDisplay(i) => view_action::Union::SwitchDisplay(i),
+        Action::CtrlAltDel => view_action::Union::CtrlAltDel(true),
+        Action::LockScreen => view_action::Union::LockScreen(true),
+        Action::Disconnect => return None,
+    };
+    Some(ViewAction {
+        union: Some(union),
+        ..Default::default()
+    })
+}
+
 fn send_up(up: &mut File, union: view_up::Union) -> ResultType<()> {
     let msg = ViewUp {
         union: Some(union),
@@ -381,6 +398,7 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
     }
 
     let mut input = Input::new(&start, size);
+    let mut ball = Ball::new(size, start.display_count, start.display_index);
     let mut ledger = Ledger::default();
     let mut shown: HashMap<usize, Shown> = HashMap::new();
     let mut last_report = Instant::now();
@@ -437,15 +455,49 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
                         shown.clear();
                         conv = attach(&mut win, &dev)?;
                         input.set_window(size);
+                        ball.set_screen(size);
                     }
                     Event::Resized { .. } => {}
+                    // 只在用户允许 / 拒绝、窗口得失键盘焦点时来，不会刷屏
+                    Event::ShortcutsInhibited(on) => log::info!(
+                        "ddpro: pro view system shortcuts {}",
+                        if on { "go to the remote" } else { "stay with this computer" }
+                    ),
                     other => {
-                        for up_msg in input.handle(other) {
+                        // 鼠标、按键先给悬浮球：落在球 / 菜单上的不发给远程
+                        let (mine, action) = match &other {
+                            Event::PointerMotion { x, y } => (ball.pointer_motion(*x, *y), None),
+                            Event::PointerButton { button, down, x, y } => ball.pointer_button(*button, *down, *x, *y),
+                            Event::Wheel { .. } => (ball.wheel(), None),
+                            Event::Key { evdev, down } => (ball.key(*evdev, *down), None),
+                            _ => (false, None),
+                        };
+                        let mut ups = if mine { vec![] } else { input.handle(other) };
+                        match action {
+                            // 菜单里的「断开连接」：和用户关掉专业窗口一样，结束这次远程
+                            Some(Action::Disconnect) => {
+                                bye.store(true, Ordering::Release);
+                                quit.store(true, Ordering::Release);
+                            }
+                            Some(a) => ups.extend(view_action(a).map(view_up::Union::Action)),
+                            None => {}
+                        }
+                        for up_msg in ups {
                             if send_up(up, up_msg).is_err() {
                                 session_gone.store(true, Ordering::Release);
                             }
                         }
                     }
+                }
+            }
+            ball.tick(Instant::now());
+            if let Some((b, m)) = ball.render() {
+                // 叠加图层出错只影响悬浮球，不中断画面
+                if let Err(e) = win
+                    .set_layer(LAYER_BALL, Some(&b))
+                    .and_then(|_| win.set_layer(LAYER_MENU, m.as_ref()))
+                {
+                    throttled_log!(PEER_LOG_INTERVAL, warn, "ddpro: pro view cannot show the floating menu: {e}");
                 }
             }
             if quit.load(Ordering::Acquire) {

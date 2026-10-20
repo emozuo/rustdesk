@@ -401,6 +401,8 @@ class FfiModel with ChangeNotifier {
         updateBlockInputState(evt, peerId);
       } else if (name == 'ddpro_mode') {
         onDdproModeEvent(sessionId, evt);
+      } else if (name == 'ddpro_window') {
+        onDdproWindowEvent(sessionId, peerId, evt);
       } else if (name == 'ddpro_quality') {
         onDdproQualityEvent(sessionId, evt);
       } else if (name == 'update_privacy_mode') {

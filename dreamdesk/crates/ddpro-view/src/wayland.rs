@@ -8,7 +8,7 @@ use ddpro_dec::Exported;
 use sctk::{
     compositor::{CompositorHandler, CompositorState},
     delegate_compositor, delegate_dmabuf, delegate_output, delegate_pointer, delegate_presentation_time,
-    delegate_registry, delegate_seat, delegate_shm, delegate_xdg_shell, delegate_xdg_window,
+    delegate_registry, delegate_seat, delegate_shm, delegate_subcompositor, delegate_xdg_shell, delegate_xdg_window,
     dmabuf::{DmabufFeedback, DmabufHandler, DmabufState},
     output::{OutputHandler, OutputState},
     presentation_time::{PresentTime, PresentationTimeHandler, PresentationTimeState},
@@ -16,13 +16,19 @@ use sctk::{
         client::{
             backend::{ObjectId, WaylandError},
             globals::registry_queue_init,
-            protocol::{wl_buffer, wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface},
+            protocol::{
+                wl_buffer, wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_subsurface::WlSubsurface, wl_surface,
+            },
             Connection, Dispatch, EventQueue, Proxy, QueueHandle, WEnum,
         },
         protocols::wp::{
             idle_inhibit::zv1::client::{
                 zwp_idle_inhibit_manager_v1::{self, ZwpIdleInhibitManagerV1},
                 zwp_idle_inhibitor_v1::{self, ZwpIdleInhibitorV1},
+            },
+            keyboard_shortcuts_inhibit::zv1::client::{
+                zwp_keyboard_shortcuts_inhibit_manager_v1::{self, ZwpKeyboardShortcutsInhibitManagerV1},
+                zwp_keyboard_shortcuts_inhibitor_v1::{self, ZwpKeyboardShortcutsInhibitorV1},
             },
             linux_dmabuf::zv1::client::{
                 zwp_linux_buffer_params_v1::{self, Flags},
@@ -41,10 +47,11 @@ use sctk::{
     shell::{
         xdg::{
             window::{Window as XdgWindow, WindowConfigure, WindowDecorations, WindowHandler},
-            XdgShell,
+            XdgShell, XdgSurface,
         },
         WaylandSurface,
     },
+    subcompositor::SubcompositorState,
 };
 use std::{
     collections::HashMap,
@@ -110,6 +117,9 @@ pub enum Event {
     PointerButton { button: u32, down: bool, x: f64, y: f64 },
     /// 滚轮格数（往下 / 往右为正，和 Wayland 一致）
     Wheel { dx: i32, dy: i32 },
+    /// 合成器报告系统快捷键是否已经让给本窗口（Win、Alt+Tab 等发给远程）：用户在合成器的确认框里允许、
+    /// 窗口拿到键盘焦点时为 true；拒绝或失去焦点时为 false
+    ShortcutsInhibited(bool),
 }
 
 /// 一个光标图案（RGBA，未预乘）。
@@ -163,6 +173,10 @@ struct State {
     /// 窗口在屏上时不让桌面因「没有本机键鼠操作」而黑屏 / 锁屏：远程会话里本机常常长时间没有输入
     /// （比如盯着远程渲染），GNOME 默认几分钟就会黑屏（2026-10-13 瘦客户机 10 分钟测试第 4 分钟实撞）
     idle_inhibitor: Option<ZwpIdleInhibitorV1>,
+    /// 申请把系统快捷键让给本窗口（RustDesk 自己的远程窗口在 Linux 上用的是同一个协议）。
+    /// 有了键盘才能申请；合成器不支持时照常运行，系统快捷键留在本机
+    shortcuts_manager: Option<ZwpKeyboardShortcutsInhibitManagerV1>,
+    shortcuts_inhibitor: Option<ZwpKeyboardShortcutsInhibitorV1>,
     size: Option<(u32, u32)>,
     closed: bool,
     slots: Vec<Slot>,
@@ -182,6 +196,23 @@ struct State {
     cursor: Option<CursorImage>,
     /// 窗口当前所在的屏（合成器报「进入」的最后一块）
     entered: Option<wl_output::WlOutput>,
+    subcompositor: Option<SubcompositorState>,
+    /// 叠加图层，按调用方给的编号；用到才建
+    layers: Vec<Option<Layer>>,
+}
+
+impl State {
+    /// 鼠标事件发生在哪：窗口本身，或某块叠加图层（换算回窗口坐标）。别的表面（光标）返回 None。
+    fn window_pos(&self, surface: &wl_surface::WlSurface, (x, y): (f64, f64)) -> Option<(f64, f64)> {
+        if surface == self.window.wl_surface() {
+            return Some((x, y));
+        }
+        self.layers
+            .iter()
+            .flatten()
+            .find(|l| &l.surface == surface)
+            .map(|l| (x + l.pos.0 as f64, y + l.pos.1 as f64))
+    }
 }
 
 /// 窗口所在的屏：显示链路检查用（找对应的显示接口、看画面有没有被缩放）
@@ -193,6 +224,24 @@ pub struct OutputSummary {
     pub mode: Option<(u32, u32)>,
     /// 在桌面坐标里的尺寸（逻辑像素）：和物理分辨率不一样就说明这块屏开了缩放
     pub logical: Option<(u32, u32)>,
+}
+
+/// 叠在画面上的一块小图层的内容（悬浮球、菜单、状态块）：窗口坐标里的位置，预乘透明度的 ARGB8888（内存里按 B G R A 排）。
+pub struct LayerImage {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    pub bgra: Vec<u8>,
+}
+
+/// 一块小图层：窗口表面的子表面，合成器把它叠在画面上面；画面本身照旧零拷贝，不动。
+/// 子表面设成「不跟父表面同步」，内容一提交就生效；位置要等父表面下一次提交（画面每帧都提交）才生效。
+struct Layer {
+    surface: wl_surface::WlSurface,
+    subsurface: WlSubsurface,
+    pool: SlotPool,
+    pos: (i32, i32),
 }
 
 pub struct Window {
@@ -219,7 +268,9 @@ impl Window {
         let surface = compositor.create_surface(&qh);
         let window = xdg.create_window(surface, WindowDecorations::None, &qh);
         window.set_title(title);
-        window.set_app_id("dreamdesk-pro-view");
+        // 和 RustDesk 远程窗口同一个应用名（已安装的 rustdesk.desktop 里 StartupWMClass=rustdesk）：GNOME 只对认得出是哪个
+        // 已安装应用的窗口记住「允许禁用快捷键」，应用名对不上时每开一个专业窗口（切显示器就会开新的）都要问一次
+        window.set_app_id("rustdesk");
         window.set_fullscreen(None);
         window.commit();
         // 这个窗口的格式反馈（v4 起才有）：哪些格式能用、哪些能直接送显示硬件
@@ -229,6 +280,11 @@ impl Window {
             .bind::<ZwpIdleInhibitManagerV1, _, _>(&qh, 1..=1, ())
             .ok()
             .map(|m| m.create_inhibitor(window.wl_surface(), &qh, ()));
+        let shortcuts_manager = globals
+            .bind::<ZwpKeyboardShortcutsInhibitManagerV1, _, _>(&qh, 1..=1, ())
+            .ok();
+        // 叠加图层用；合成器都支持，万一不支持就没有悬浮球，画面照常
+        let subcompositor = SubcompositorState::bind(compositor.wl_compositor().clone(), &globals, &qh).ok();
         let mut w = Self {
             conn,
             queue,
@@ -241,6 +297,8 @@ impl Window {
                 presentation,
                 window,
                 idle_inhibitor,
+                shortcuts_manager,
+                shortcuts_inhibitor: None,
                 size: None,
                 closed: false,
                 slots: Vec::new(),
@@ -257,6 +315,8 @@ impl Window {
                 cursor_pool: None,
                 cursor: None,
                 entered: None,
+                subcompositor,
+                layers: Vec::new(),
             },
         };
         while w.state.size.is_none() || (feedback.is_some() && w.state.formats.is_none()) {
@@ -271,6 +331,65 @@ impl Window {
 
     pub fn size(&self) -> (u32, u32) {
         self.state.size.unwrap_or((0, 0))
+    }
+
+    /// 设置 / 撤掉第 `index` 块叠加图层。内容不变只挪位置时传同样的内容也行（照样重传一次，图层都很小）。
+    /// 合成器不支持子表面时什么也不做。
+    pub fn set_layer(&mut self, index: usize, image: Option<&LayerImage>) -> Result<()> {
+        let qh = self.queue.handle();
+        let s = &mut self.state;
+        let Some(sub) = s.subcompositor.as_ref() else {
+            return Ok(());
+        };
+        if s.layers.len() <= index {
+            s.layers.resize_with(index + 1, || None);
+        }
+        let Some(img) = image else {
+            if let Some(l) = &s.layers[index] {
+                l.surface.attach(None, 0, 0);
+                l.surface.commit();
+                self.conn.flush().map_err(err("hide an overlay"))?;
+            }
+            return Ok(());
+        };
+        let (w, h) = (img.width as usize, img.height as usize);
+        if w == 0 || h == 0 || img.bgra.len() != w * h * 4 {
+            return Err(Error(format!("bad overlay image {w}x{h} with {} bytes", img.bgra.len())));
+        }
+        if s.layers[index].is_none() {
+            let (subsurface, surface) = sub.create_subsurface(s.window.wl_surface().clone(), &qh);
+            subsurface.set_desync();
+            let pool = SlotPool::new(w * h * 4, &s.shm).map_err(err("create an overlay buffer pool"))?;
+            s.layers[index] = Some(Layer {
+                surface,
+                subsurface,
+                pool,
+                pos: (i32::MIN, i32::MIN),
+            });
+        }
+        let Some(l) = s.layers[index].as_mut() else {
+            return Ok(());
+        };
+        let (buffer, canvas) = l
+            .pool
+            .create_buffer(w as i32, h as i32, (w * 4) as i32, wl_shm::Format::Argb8888)
+            .map_err(err("create an overlay buffer"))?;
+        // 池里的槽按对齐向上取整，可能比图像大（42×42 要 7056 字节、给了 7104）：只写图像那部分
+        canvas
+            .get_mut(..img.bgra.len())
+            .ok_or_else(|| Error(format!("overlay buffer smaller than the image ({} bytes)", img.bgra.len())))?
+            .copy_from_slice(&img.bgra);
+        buffer.attach_to(&l.surface).map_err(err("attach an overlay buffer"))?;
+        l.surface.damage_buffer(0, 0, w as i32, h as i32);
+        l.surface.commit();
+        if l.pos != (img.x, img.y) {
+            l.pos = (img.x, img.y);
+            l.subsurface.set_position(img.x, img.y);
+            // 位置随父表面提交生效：画面停着不来新帧时也要马上挪，父表面不换内容再提交一次
+            s.window.wl_surface().commit();
+        }
+        self.conn.flush().map_err(err("show an overlay"))?;
+        Ok(())
     }
 
     /// 窗口所在的屏；合成器还没报「进入」时 None。
@@ -516,6 +635,9 @@ impl WindowHandler for State {
             }),
         };
         if let Some((width, height)) = size {
+            // 明说窗口就是画面这么大：不说的话合成器把叠加图层也算进窗口范围，贴顶边缩进的悬浮球（伸出屏幕上方）
+            // 会让整个全屏窗口往下挪（2026-10-20 瘦客户机实撞）
+            self.window.set_window_geometry(0, 0, width, height);
             if self.size != Some((width, height)) {
                 self.size = Some((width, height));
                 self.events.push(Event::Resized { width, height });
@@ -637,6 +759,35 @@ impl Dispatch<ZwpIdleInhibitorV1, ()> for State {
     }
 }
 
+impl Dispatch<ZwpKeyboardShortcutsInhibitManagerV1, ()> for State {
+    fn event(
+        _: &mut Self,
+        _: &ZwpKeyboardShortcutsInhibitManagerV1,
+        _: zwp_keyboard_shortcuts_inhibit_manager_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<ZwpKeyboardShortcutsInhibitorV1, ()> for State {
+    fn event(
+        state: &mut Self,
+        _: &ZwpKeyboardShortcutsInhibitorV1,
+        event: zwp_keyboard_shortcuts_inhibitor_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        match event {
+            zwp_keyboard_shortcuts_inhibitor_v1::Event::Active => state.events.push(Event::ShortcutsInhibited(true)),
+            zwp_keyboard_shortcuts_inhibitor_v1::Event::Inactive => state.events.push(Event::ShortcutsInhibited(false)),
+            _ => {}
+        }
+    }
+}
+
 impl ProvidesRegistryState for State {
     fn registry(&mut self) -> &mut RegistryState {
         &mut self.registry
@@ -654,6 +805,7 @@ delegate_registry!(State);
 delegate_seat!(State);
 delegate_pointer!(State);
 delegate_shm!(State);
+delegate_subcompositor!(State);
 
 impl ShmHandler for State {
     fn shm_state(&mut self) -> &mut Shm {
@@ -676,6 +828,9 @@ impl SeatHandler for State {
             // 键盘不经 sctk 的 xkb 处理，直接收原始键码（RustDesk 的映射模式只要物理键码）
             Capability::Keyboard if self.keyboard.is_none() => {
                 self.keyboard = Some(seat.get_keyboard(qh, ()));
+                if let (Some(m), None) = (&self.shortcuts_manager, &self.shortcuts_inhibitor) {
+                    self.shortcuts_inhibitor = Some(m.inhibit_shortcuts(self.window.wl_surface(), &seat, qh, ()));
+                }
             }
             _ => {}
         }
@@ -705,10 +860,10 @@ impl SeatHandler for State {
 impl PointerHandler for State {
     fn pointer_frame(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_pointer::WlPointer, events: &[PointerEvent]) {
         for e in events {
-            if &e.surface != self.window.wl_surface() {
+            // 叠加图层上的事件也收：换算回窗口坐标，由调用方决定是交给图层（悬浮球）还是发给远程
+            let Some((x, y)) = self.window_pos(&e.surface, e.position) else {
                 continue;
-            }
-            let (x, y) = e.position;
+            };
             match e.kind {
                 PointerEventKind::Enter { serial } => {
                     self.pointer_serial = Some(serial);

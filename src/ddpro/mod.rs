@@ -4,6 +4,9 @@
 //! - `dd-pro`：专业模式（`client` / `server` / `video` / `view` / `wire`）
 //! - `dd-brand`：产品改名（`brand`），通用模式同样适用，所以单独一个开关
 
+// 专业窗口的悬浮球和菜单，和专业窗口同条件
+#[cfg(all(feature = "dd-pro", feature = "flutter", target_os = "linux"))]
+mod ball;
 #[cfg(feature = "dd-brand")]
 pub mod brand;
 #[cfg(feature = "dd-pro")]
