@@ -146,7 +146,22 @@ pub fn busy_by_other_pro(display: usize, conn_id: i32, server: &ServerPtrWeak) -
         .is_some_and(|s| s.read().unwrap().is_subscribed(&service_name(display), other.conn_id))
 }
 
+/// 开通道时发现这块屏已被别的连接占着：谈判前查过一次没人，但两台主控端几乎同时请求同一块屏时，
+/// 先登记的那个在这之间占了屏。答复按「屏幕忙」拒绝，不按「开不了」。
+#[derive(Debug)]
+pub struct Busy(pub String);
+
+impl std::fmt::Display for Busy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Busy {}
+
 /// 谈成后开通道、切订阅，返回给主控端的通道信息。
+/// 「这块屏有没有被别的连接占着」的检查和登记、切订阅在同一段服务器锁里做，两台主控端并发请求时只有一个成；
+/// 锁的先后固定为服务器锁在外、[`SESSIONS`] 在内。
 pub fn start(
     display: usize,
     conn_id: i32,
@@ -166,11 +181,22 @@ pub fn start(
         server: server.clone(),
         channel: Mutex::new(Some(Channel::Waiting(listener, Instant::now() + CHANNEL_TIMEOUT))),
     });
-    SESSIONS.lock().unwrap().insert(display, session);
 
     let server = server.upgrade().ok_or_else(|| anyhow!("server is gone"))?;
     let mut s = server.write().unwrap();
     let pro = service_name(display);
+    let other = SESSIONS.lock().unwrap().get(&display).map(|o| o.conn_id).filter(|&id| id != conn_id);
+    if other.is_some_and(|id| s.is_subscribed(&pro, id)) {
+        return Err(Busy(format!("display {display} already has a pro session")).into());
+    }
+    let viewers = s.display_viewers(display, conn_id).len();
+    if viewers > 0 {
+        return Err(Busy(format!(
+            "display {display} is being viewed in general mode by {viewers} other connection(s)"
+        ))
+        .into());
+    }
+    SESSIONS.lock().unwrap().insert(display, session);
     if !s.contains(&pro) {
         s.add_service(Box::new(new_service(display)));
     }
@@ -354,14 +380,14 @@ fn back_to_general(display: usize, session: &Session) -> Back {
     let Some(server) = session.server.upgrade() else {
         return Back::Closed;
     };
-    // 主控端快速切走又切回（A→B→A）时，这块屏已经登记了新的专业会话，专业服务的订阅归它，不能退。
-    // 在服务器锁外查：登记和订阅不在同一把锁里，这里只防这个常见的先后顺序
-    if !SESSIONS.lock().unwrap().get(&display).is_some_and(|s| std::ptr::eq(Arc::as_ptr(s), session)) {
-        return Back::Superseded;
-    }
     // 枚举显示器要几毫秒，放在服务器锁外
     let ndisplay = Display::all().map_or(0, |d| d.len()).max(display + 1);
     let mut s = server.write().unwrap();
+    // 主控端快速切走又切回（A→B→A）时，这块屏已经登记了新的专业会话，专业服务的订阅归它，不能退。
+    // 登记在服务器锁里做（见 [`start`]），所以在锁内查是准的
+    if !SESSIONS.lock().unwrap().get(&display).is_some_and(|s| std::ptr::eq(Arc::as_ptr(s), session)) {
+        return Back::Superseded;
+    }
     let pro = service_name(display);
     let id = session.conn_id;
     if !s.is_subscribed(&pro, id) {

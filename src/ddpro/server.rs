@@ -98,6 +98,11 @@ fn answer(hello: &Hello, ctx: &ConnCtx) -> dd_pro::Union {
         if accept.format.is_some() {
             match open_channel(display, ctx) {
                 Ok(media) => accept.media = Some(media).into(),
+                #[cfg(all(windows, feature = "vram"))]
+                Err(e) if e.is::<super::video::Busy>() => {
+                    throttled_log!(PEER_LOG_INTERVAL, warn, "ddpro: pro session refused (DISPLAY_BUSY): {e}");
+                    return reject(reject::Reason::DISPLAY_BUSY, e.to_string());
+                }
                 Err(e) => {
                     let why = format!("cannot start pro video on display {display}: {e}");
                     throttled_log!(PEER_LOG_INTERVAL, error, "ddpro: pro session refused (UNAVAILABLE): {why}");
@@ -135,6 +140,7 @@ fn answer(hello: &Hello, ctx: &ConnCtx) -> dd_pro::Union {
 }
 
 /// 同一块屏专业模式不共享：已有别的专业会话，或有别的连接在用普通模式看，都拒绝。
+/// 这里是谈判前的早拒绝（免得白探测显卡）；开通道时在服务器锁内还会再查一遍，那次才是准的。
 fn busy(display: usize, ctx: &ConnCtx) -> Option<String> {
     #[cfg(all(windows, feature = "vram"))]
     if super::video::busy_by_other_pro(display, ctx.conn_id, &ctx.server) {
