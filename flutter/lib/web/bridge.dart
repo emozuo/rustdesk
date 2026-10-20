@@ -456,6 +456,12 @@ class RustdeskImpl {
         () => js.context.callMethod('setByName', ['custom-fps', fps]));
   }
 
+  // DreamDesk 专业模式只有原生 Linux 主控端，Web 上没有
+  Future<void> sessionDdproSetPrecise(
+      {required UuidValue sessionId, required bool on, dynamic hint}) {
+    return Future.value();
+  }
+
   Future<void> sessionLockScreen({required UuidValue sessionId, dynamic hint}) {
     return Future(() => js.context.callMethod('setByName', ['lock_screen']));
   }

@@ -74,6 +74,10 @@ fn handle(data: &[u8], ctx: &ConnCtx) -> Option<Message> {
     }
     match msg.union {
         Some(dd_pro::Union::Hello(hello)) => wrap(answer(&hello, ctx)),
+        Some(dd_pro::Union::SetDither(s)) => {
+            set_dither(&s, ctx);
+            None
+        }
         _ => {
             throttled_log!(
                 PEER_LOG_INTERVAL,
@@ -157,6 +161,25 @@ fn busy(display: usize, ctx: &ConnCtx) -> Option<String> {
             viewers.len()
         )
     })
+}
+
+/// 主控端开 / 关精确模式（关 / 开抖动）。不是这个连接在这块屏上的专业会话就不理（多半是换屏前晚到的消息）。
+fn set_dither(s: &ddpro::SetDither, ctx: &ConnCtx) {
+    #[cfg(all(windows, feature = "vram"))]
+    let applied = super::video::set_dither(s.display_index as usize, ctx.conn_id, s.dither);
+    #[cfg(not(all(windows, feature = "vram")))]
+    let applied = {
+        let _ = ctx;
+        false
+    };
+    if !applied {
+        throttled_log!(
+            PEER_LOG_INTERVAL,
+            info,
+            "ddpro: ignoring a dither change for display {}: no pro session of this connection there",
+            s.display_index
+        );
+    }
 }
 
 /// 本机此刻能编的格式（用这块屏的采集器所在的显卡探测）。做不到时把原因写日志，能力里如实报「没有」。

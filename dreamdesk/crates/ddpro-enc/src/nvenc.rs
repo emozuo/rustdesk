@@ -390,6 +390,14 @@ impl Encoder {
     pub fn read_source_bgra(&self) -> Result<Vec<u8>, Error> {
         self.conv.read_source_bgra()
     }
+
+    /// 开 / 关抖动（精确模式），下一帧生效：只改颜色转换的一个参数，不重建编码器、不出关键帧。
+    pub fn set_dither(&mut self, dither: bool) {
+        if self.cfg.dither != dither {
+            self.cfg.dither = dither;
+            self.conv.set_dither(dither);
+        }
+    }
 }
 
 impl Drop for Encoder {

@@ -21,7 +21,8 @@ use protobuf::Message as _;
 
 /// 专业协议版本。两端必须完全一致，不一致就拒绝。
 /// v6：画面通道加丢包补发和发包节奏；「已停止」带屏号、加隐私模式原因。
-pub const PROTOCOL_VERSION: u32 = 6;
+/// v7：主控端可以开 / 关抖动（精确模式）。
+pub const PROTOCOL_VERSION: u32 = 7;
 
 /// 被控端名片在 RustDesk「平台附加信息」里的键，值是 [`PROTOCOL_VERSION`]。
 pub const NAME_CARD_KEY: &str = "ddpro";
@@ -100,6 +101,14 @@ pub fn stopped(reason: stopped::Reason, detail: String, display_index: u32) -> d
         reason: reason.into(),
         detail,
         display_index,
+        ..Default::default()
+    })
+}
+
+pub fn set_dither(display_index: u32, dither: bool) -> dd_pro::Union {
+    dd_pro::Union::SetDither(SetDither {
+        display_index,
+        dither,
         ..Default::default()
     })
 }

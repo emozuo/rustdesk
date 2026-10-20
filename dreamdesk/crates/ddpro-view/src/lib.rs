@@ -4,6 +4,8 @@
 //! 只支持 Wayland（P0 决定，见 P0 实施记录第 5 步）；其它平台这个 crate 是空的。
 
 #[cfg(target_os = "linux")]
+pub mod display_check;
+#[cfg(target_os = "linux")]
 mod wayland;
 
 #[cfg(target_os = "linux")]

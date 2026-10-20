@@ -838,5 +838,11 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("On this version of Windows, the controlled side's privacy mode hides the screen from pro capture. Turn privacy mode off, then reconnect.", "被控端这个版本的 Windows 上，隐私模式会挡住专业模式的截屏。关掉隐私模式后重新连接。"),
         ("Not in pro mode: the size of the remote display is unknown", "非专业模式：不知道远程这块屏的尺寸"),
         ("The controlled side did not report the size of this display. Reconnect to try again.", "被控端没有报告这块屏的尺寸。重新连接再试。"),
+        ("The display connection sends limited-range RGB (16-235), so colors look washed out unless the monitor expects limited range too. A resolution that is not a TV format avoids it.", "显示接口送的是有限范围的 RGB（16–235），除非显示器也按有限范围显示，否则颜色发灰。改用不是电视格式的分辨率可以避免。"),
+        ("Night light is on and tints the whole screen. Turn it off in Settings > Displays.", "夜灯开着，整屏偏暖。在「设置 > 显示器」里关掉。"),
+        ("The display's gamma curve is altered, for example by a calibrated color profile. Remove it in Settings > Color.", "显示器的伽马曲线被改过（比如校准过的颜色配置文件）。在「设置 > 颜色」里去掉它。"),
+        ("The display applies a color matrix or curve to the output.", "显示输出上加了颜色矩阵或曲线。"),
+        ("Precise mode (no dithering)", "精确模式（不抖动）"),
+        ("The pro view is scaled, so remote pixels are not shown one to one. Set the display scale to 100% and match the remote screen's resolution.", "专业画面被缩放了，远程的像素没有一一对应显示。把显示缩放设为 100%，分辨率和远程屏一致。"),
     ].iter().cloned().collect();
 }

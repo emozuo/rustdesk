@@ -78,6 +78,25 @@ fn request_pro<T: InvokeUiSession>(session: &Session<T>, display: u32) {
     });
 }
 
+/// 用户在工具栏开 / 关精确模式（关抖动，查色带、看原始像素用）：记下来，专业窗口开着时马上告诉被控端；
+/// 之后换屏开新的专业窗口也照这个设置（见 `view_link::start`）。
+pub fn set_precise<T: InvokeUiSession>(_session: &Session<T>, _on: bool) {
+    #[cfg(all(feature = "flutter", target_os = "linux"))]
+    if let Some(display) = super::view_link::set_precise(_session, _on) {
+        log::info!("ddpro: precise mode {} for remote display {display}", if _on { "on" } else { "off" });
+        if let Some(m) = wrap(ddpro::set_dither(u32::try_from(display).unwrap_or(0), !_on)) {
+            _session.send(Data::Message(m));
+        }
+    }
+}
+
+/// RustDesk 每秒推质量面板数据之前（`io_loop` 的钩子）：专业窗口开着时，当前屏的帧率、编码、色度是普通画面那条链路的，
+/// 换成专业画面的实测值。
+pub fn quality_status<T: InvokeUiSession>(_session: &Session<T>, _status: &mut crate::client::QualityStatus) {
+    #[cfg(all(feature = "flutter", target_os = "linux"))]
+    super::view_link::quality_status(_session, _status);
+}
+
 /// 用户在 RustDesk 里切屏（`Session::switch_display` 的钩子）：专业窗口开着、或上次因和屏有关的故障没进专业模式时，
 /// 关掉旧屏的专业窗口、对新屏重新发起专业请求（「同屏不共享」照旧由被控端检查）。
 pub fn on_switch_display<T: InvokeUiSession>(_session: &Session<T>, _display: i32) {

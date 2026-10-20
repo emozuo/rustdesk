@@ -33,7 +33,10 @@ use std::{
     io::ErrorKind,
     net::IpAddr,
     ops::{Deref, DerefMut},
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     time::{Duration, Instant},
 };
 
@@ -64,6 +67,8 @@ struct Session {
     server: ServerPtrWeak,
     /// 谈成时开好的专业画面通道，服务线程开始时取走
     channel: Mutex<Option<Channel>>,
+    /// 颜色转换加不加抖动：默认加，主控端开精确模式时关（下一帧生效，重建编码器后照旧）
+    dither: AtomicBool,
 }
 
 enum Channel {
@@ -146,6 +151,17 @@ pub fn busy_by_other_pro(display: usize, conn_id: i32, server: &ServerPtrWeak) -
         .is_some_and(|s| s.read().unwrap().is_subscribed(&service_name(display), other.conn_id))
 }
 
+/// 主控端开 / 关精确模式：只认这块屏上本连接自己的专业会话，返回是否认了。
+pub fn set_dither(display: usize, conn_id: i32, dither: bool) -> bool {
+    match SESSIONS.lock().unwrap().get(&display) {
+        Some(s) if s.conn_id == conn_id => {
+            s.dither.store(dither, Ordering::Release);
+            true
+        }
+        _ => false,
+    }
+}
+
 /// 开通道时发现这块屏已被别的连接占着：谈判前查过一次没人，但两台主控端几乎同时请求同一块屏时，
 /// 先登记的那个在这之间占了屏。答复按「屏幕忙」拒绝，不按「开不了」。
 #[derive(Debug)]
@@ -180,6 +196,7 @@ pub fn start(
         conn: conn.clone(),
         server: server.clone(),
         channel: Mutex::new(Some(Channel::Waiting(listener, Instant::now() + CHANNEL_TIMEOUT))),
+        dither: AtomicBool::new(true),
     });
 
     let server = server.upgrade().ok_or_else(|| anyhow!("server is gone"))?;
@@ -248,7 +265,7 @@ fn run(ps: ProService) -> ResultType<()> {
     let mut backoff = REBUILD_BACKOFF_MIN;
     let result = loop {
         let round = Instant::now();
-        match stream(&ps, channel) {
+        match stream(&ps, &session, channel) {
             Ok((End::SourceChanged(why), ch)) if ps.ok() => {
                 throttled_log!(
                     REBUILD_LOG_INTERVAL,
@@ -415,7 +432,7 @@ enum End {
     SourceChanged(String),
 }
 
-fn stream(ps: &ProService, channel: Channel) -> ResultType<(End, Channel)> {
+fn stream(ps: &ProService, session: &Session, channel: Channel) -> ResultType<(End, Channel)> {
     let display = ps.display;
     // 服务线程不在当前桌面（比如被控端停在锁屏界面时开始专业会话）时采集器建不起来：
     // 和画面传输中途一样，切到当前桌面后重建。主控端已经不等了的就不再重建，按故障退回普通画面
@@ -441,6 +458,7 @@ fn stream(ps: &ProService, channel: Channel) -> ResultType<(End, Channel)> {
     let mut last_corrupt = Instant::now();
     let mut src = Some(first_frame);
     let (w, h) = texture_size(src)?;
+    let mut dither = session.dither.load(Ordering::Acquire);
     let mut enc = Encoder::new(
         dev.device,
         Config {
@@ -449,7 +467,7 @@ fn stream(ps: &ProService, channel: Channel) -> ResultType<(End, Channel)> {
             fps: FPS,
             bitrate_kbps: BITRATE_KBPS,
             preset: PRESET,
-            dither: true,
+            dither,
         },
     )
     .map_err(|e| anyhow!("{e}"))?;
@@ -465,7 +483,8 @@ fn stream(ps: &ProService, channel: Channel) -> ResultType<(End, Channel)> {
     };
     sender.pace(BITRATE_KBPS, FPS);
     log::info!(
-        "ddpro: pro video on display {display} started: {w}x{h} 4:4:4 8bit {FPS} fps {BITRATE_KBPS} kbps -> {}",
+        "ddpro: pro video on display {display} started: {w}x{h} 4:4:4 8bit {FPS} fps {BITRATE_KBPS} kbps, dither {} -> {}",
+        if dither { "on" } else { "off (precise mode)" },
         sender.peer()
     );
 
@@ -516,6 +535,12 @@ fn stream(ps: &ProService, channel: Channel) -> ResultType<(End, Channel)> {
                 }
             };
             captured = src.map(|_| Instant::now());
+        }
+        let want = session.dither.load(Ordering::Acquire);
+        if want != dither {
+            dither = want;
+            enc.set_dither(dither);
+            log::info!("ddpro: pro video on display {display}: dither {}", if dither { "on" } else { "off (precise mode)" });
         }
         let force = sender.take_keyframe_request();
         let f = enc.encode(src, force).map_err(|e| anyhow!("{e}"))?;

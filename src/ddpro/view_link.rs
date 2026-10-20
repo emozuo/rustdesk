@@ -9,13 +9,13 @@
 
 use crate::{
     client::{Data, Interface},
-    ddpro::wire::PEER_LOG_INTERVAL,
+    ddpro::wire::{wrap, PEER_LOG_INTERVAL},
     ui_session_interface::{InvokeUiSession, Session},
 };
 use base::message_proto::{message, misc, KeyboardMode, Message, PeerInfo};
 use ddpro::{
     reject, stopped, view_down, view_ended::Kind, view_up, DisplayCaps, FormatCaps,
-    MediaChannel, Reject, Stopped, ViewDown, ViewEnded, ViewStart, ViewUp,
+    MediaChannel, Reject, Stopped, ViewDown, ViewEnded, ViewStart, ViewStats, ViewUp,
 };
 use hbb_common::{log, protobuf::Message as _, throttled_log, tokio::sync::mpsc::UnboundedSender};
 use std::{
@@ -42,6 +42,10 @@ struct Link {
     /// 这次专业请求（开会话、换屏各算一次）挂着的提示：只报第一个原因，后面的多半是它的连带结果；
     /// 例外是主控端因「没画面」推测的通道原因，被控端随后报来的确切原因可以替换它
     notice: Option<Notice>,
+    /// 开着的专业窗口最近一次报的实测值（质量面板用）
+    stats: Option<ViewStats>,
+    /// 用户开了精确模式（关抖动）：本会话之后开的专业窗口都照这个设置
+    precise: bool,
 }
 
 static LINKS: OnceLock<Mutex<HashMap<u64, Link>>> = OnceLock::new();
@@ -130,6 +134,61 @@ fn push_mode<T: InvokeUiSession>(session: &Session<T>, level: &str, notice: Opti
             &[("level", level), ("text", text), ("tip", tip), ("detail", detail)],
             &[],
         );
+    }
+}
+
+/// 记下精确模式开没开；专业窗口开着时返回它的屏号，由调用方马上告诉被控端。
+pub fn set_precise<T: InvokeUiSession>(session: &Session<T>, on: bool) -> Option<i32> {
+    let mut links = links().lock().unwrap();
+    let l = links.entry(key(session)).or_default();
+    l.precise = on;
+    l.down.is_some().then_some(l.index)
+}
+
+/// 质量面板里 RustDesk 原来没有的几项（专业画面的延迟、收到的码率、位深、丢包与补发、显示链路检查、精确模式），
+/// 推给 Dart 加在面板末尾；`None` 时撤掉这几行（专业窗口关了）。
+fn push_quality<T: InvokeUiSession>(session: &Session<T>, stats: Option<(&ViewStats, bool)>) {
+    let conn_type = session.lc.read().unwrap().conn_type;
+    let Some(s) = crate::flutter::sessions::get_session_by_peer_id(session.get_id(), conn_type) else {
+        return;
+    };
+    let fields = stats.map(|(v, precise)| {
+        [
+            ("precise", precise.to_string()),
+            ("latency_ms", v.latency_ms.to_string()),
+            ("kbps", v.kbps.to_string()),
+            ("bit_depth", v.bit_depth.to_string()),
+            ("lost", v.lost_packets.to_string()),
+            ("recovered", v.recovered_packets.to_string()),
+            ("display_checked", v.display_checked.to_string()),
+            (
+                "display_issues",
+                serde_json::to_string(&v.display_issues).unwrap_or_default(),
+            ),
+        ]
+    });
+    let fields: Vec<(&str, &str)> = fields
+        .iter()
+        .flatten()
+        .map(|(k, v)| (*k, v.as_str()))
+        .collect();
+    s.push_event("ddpro_quality", &fields, &[]);
+}
+
+/// RustDesk 每秒推质量面板数据之前：专业窗口开着时，当前屏的帧率、编码、色度换成专业画面的实测值
+/// （延迟、目标码率是 RustDesk 连接本身的，照旧）。
+pub fn quality_status<T: InvokeUiSession>(session: &Session<T>, status: &mut crate::client::QualityStatus) {
+    let links = links().lock().unwrap();
+    let Some(l) = links.get(&key(session)) else {
+        return;
+    };
+    let (Some(_), Some(v)) = (&l.down, &l.stats) else {
+        return;
+    };
+    status.fps.insert(l.index.max(0) as usize, v.fps as i32);
+    status.codec_format = Some(scrap::CodecFormat::H265);
+    if !v.chroma.is_empty() {
+        status.chroma = Some(v.chroma.clone());
     }
 }
 
@@ -348,7 +407,23 @@ pub fn start<T: InvokeUiSession>(
         }
     }
     let pid = child.id();
-    links().lock().unwrap().entry(k).or_default().down = Some((pid, tx));
+    let precise = {
+        let mut links = links().lock().unwrap();
+        let l = links.entry(k).or_default();
+        l.down = Some((pid, tx));
+        l.stats = None;
+        // 诊断：不点工具栏也从精确模式开始，无人值守时验证「主控端 → 被控端改抖动」这条路
+        if std::env::var("DDPRO_DIAG_PRECISE").is_ok_and(|v| v == "1") {
+            l.precise = true;
+        }
+        l.precise.then_some(l.index)
+    };
+    // 用户开过精确模式：新的专业会话（换屏后）也关抖动。被控端谈成时已经登记好会话，这时发得上
+    if let Some(index) = precise {
+        if let Some(m) = wrap(ddpro::set_dither(u32::try_from(index).unwrap_or(0), false)) {
+            session.send(Data::Message(m));
+        }
+    }
 
     // 写：启动参数、光标；会话结束或专业窗口结束时停，关掉管道
     std::thread::spawn(move || loop {
@@ -421,21 +496,42 @@ pub fn start<T: InvokeUiSession>(
                     log::info!("ddpro: the pro view is ending: {}", e.detail);
                     ended = Some(e);
                 }
+                Some(view_up::Union::Stats(v)) => {
+                    let current = {
+                        let mut links = links().lock().unwrap();
+                        let l = links.entry(k).or_default();
+                        let current = l.down.as_ref().is_some_and(|(p, _)| *p == pid);
+                        if current {
+                            l.stats = Some(v.clone());
+                        }
+                        current.then_some(l.precise)
+                    };
+                    if let Some(precise) = current {
+                        push_quality(&session, Some((&v, precise)));
+                    }
+                }
                 _ => {}
             }
         };
         let status = child.wait();
         log::info!("ddpro: pro view closed ({reason}); exit status {status:?}");
         // 会话进程自己放掉的窗口（换屏、被控端报告出错、会话结束）不算；还挂着的这个窗口结束了才看原因
-        let current = {
+        let (current, none_open) = {
             let mut links = links().lock().unwrap();
             let l = links.entry(k).or_default();
             let current = l.down.as_ref().is_some_and(|(p, _)| *p == pid);
             if current {
                 l.down = None;
             }
-            current
+            if l.down.is_none() {
+                l.stats = None;
+            }
+            (current, l.down.is_none())
         };
+        // 被控端出错、切屏时窗口是先放掉再退出的（不再是当前窗口），面板那几行也要在这里撤；换屏后新窗口已经开着的不撤
+        if none_open {
+            push_quality(&session, None);
+        }
         if !current {
             return;
         }

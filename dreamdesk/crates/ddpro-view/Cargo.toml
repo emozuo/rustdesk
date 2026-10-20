@@ -10,6 +10,8 @@ publish = false
 sctk = { package = "smithay-client-toolkit", version = "0.20.0", default-features = false, features = ["calloop"] }
 ddpro-dec = { path = "../ddpro-dec" }
 libc = "0.2"
+# 只读显示接口 / 显示控制器的属性（显示链路检查）。RustDesk 经 softbuffer 已经依赖同一版本，不新增依赖
+drm = "0.12"
 
 [dev-dependencies]
 ddpro-media = { path = "../ddpro-media" }

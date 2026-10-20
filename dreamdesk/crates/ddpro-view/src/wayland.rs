@@ -180,6 +180,19 @@ struct State {
     cursor_pool: Option<SlotPool>,
     /// 当前的远程光标；None = 隐藏
     cursor: Option<CursorImage>,
+    /// 窗口当前所在的屏（合成器报「进入」的最后一块）
+    entered: Option<wl_output::WlOutput>,
+}
+
+/// 窗口所在的屏：显示链路检查用（找对应的显示接口、看画面有没有被缩放）
+#[derive(Debug, Clone)]
+pub struct OutputSummary {
+    /// 合成器给的屏名（如 `DP-2`），不保证等于内核的显示接口名
+    pub name: Option<String>,
+    /// 当前分辨率（物理像素）
+    pub mode: Option<(u32, u32)>,
+    /// 在桌面坐标里的尺寸（逻辑像素）：和物理分辨率不一样就说明这块屏开了缩放
+    pub logical: Option<(u32, u32)>,
 }
 
 pub struct Window {
@@ -243,6 +256,7 @@ impl Window {
                 cursor_surface,
                 cursor_pool: None,
                 cursor: None,
+                entered: None,
             },
         };
         while w.state.size.is_none() || (feedback.is_some() && w.state.formats.is_none()) {
@@ -257,6 +271,21 @@ impl Window {
 
     pub fn size(&self) -> (u32, u32) {
         self.state.size.unwrap_or((0, 0))
+    }
+
+    /// 窗口所在的屏；合成器还没报「进入」时 None。
+    pub fn output(&self) -> Option<OutputSummary> {
+        let o = self.state.entered.as_ref()?;
+        let info = self.state.outputs.info(o)?;
+        Some(OutputSummary {
+            name: info.name.clone(),
+            mode: info
+                .modes
+                .iter()
+                .find(|m| m.current)
+                .map(|m| (m.dimensions.0.max(0) as u32, m.dimensions.1.max(0) as u32)),
+            logical: info.logical_size.map(|(w, h)| (w.max(0) as u32, h.max(0) as u32)),
+        })
     }
 
     /// 防黑屏是否生效（合成器支持 idle-inhibit）。
@@ -448,8 +477,17 @@ impl CompositorHandler for State {
     ) {
     }
     fn frame(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: u32) {}
-    fn surface_enter(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: &wl_output::WlOutput) {}
-    fn surface_leave(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: &wl_output::WlOutput) {}
+    // 光标也是一个表面，它进出屏不算
+    fn surface_enter(&mut self, _: &Connection, _: &QueueHandle<Self>, s: &wl_surface::WlSurface, o: &wl_output::WlOutput) {
+        if s == self.window.wl_surface() {
+            self.entered = Some(o.clone());
+        }
+    }
+    fn surface_leave(&mut self, _: &Connection, _: &QueueHandle<Self>, s: &wl_surface::WlSurface, o: &wl_output::WlOutput) {
+        if s == self.window.wl_surface() && self.entered.as_ref() == Some(o) {
+            self.entered = None;
+        }
+    }
 }
 
 impl OutputHandler for State {

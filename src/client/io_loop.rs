@@ -395,13 +395,17 @@ impl<T: InvokeUiSession> Remote<T> {
                             } else {
                                 Some(self.video_format.clone())
                             };
-                            self.handler.update_quality_status(QualityStatus {
+                            #[allow(unused_mut)]
+                            let mut status = QualityStatus {
                                 speed: Some(speed),
                                 fps,
                                 chroma,
                                 codec_format,
                                 ..Default::default()
-                            });
+                            };
+                            #[cfg(feature = "dd-pro")]
+                            crate::ddpro::client::quality_status(&self.handler, &mut status);
+                            self.handler.update_quality_status(status);
                         }
                     }
                 }

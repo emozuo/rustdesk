@@ -38,9 +38,10 @@ impl Converter {
             device.CreateComputeShader(SHADER, None, Some(&mut cs))?;
 
             let params: [u32; 4] = [width, height, dither as u32, 0];
+            // 抖动运行中能切（精确模式），参数缓冲要可更新
             let desc = D3D11_BUFFER_DESC {
                 ByteWidth: std::mem::size_of_val(&params) as u32,
-                Usage: D3D11_USAGE_IMMUTABLE,
+                Usage: D3D11_USAGE_DEFAULT,
                 BindFlags: D3D11_BIND_CONSTANT_BUFFER.0 as u32,
                 ..Default::default()
             };
@@ -85,6 +86,15 @@ impl Converter {
                 width,
                 height,
             })
+        }
+    }
+
+    /// 开 / 关抖动，下一次转换生效。
+    pub fn set_dither(&self, dither: bool) {
+        let params: [u32; 4] = [self.width, self.height, dither as u32, 0];
+        unsafe {
+            self.ctx
+                .UpdateSubresource(&self.params, 0, None, params.as_ptr() as *const c_void, 0, 0);
         }
     }
 
