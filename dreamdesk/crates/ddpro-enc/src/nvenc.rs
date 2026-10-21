@@ -206,8 +206,6 @@ pub struct EncodedFrame {
     pub is_idr: bool,
     /// 编码器报告的这一帧平均量化参数（验证工具看码控行为用）。
     pub avg_qp: u32,
-    /// 按方块比时：这一帧哪些方块变了（每位一块、低位在前、行优先），第一帧全变。
-    pub changed: Option<Vec<u8>>,
 }
 
 /// HEVC 4:4:4 8bit 编码器。只能在创建它的线程上使用。
@@ -332,18 +330,15 @@ impl Encoder {
     }
 
     /// 编一帧。`src` 是采集到的桌面纹理（BGRA 8bit，和编码器同一设备）；`None` 表示画面没变，
-    /// 重编上一帧（静止时仍按帧率出帧）。第一帧总是关键帧。
+    /// 重编上一帧。第一帧总是关键帧。要知道哪些方块变了、据此决定编不编的，分开用 [`Self::load`] 和 [`Self::encode_loaded`]。
     pub fn encode(&mut self, src: Option<*mut c_void>, force_idr: bool) -> Result<EncodedFrame, Error> {
-        let changed = match src {
-            Some(src) => self.load(src)?,
-            None => self.unchanged(),
-        };
-        let mut frame = self.encode_loaded(force_idr)?;
-        frame.changed = changed;
-        Ok(frame)
+        if let Some(src) = src {
+            self.load(src)?;
+        }
+        self.encode_loaded(force_idr)
     }
 
-    /// 载入新采集到的画面、和上一帧按方块比，不编码：返回哪些方块变了（每位一块，第一帧全变；不按方块比时 None）。
+    /// 载入新采集到的画面、和上一帧按方块比，不编码：返回哪些方块变了（每位一块、低位在前、行优先，第一帧全变；不按方块比时 None）。
     /// 调用方据此决定这一帧编不编（画面「刷新」了但内容没变的就不必编），要编就接着 [`Self::encode_loaded`]。
     pub fn load(&mut self, src: *mut c_void) -> Result<Option<Vec<u8>>, Error> {
         self.conv.load_source(src)
@@ -354,7 +349,7 @@ impl Encoder {
         self.conv.unchanged()
     }
 
-    /// 编最近一次载入的画面（没载入新画面就重编上一帧）。第一帧总是关键帧；返回的 `changed` 为 None，方块比较结果由 [`Self::load`] 给。
+    /// 编最近一次载入的画面（没载入新画面就重编上一帧）。第一帧总是关键帧。
     pub fn encode_loaded(&mut self, force_idr: bool) -> Result<EncodedFrame, Error> {
         self.conv.convert();
         let is_idr = force_idr || self.frame_idx == 0;
@@ -406,7 +401,7 @@ impl Encoder {
         let avg_qp = l.frameAvgQP;
         let s = nv!(self.session.api, nvEncUnlockBitstream)(self.session.enc, self.bitstream);
         self.session.check(s, "nvEncUnlockBitstream")?;
-        Ok(EncodedFrame { data, is_idr, avg_qp, changed: None })
+        Ok(EncodedFrame { data, is_idr, avg_qp })
     }
 
     /// 把最近一次载入的源画面读回内存（BGRA，逐行紧排）。只给颜色比对用，正常编码不走这里。
