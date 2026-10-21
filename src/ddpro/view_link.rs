@@ -29,6 +29,11 @@ use std::{
     time::Duration,
 };
 
+// 专业窗口交来的按键位置码（X 键码 = evdev + 8）：左右 Win、L
+const X_SUPER_L: i32 = 133;
+const X_SUPER_R: i32 = 134;
+const X_L: i32 = 46;
+
 /// 每个会话（按 RustDesk 的会话号）：远程当前屏的编号、各块屏的位置尺寸，专业窗口开着时还有给它发消息的通道。
 #[derive(Default)]
 struct Link {
@@ -504,6 +509,8 @@ pub fn start<T: InvokeUiSession>(
     std::thread::spawn(move || {
         let mut stdout = BufReader::new(stdout);
         let mut warned_mode = false;
+        // 左右 Win 键按着没有（Win+L 用）
+        let mut win_down = [false; 2];
         let mut ended: Option<ViewEnded> = None;
         let reason = loop {
             let msg = match ddpro::read_frame::<ViewUp>(&mut stdout) {
@@ -522,6 +529,18 @@ pub fn start<T: InvokeUiSession>(
                             log::warn!("ddpro: keyboard mode {mode} is not supported in the pro view yet; using {map}");
                         }
                         mode = map;
+                    }
+                    // Windows 不认模拟出来的 Win+L：和 RustDesk 传统键盘模式一样（`keyboard.rs` 的 `legacy_keyboard_mode`），
+                    // 远程是 Windows 时按 Win+L 就发 RustDesk 的「锁定远程」。L 照常发过去（Windows 忽略它，也免得单独松开
+                    // Win 被当成打开开始菜单）
+                    match k.position_code {
+                        X_SUPER_L => win_down[0] = k.down,
+                        X_SUPER_R => win_down[1] = k.down,
+                        X_L if k.down && win_down.contains(&true) && session.peer_platform() == "Windows" => {
+                            log::info!("ddpro: pro view Win+L: lock the remote screen");
+                            session.lock_screen();
+                        }
+                        _ => {}
                     }
                     // 会话号给键盘快捷键用（快捷键作用到哪个标签页）：专业窗口是本会话进程的子窗口，取本进程当前的标签页，
                     // 和 RustDesk 自己不经 Flutter 的全局键盘那条路（`keyboard::client::process_event`）一样
