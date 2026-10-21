@@ -46,6 +46,13 @@ const BITRATE_KBPS: u32 = 30_000;
 const PRESET: u8 = 4;
 /// 静止无损补发的预算上限：内网实测 800 Mbps 突发不丢包，给一半（P1 实施记录第 7 节）；链路扛不住时带宽保护往下调（`lossless.rs`）
 const LOSSLESS_KBPS: u32 = 400_000;
+/// 静止不编码（P1 第 9 项）：画面内容不变后照旧重编这么多帧再停——给用不上无损补块的主控端（缩放显示）留画质收敛
+/// （P1 第 1 项实测静止后第 30 帧 PSNR 58 dB）。要大于无损的静止门槛（`lossless.rs` 的 STILL_FRAMES，6 帧）：停编期间
+/// 不再给无损模块报「这帧哪些块没变」，各块的静止计数得在停编前到顶
+const STILL_TAIL: u32 = FPS;
+const _: () = assert!(STILL_TAIL > super::lossless::STILL_FRAMES as u32);
+/// 停编期间每隔这么久还编一帧（重复画面）：主控端 3 秒收不到画面包就判通道断了；这一帧也让主控端发现停编前最后一帧丢的包、要求补发
+const STILL_KEEPALIVE: Duration = Duration::from_secs(1);
 /// 主控端收到「同意」后来打招呼的时限
 const CHANNEL_TIMEOUT: Duration = Duration::from_secs(3);
 /// 一个采集器建好后第一帧最多等多久（DXGI 开始采集后第一次取帧总会给出整屏）
@@ -524,6 +531,9 @@ fn stream(ps: &ProService, session: &Session, channel: Channel) -> ResultType<(E
     // 分段延迟只记新采集到的画面：第一帧在通道建立前就取了（含等主控端打招呼的时间），
     // 没有新画面时编码器重复上一帧，这两种都不带时间
     let mut captured = None;
+    // 静止不编码：画面内容连续多少个节拍没变、上次真编码是什么时候
+    let mut still: u32 = 0;
+    let mut last_encode = first;
     let mut last_display_check = first;
     let end = loop {
         if !ps.ok() {
@@ -565,39 +575,55 @@ fn stream(ps: &ProService, session: &Session, channel: Channel) -> ResultType<(E
             };
             captured = src.map(|_| Instant::now());
         }
+        // 先载入、按方块比，再定编不编：采集说「有新画面」不等于内容变了——锁屏界面、某些程序会一直刷新同样的画面
+        // （2026-10-21 在 209.32 上实测：锁屏时每秒 60 帧「新画面」、一块都没变）。不按方块比（关了无损）时只能信采集
+        let changed = match src {
+            Some(t) => enc.load(t).map_err(|e| anyhow!("{e}"))?,
+            None => enc.unchanged(),
+        };
+        let moved = changed.as_ref().map_or(src.is_some(), |b| b.iter().any(|&x| x != 0));
+        still = if moved { 0 } else { still.saturating_add(1) };
         let want = session.dither.load(Ordering::Acquire);
         if want != dither {
             dither = want;
             enc.set_dither(dither);
+            // 改了颜色转换：重编的帧才带上新设置，按刚有变化处理
+            still = 0;
             log::info!("ddpro: pro video on display {display}: dither {}", if dither { "on" } else { "off" });
         }
         let force = sender.take_keyframe_request();
-        let f = enc.encode(src, force).map_err(|e| anyhow!("{e}"))?;
-        let stamp = captured.map(|captured| Stamp {
-            captured,
-            encoded: Instant::now(),
-        });
         let ts = (ts_base + i * 90_000 / FPS as u64) as u32;
-        let mut data = f.data;
-        if let Some(every) = corrupt_every {
-            if !f.is_idr && data.len() > 64 && last_corrupt.elapsed() >= every {
-                last_corrupt = Instant::now();
-                let k = data.len() / 2;
-                data[k] ^= 0xff;
-                log::warn!("ddpro: diagnostic {DIAG_CORRUPT}: corrupted byte {k} of a {}-byte frame", data.len());
+        // 静止不编码（P1 第 9 项）：画面停了一阵就不再每帧重编同一张画面，硬件编码器空出来（多屏时给别的屏用、也给用户自己的
+        // 程序用）；主控端要关键帧时照编，隔一阵编一帧当心跳。无损补块照常在每个节拍补
+        let idle = !force && still > STILL_TAIL && last_encode.elapsed() < STILL_KEEPALIVE;
+        if !idle {
+            let f = enc.encode_loaded(force).map_err(|e| anyhow!("{e}"))?;
+            last_encode = Instant::now();
+            let stamp = captured.map(|captured| Stamp {
+                captured,
+                encoded: last_encode,
+            });
+            let mut data = f.data;
+            if let Some(every) = corrupt_every {
+                if !f.is_idr && data.len() > 64 && last_corrupt.elapsed() >= every {
+                    last_corrupt = Instant::now();
+                    let k = data.len() / 2;
+                    data[k] ^= 0xff;
+                    log::warn!("ddpro: diagnostic {DIAG_CORRUPT}: corrupted byte {k} of a {}-byte frame", data.len());
+                }
+            }
+            if let Some(bitmap) = lossless.as_mut().and_then(|l| l.changed(changed, f.is_idr)) {
+                sender.send_changed(ts, &bitmap).map_err(|e| anyhow!("{e}"))?;
+            }
+            sender.send_frame(&data, ts, stamp).map_err(|e| anyhow!("{e}"))?;
+            if let Some(d) = dump.as_mut() {
+                if std::io::Write::write_all(d, &data).is_err() {
+                    dump = None;
+                }
             }
         }
-        if let Some(bitmap) = lossless.as_mut().and_then(|l| l.changed(f.changed, f.is_idr)) {
-            sender.send_changed(ts, &bitmap).map_err(|e| anyhow!("{e}"))?;
-        }
-        sender.send_frame(&data, ts, stamp).map_err(|e| anyhow!("{e}"))?;
         if let Some(l) = lossless.as_mut() {
             l.pump(&mut enc, &mut sender, ts)?;
-        }
-        if let Some(d) = dump.as_mut() {
-            if std::io::Write::write_all(d, &data).is_err() {
-                dump = None;
-            }
         }
         if sender.peer_said_bye() {
             break End::ControllerClosed;

@@ -335,9 +335,27 @@ impl Encoder {
     /// 重编上一帧（静止时仍按帧率出帧）。第一帧总是关键帧。
     pub fn encode(&mut self, src: Option<*mut c_void>, force_idr: bool) -> Result<EncodedFrame, Error> {
         let changed = match src {
-            Some(src) => self.conv.load_source(src)?,
-            None => self.conv.unchanged(),
+            Some(src) => self.load(src)?,
+            None => self.unchanged(),
         };
+        let mut frame = self.encode_loaded(force_idr)?;
+        frame.changed = changed;
+        Ok(frame)
+    }
+
+    /// 载入新采集到的画面、和上一帧按方块比，不编码：返回哪些方块变了（每位一块，第一帧全变；不按方块比时 None）。
+    /// 调用方据此决定这一帧编不编（画面「刷新」了但内容没变的就不必编），要编就接着 [`Self::encode_loaded`]。
+    pub fn load(&mut self, src: *mut c_void) -> Result<Option<Vec<u8>>, Error> {
+        self.conv.load_source(src)
+    }
+
+    /// 画面没变时的方块比结果：按方块比时全是 0，不按方块比时 None。
+    pub fn unchanged(&self) -> Option<Vec<u8>> {
+        self.conv.unchanged()
+    }
+
+    /// 编最近一次载入的画面（没载入新画面就重编上一帧）。第一帧总是关键帧；返回的 `changed` 为 None，方块比较结果由 [`Self::load`] 给。
+    pub fn encode_loaded(&mut self, force_idr: bool) -> Result<EncodedFrame, Error> {
         self.conv.convert();
         let is_idr = force_idr || self.frame_idx == 0;
         unsafe {
@@ -351,10 +369,9 @@ impl Encoder {
 
             let s = nv!(self.session.api, nvEncUnmapInputResource)(self.session.enc, m.mappedResource);
             let unmapped = self.session.check(s, "nvEncUnmapInputResource");
-            let mut frame = result?;
+            let frame = result?;
             unmapped?;
             self.frame_idx += 1;
-            frame.changed = changed;
             Ok(frame)
         }
     }
