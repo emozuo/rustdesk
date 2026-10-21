@@ -234,9 +234,11 @@ impl Ball {
     }
 
     /// 被控端报来远程这块屏的分辨率信息（列表为空时只更新当前分辨率，菜单沿用上次的列表）
-    pub fn set_resolutions(&mut self, current: (u32, u32), resolutions: Vec<(u32, u32)>, original: (u32, u32)) {
+    pub fn set_resolutions(&mut self, current: (u32, u32), mut resolutions: Vec<(u32, u32)>, original: (u32, u32)) {
         self.remote_size = current;
         if !resolutions.is_empty() {
+            // 和 RustDesk 一样排：宽从大到小、宽相同按高从大到小（`model.dart` 解析分辨率列表处）
+            resolutions.sort_by(|a, b| b.cmp(a));
             self.resolutions = resolutions;
             self.original = original;
         }
