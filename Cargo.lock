@@ -2117,11 +2117,13 @@ name = "ddpro-media"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "crc32fast",
  "rand 0.8.5",
  "rtp",
  "socket2 0.5.10",
  "webrtc-srtp",
  "webrtc-util",
+ "zstd",
 ]
 
 [[package]]

@@ -12,3 +12,6 @@ socket2 = "0.5"
 rtp = { git = "https://github.com/rustdesk-org/webrtc", rev = "49c89bd8d30e6e62e4c1a96cee38fdc11f79ef63" }
 webrtc-srtp = { git = "https://github.com/rustdesk-org/webrtc", rev = "49c89bd8d30e6e62e4c1a96cee38fdc11f79ef63" }
 webrtc-util = { git = "https://github.com/rustdesk-org/webrtc", rev = "49c89bd8d30e6e62e4c1a96cee38fdc11f79ef63" }
+# 无损方块：zstd、crc32fast 都是 RustDesk 已经在用的版本（hbb_common 的压缩、别的依赖的校验），不新增
+zstd = "0.13"
+crc32fast = "1"

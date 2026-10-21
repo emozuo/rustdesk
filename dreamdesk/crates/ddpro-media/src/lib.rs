@@ -4,6 +4,7 @@
 
 pub mod channel;
 pub mod hevc;
+pub mod tile;
 pub mod timing;
 
 pub use channel::{Error, Event, Keys, Listener, Receiver, RecvStats, SendStats, Sender, Stamp};
