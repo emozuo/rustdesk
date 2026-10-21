@@ -164,8 +164,7 @@ pub fn on_message<T: InvokeUiSession>(data: &[u8], sender: &UnboundedSender<Data
             throttled_log!(
                 PEER_LOG_INTERVAL,
                 info,
-                "ddpro: pro session accepted on display {}, format {}",
-                accept.display_index,
+                "ddpro: pro session accepted, format {}",
                 ddpro::describe_format(&accept.format)
             );
             if receive_only() {
