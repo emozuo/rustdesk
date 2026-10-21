@@ -4,6 +4,7 @@
 //! 每块的状态：变了 → 待补（静止满 [`STILL_FRAMES`] 帧才读回）→ 读回后在压缩 / 等发送 → 已发出。
 //! 读回时记下这块的「代数」，压完或要发时代数变了（这块又动过）就扔掉，不发旧图。主控端还按时间戳再挡一道。
 //! 关键帧时整屏重来：主控端丢包要关键帧时清掉了全部无损方块，这里把这一帧当作全变了。
+//! 补发速率有带宽保护（[`Rate`]）：链路扛不住就降，平稳了再加。
 
 use ddpro::{
     enc::Encoder,
@@ -31,6 +32,125 @@ const WORKERS: usize = 3;
 const LOG_INTERVAL: Duration = Duration::from_secs(5);
 /// 整屏级的「补完」日志最多这么久一行（幻灯片、低帧率动画会一直整屏变）
 const BIG_LOG_INTERVAL: Duration = Duration::from_secs(1);
+
+// 带宽保护（P1 实施记录「带宽保护」）：补发速率按内网定的上限起步，链路扛不住（主控端大量要补发、或救不回来要了关键帧）就减半，
+// 平稳一阵再慢慢加回去。思路同 RustDesk 的画面质量自适应（`src/server/video_qos.rs`：拥塞就降、恢复慢慢来、刚恢复的档位很快又拥塞
+// 就压低），信号换成这条 UDP 通道上的丢包（RustDesk 那条是可靠连接，看的是延迟）
+/// 补发速率最低降到多少（千比特每秒）
+const RATE_MIN_KBPS: u32 = 10_000;
+/// 多久看一次有没有拥塞
+const ADAPT_WINDOW: Duration = Duration::from_millis(500);
+/// 这段时间里主控端要求补发的包占发出的包超过这个比例算拥塞（WebRTC 拥塞控制按丢包降速的门槛也是 2%）
+const LOSS_THRESHOLD: f64 = 0.02;
+/// 补发请求少于这么多个不算（偶发的一两个丢包）
+const LOSS_MIN_PACKETS: u64 = 10;
+/// 平稳多久往上加一档、每档加多少
+const RAISE_AFTER: Duration = Duration::from_secs(2);
+const RAISE_FACTOR: f64 = 1.25;
+/// 加上去之后这么快又拥塞，下次要等的时间翻倍，最多等这么久
+const RAISE_AFTER_MAX: Duration = Duration::from_secs(16);
+/// 补发期间救不回来、要了关键帧：补发先停这么久
+const PAUSE_ON_KEYFRAME: Duration = Duration::from_secs(1);
+/// 速率变化的日志最多这么久一行
+const RATE_LOG_INTERVAL: Duration = Duration::from_secs(1);
+
+/// 补发速率的带宽保护
+struct Rate {
+    max_kbps: u32,
+    fps: u32,
+    kbps: u32,
+    window_start: Instant,
+    /// 窗口开始时通道发出的包数、补发的包数
+    base: (u64, u64),
+    /// 上次降速 / 加速之后多久没拥塞了
+    calm_since: Instant,
+    raise_after: Duration,
+    raised_at: Option<Instant>,
+    paused_until: Option<Instant>,
+    /// 最近一次发出方块的时刻：只有在补发的时候拥塞才算补发的账，没在补发时也不往上加（没有凭据）
+    last_tile: Option<Instant>,
+    last_log: Option<Instant>,
+}
+
+impl Rate {
+    fn new(max_kbps: u32, fps: u32) -> Self {
+        let now = Instant::now();
+        Self {
+            max_kbps,
+            fps,
+            kbps: max_kbps,
+            window_start: now,
+            base: (0, 0),
+            calm_since: now,
+            raise_after: RAISE_AFTER,
+            raised_at: None,
+            paused_until: None,
+            last_tile: None,
+            last_log: None,
+        }
+    }
+
+    fn sending_lately(&self, now: Instant) -> bool {
+        self.last_tile.is_some_and(|t| now.duration_since(t) < ADAPT_WINDOW * 2)
+    }
+
+    /// 每帧发完之后调：`keyframe` 是这一帧是不是应主控端要求出的关键帧（救不回来的丢包、解码出错等）
+    fn adapt(&mut self, sender: &mut Sender, keyframe: bool) {
+        let now = Instant::now();
+        if keyframe && self.sending_lately(now) {
+            self.paused_until = Some(now + PAUSE_ON_KEYFRAME);
+            self.lower(sender, now, "the controller asked for a keyframe while tiles were being sent");
+        }
+        if now.duration_since(self.window_start) < ADAPT_WINDOW {
+            return;
+        }
+        let (packets, rtx) = (sender.stats.packets, sender.stats.retransmitted);
+        let (sent, lost) = (packets.saturating_sub(self.base.0), rtx.saturating_sub(self.base.1));
+        self.base = (packets, rtx);
+        self.window_start = now;
+        if lost >= LOSS_MIN_PACKETS && lost as f64 > LOSS_THRESHOLD * sent as f64 {
+            if self.sending_lately(now) {
+                self.lower(sender, now, &format!("{lost} of {sent} packets resent in {} ms", ADAPT_WINDOW.as_millis()));
+            }
+        } else if self.kbps < self.max_kbps
+            && self.sending_lately(now)
+            && now.duration_since(self.calm_since) >= self.raise_after
+        {
+            self.kbps = ((self.kbps as f64 * RAISE_FACTOR) as u32).min(self.max_kbps);
+            self.raised_at = Some(now);
+            self.calm_since = now;
+            if self.kbps == self.max_kbps {
+                self.raise_after = RAISE_AFTER;
+            }
+            self.apply(sender, now, "no congestion");
+        }
+    }
+
+    fn lower(&mut self, sender: &mut Sender, now: Instant, why: &str) {
+        // 刚加上去就拥塞：这一档不稳，下次多等一阵再加
+        if self.raised_at.is_some_and(|t| now.duration_since(t) < self.raise_after) {
+            self.raise_after = (self.raise_after * 2).min(RAISE_AFTER_MAX);
+        }
+        self.raised_at = None;
+        self.calm_since = now;
+        if self.kbps > RATE_MIN_KBPS {
+            self.kbps = (self.kbps / 2).max(RATE_MIN_KBPS);
+            self.apply(sender, now, why);
+        }
+    }
+
+    fn apply(&mut self, sender: &mut Sender, now: Instant, why: &str) {
+        sender.pace_tiles(self.kbps, self.fps);
+        if self.last_log.map_or(true, |t| now.duration_since(t) >= RATE_LOG_INTERVAL) {
+            self.last_log = Some(now);
+            log::info!("ddpro: lossless rate {} Mbps ({why})", self.kbps / 1000);
+        }
+    }
+
+    fn paused(&self) -> bool {
+        self.paused_until.is_some_and(|t| Instant::now() < t)
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum State {
@@ -75,10 +195,14 @@ pub(super) struct Lossless {
     since_change: (u64, u64),
     complete: bool,
     last_log: Option<Instant>,
+    rate: Rate,
+    /// 这一帧是关键帧（带宽保护看它）
+    keyframe: bool,
 }
 
 impl Lossless {
-    pub(super) fn new(width: u32, height: u32) -> ResultType<Self> {
+    /// `max_kbps` / `fps`：补发速率的上限（通道上已按它设好方块预算）和画面帧率，带宽保护往下调时照这两个重设预算
+    pub(super) fn new(width: u32, height: u32, max_kbps: u32, fps: u32) -> ResultType<Self> {
         let grid = Grid::new(width, height);
         let n = grid.count();
         if n > u16::MAX as usize + 1 {
@@ -127,12 +251,15 @@ impl Lossless {
             since_change: (0, 0),
             complete: false,
             last_log: None,
+            rate: Rate::new(max_kbps, fps),
+            keyframe: false,
         })
     }
 
     /// 这一帧发出之前调：记下哪些方块变了，返回要发给主控端的位图（没有方块变就是 `None`，不用发）。
     pub(super) fn changed(&mut self, bitmap: Option<Vec<u8>>, keyframe: bool) -> Option<Vec<u8>> {
         let n = self.grid.count();
+        self.keyframe = keyframe;
         let bitmap = if keyframe {
             vec![0xff; n.div_ceil(8)]
         } else {
@@ -160,6 +287,7 @@ impl Lossless {
 
     /// 这一帧发出之后调：读回该补的方块交去压缩，压好的按预算发出去。`ts` 是刚发的这一帧的时间戳（读回的像素取自它）。
     pub(super) fn pump(&mut self, enc: &mut Encoder, sender: &mut Sender, ts: u32) -> ResultType<()> {
+        self.rate.adapt(sender, std::mem::take(&mut self.keyframe));
         self.read(enc, ts)?;
         while let Ok(r) = self.done.try_recv() {
             let d = r?;
@@ -222,6 +350,9 @@ impl Lossless {
 
     /// 按方块预算发：有余量就发（可能超出一块的量，记到下一帧的账上），过时的扔掉
     fn send(&mut self, sender: &mut Sender) -> ResultType<()> {
+        if self.rate.paused() {
+            return Ok(());
+        }
         while let Some(d) = self.ready.pop() {
             if d.generation != self.generation[d.index] {
                 continue;
@@ -234,6 +365,7 @@ impl Lossless {
                 .send_tile(d.ts, d.index as u16, &d.data)
                 .map_err(|e| anyhow!("{e}"))?;
             self.state[d.index] = State::Sent;
+            self.rate.last_tile = Some(Instant::now());
             self.since_change.0 += 1;
             self.since_change.1 += d.data.len() as u64;
         }

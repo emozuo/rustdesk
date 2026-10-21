@@ -44,7 +44,7 @@ use std::{
 const FPS: u32 = 60;
 const BITRATE_KBPS: u32 = 30_000;
 const PRESET: u8 = 4;
-/// 静止无损补发的预算：内网实测 800 Mbps 突发不丢包，给一半（P1 实施记录第 7 节）
+/// 静止无损补发的预算上限：内网实测 800 Mbps 突发不丢包，给一半（P1 实施记录第 7 节）；链路扛不住时带宽保护往下调（`lossless.rs`）
 const LOSSLESS_KBPS: u32 = 400_000;
 /// 主控端收到「同意」后来打招呼的时限
 const CHANNEL_TIMEOUT: Duration = Duration::from_secs(3);
@@ -466,7 +466,7 @@ fn stream(ps: &ProService, session: &Session, channel: Channel) -> ResultType<(E
     let (w, h) = texture_size(src)?;
     let mut dither = session.dither.load(Ordering::Acquire);
     let mut lossless = match std::env::var_os(DIAG_NO_LOSSLESS) {
-        None => Some(Lossless::new(w, h)?),
+        None => Some(Lossless::new(w, h, LOSSLESS_KBPS, FPS)?),
         Some(_) => None,
     };
     let mut enc = Encoder::new(
