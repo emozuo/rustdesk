@@ -95,6 +95,10 @@ pub fn decode(data: &[u8]) -> Result<(u32, u32, Vec<u8>), Error> {
     let w = u16::from_le_bytes([data[1], data[2]]) as usize;
     let h = u16::from_le_bytes([data[3], data[4]]) as usize;
     let crc = u32::from_le_bytes([data[5], data[6], data[7], data[8]]);
+    // 数据来自网络：尺寸先核对（0 会让还原预测越界，过大会按它预分配内存）
+    if w == 0 || h == 0 || w > TILE as usize || h > TILE as usize {
+        return Err(Error(format!("bad tile size {w}x{h}")));
+    }
     let n = w * h;
     let residual = zstd::bulk::decompress(&data[HEADER..], n * 3).map_err(|e| Error(format!("zstd: {e}")))?;
     if residual.len() != n * 3 {

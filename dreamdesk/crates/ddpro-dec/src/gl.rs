@@ -223,9 +223,8 @@ pub struct GlConverter {
     targets: Vec<Target>,
     width: u32,
     height: u32,
-    /// 解码器画面池里每张画面导入一次就留着（按画面编号）；尺寸变了（被控端重建编码器）就全部重来
+    /// 解码器画面池里每张画面导入一次就留着（按画面编号）；画面池重建时调用方用 [`GlConverter::forget_sources`] 清掉
     sources: HashMap<u32, Source>,
-    source_size: (u32, u32),
     renderer: String,
     /// 自己分配的输出画面（[`GlConverter::new`]），和 `targets` 一一对应；[`GlConverter::on`] 时为空
     bos: Vec<Bo>,
@@ -276,29 +275,46 @@ impl GlConverter {
         let display = unsafe { egl.get_platform_display(PLATFORM_GBM_KHR, gbm.dev, &[egl::ATTRIB_NONE]) }
             .map_err(err("open the EGL display"))?;
         egl.initialize(display).map_err(err("initialize EGL"))?;
-        let ext = egl.query_string(Some(display), egl::EXTENSIONS).map_err(err("query EGL extensions"))?;
-        let ext = ext.to_string_lossy();
-        for need in ["EGL_EXT_image_dma_buf_import", "EGL_EXT_image_dma_buf_import_modifiers", "EGL_KHR_surfaceless_context", "EGL_KHR_no_config_context"] {
-            if !ext.split(' ').any(|e| e == need) {
-                egl.terminate(display).ok();
-                return Err(Error(format!("EGL lacks {need}")));
+        // 这之后出错要把上下文和显示放掉再返回：EGL 显示按 GBM 设备地址认，调用方紧接着换一种做法新开的 GBM 设备
+        // 很可能落在同一地址，会拿到这个仍处于「已初始化」、底下的设备却已释放的显示
+        let mut created = None;
+        let rest = (|| {
+            let ext = egl.query_string(Some(display), egl::EXTENSIONS).map_err(err("query EGL extensions"))?;
+            let ext = ext.to_string_lossy();
+            for need in ["EGL_EXT_image_dma_buf_import", "EGL_EXT_image_dma_buf_import_modifiers", "EGL_KHR_surfaceless_context", "EGL_KHR_no_config_context"] {
+                if !ext.split(' ').any(|e| e == need) {
+                    return Err(Error(format!("EGL lacks {need}")));
+                }
             }
-        }
-        egl.bind_api(egl::OPENGL_ES_API).map_err(err("bind OpenGL ES"))?;
-        let no_config = unsafe { egl::Config::from_ptr(std::ptr::null_mut()) };
-        let context = egl
-            .create_context(display, no_config, None, &[egl::CONTEXT_MAJOR_VERSION, 3, egl::NONE])
-            .map_err(err("create the OpenGL ES 3 context"))?;
-        egl.make_current(display, None, None, Some(context)).map_err(err("make the context current"))?;
-        let gl = unsafe {
-            glow::Context::from_loader_function(|s| egl.get_proc_address(s).map_or(std::ptr::null(), |p| p as *const c_void))
+            egl.bind_api(egl::OPENGL_ES_API).map_err(err("bind OpenGL ES"))?;
+            let no_config = unsafe { egl::Config::from_ptr(std::ptr::null_mut()) };
+            let context = egl
+                .create_context(display, no_config, None, &[egl::CONTEXT_MAJOR_VERSION, 3, egl::NONE])
+                .map_err(err("create the OpenGL ES 3 context"))?;
+            created = Some(context);
+            egl.make_current(display, None, None, Some(context)).map_err(err("make the context current"))?;
+            let gl = unsafe {
+                glow::Context::from_loader_function(|s| egl.get_proc_address(s).map_or(std::ptr::null(), |p| p as *const c_void))
+            };
+            let image_target = egl
+                .get_proc_address("glEGLImageTargetTexture2DOES")
+                .ok_or_else(|| Error("no glEGLImageTargetTexture2DOES".into()))?;
+            let image_target: ImageTargetFn = unsafe { std::mem::transmute(image_target) };
+            let renderer = unsafe { gl.get_parameter_string(glow::RENDERER) };
+            let (program, vao, ten, tile) = unsafe { build_program(&gl)? };
+            Ok((context, gl, image_target, renderer, program, vao, ten, tile))
+        })();
+        let (context, gl, image_target, renderer, program, vao, ten, tile) = match rest {
+            Ok(v) => v,
+            Err(e) => {
+                egl.make_current(display, None, None, None).ok();
+                if let Some(c) = created {
+                    egl.destroy_context(display, c).ok();
+                }
+                egl.terminate(display).ok();
+                return Err(e);
+            }
         };
-        let image_target = egl
-            .get_proc_address("glEGLImageTargetTexture2DOES")
-            .ok_or_else(|| Error("no glEGLImageTargetTexture2DOES".into()))?;
-        let image_target: ImageTargetFn = unsafe { std::mem::transmute(image_target) };
-        let renderer = unsafe { gl.get_parameter_string(glow::RENDERER) };
-        let (program, vao, ten, tile) = unsafe { build_program(&gl)? };
         Ok(Self {
             egl,
             display,
@@ -316,7 +332,6 @@ impl GlConverter {
             width,
             height,
             sources: HashMap::new(),
-            source_size: (0, 0),
             renderer,
             bos: Vec::new(),
             gbm,
@@ -356,10 +371,6 @@ impl GlConverter {
         let size = (frame.width(), frame.height());
         if size != (self.width, self.height) {
             return Err(Error(format!("{}x{} frame on a {}x{} output: shaders only convert 1:1", size.0, size.1, self.width, self.height)));
-        }
-        if size != self.source_size {
-            self.drop_sources();
-            self.source_size = size;
         }
         // 换尺寸时新转换器先建、旧的后析构，旧的析构会把线程的当前上下文清掉：每次都切回自己的（已是当前的话驱动不做事）
         self.egl
@@ -445,7 +456,8 @@ impl GlConverter {
         if tile > 0 && mask.len() != (cols * rows) as usize {
             return Err(Error(format!("mask of {} bytes for {cols}x{rows} tiles", mask.len())));
         }
-        self.tile_size = tile;
+        // 新掩码传上去之前不用无损：上传失败时显卡里还是旧掩码，照它画会让已经变了的块显示旧图
+        self.tile_size = 0;
         if tile == 0 {
             return Ok(());
         }
@@ -481,7 +493,10 @@ impl GlConverter {
                 glow::PixelUnpackData::Slice(Some(mask)),
             );
             match gl.get_error() {
-                glow::NO_ERROR => Ok(()),
+                glow::NO_ERROR => {
+                    self.tile_size = tile;
+                    Ok(())
+                }
                 e => Err(Error(format!("OpenGL error {e:#x} uploading the lossless mask"))),
             }
         }
@@ -579,6 +594,17 @@ impl GlConverter {
             self.egl.destroy_image(self.display, image).ok();
         })?;
         Ok(Source { image, texture, ten })
+    }
+
+    /// 解码画面的尺寸变了（解码器重建了画面池，画面编号会被新画面复用）：按编号缓存的导入全部作废，下次用到时重新导入。
+    /// 只做 1:1 的 [`GlConverter::convert`] 自己看不到别的尺寸的画面（那些走视频处理单元），所以由调用方在尺寸变化时调。
+    pub fn forget_sources(&mut self) {
+        if self.sources.is_empty() {
+            return;
+        }
+        if self.egl.make_current(self.display, None, None, Some(self.context)).is_ok() {
+            self.drop_sources();
+        }
     }
 
     fn drop_sources(&mut self) {

@@ -66,6 +66,8 @@ pub(super) struct Lossless {
     /// 掩码：每块一个字节，255 = 画面里这块是无损像素
     mask: Vec<u8>,
     mask_dirty: bool,
+    /// 最近一次上屏的是整屏无损的画面（着色器画的、掩码是最新的）
+    shown_full: bool,
     pub counts: Counts,
 }
 
@@ -105,6 +107,7 @@ pub(super) fn start(wake: &UnixStream) -> std::io::Result<(Decoders, Lossless)> 
             changed_at: Vec::new(),
             mask: Vec::new(),
             mask_dirty: true,
+            shown_full: false,
             counts: Counts::default(),
         },
     ))
@@ -196,6 +199,16 @@ impl Lossless {
         self.mask.fill(0);
         self.mask_dirty = true;
         log::info!("ddpro: pro view lossless tiles cleared");
+    }
+
+    /// 上屏了一帧之后调：`by_shader` 是这一帧是不是着色器画的（缩放显示走视频处理单元，不算）。
+    pub(super) fn presented(&mut self, by_shader: bool) {
+        self.shown_full = by_shader && !self.mask_dirty && self.coverage() == Some(100);
+    }
+
+    /// 屏幕上已经是整屏无损的画面，此后没有任何方块变过、也没有新方块：再画一遍结果一字不差，可以不画。
+    pub(super) fn settled(&self) -> bool {
+        self.shown_full && !self.mask_dirty
     }
 
     /// 画面里无损方块占的比例（0–100），还没有画面时 None

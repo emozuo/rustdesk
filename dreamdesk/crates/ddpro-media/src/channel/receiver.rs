@@ -39,6 +39,8 @@ const LOSS_REPEAT: Duration = Duration::from_millis(200);
 const LOSS_REREQUEST: Duration = Duration::from_millis(100);
 /// 一个补发请求里最多列多少个序号（控制包不超过 UDP_PAYLOAD）
 const NACK_PER_PACKET: usize = 256;
+/// 一条方块消息最长多少字节（一块 128×128 的数据最多约 49 KB，「哪些方块变了」的位图更小）
+const MSG_MAX: usize = 256 * 1024;
 
 pub enum Event {
     /// 收齐的一帧（带起始码的 H.265 码流）。丢包之后，第一个收到的总是关键帧。
@@ -51,7 +53,7 @@ pub enum Event {
         changed: Option<Vec<u8>>,
     },
     /// 一个无损方块（[`crate::tile::decode`] 解）：`timestamp` 是它的像素取自的那一帧的时间戳，`index` 是方块号。
-    /// 等关键帧期间（丢包之后）收到的不交出去——接收端在那时已经要撤掉所有方块，被控端随后会重新补。
+    /// 等关键帧期间（丢包之后）收到的不交出去——随后的关键帧带「整屏都变了」，调用方据此撤掉所有方块，被控端重新补。
     Tile { timestamp: u32, index: u16, data: Vec<u8> },
     /// 救不回来的丢包（补发也没等到）。接收端已经在通道上请求了关键帧，调用方只需记录；
     /// 等关键帧期间每隔 0.2 秒再请求、再报一次（关键帧的包已经开始到了的话不算等太久）。
@@ -403,7 +405,7 @@ impl Receiver {
         }
         self.next_gap_check = now + GAP_CHECK;
         if let Some(expect) = self.expect {
-            let stalled = self.frame_first.is_some() && self.last_media.elapsed() >= TAIL_PROBE;
+            let stalled = (self.frame_first.is_some() || self.msg.is_some()) && self.last_media.elapsed() >= TAIL_PROBE;
             if stalled && self.missing.is_empty() {
                 self.missing.insert(
                     expect,
@@ -545,6 +547,11 @@ impl Receiver {
             return;
         };
         msg.extend_from_slice(body);
+        // 合法消息远小于此（一块最多约 49 KB）：一直不来结束标记的不再往上攒
+        if msg.len() > MSG_MAX {
+            self.msg = None;
+            return;
+        }
         if !p.header.marker {
             return;
         }
@@ -575,7 +582,7 @@ impl Receiver {
         self.keyframe_arriving = false;
         self.frame_clean = false;
         // 残帧的首包时间和被控端时间都作废，不能带到下一帧；拼了一半的方块消息、没挂上去的「哪些方块变了」也作废
-        // （调用方收到丢包就撤掉所有方块）
+        // （调用方不用为丢包撤方块：被控端随后的关键帧带「整屏都变了」，挂在关键帧上撤）
         self.frame_first = None;
         self.frame_stamp = None;
         self.msg = None;

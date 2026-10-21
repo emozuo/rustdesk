@@ -62,6 +62,8 @@ const ISSUE_TRANSFORM: &str = "color_transform";
 const ISSUE_SCALED: &str = "scaled";
 /// 没有窗口事件、也没有新画面时最多等这么久（只为定时检查会话是否还在；新画面由收包线程叫醒，不靠它）
 const IDLE_WAIT: Duration = Duration::from_millis(100);
+/// 诊断：静止且整屏无损时照样每帧上屏（默认不上屏，见主循环）
+const DIAG_ALWAYS_PRESENT: &str = "DDPRO_DIAG_ALWAYS_PRESENT";
 /// 诊断：画面每次补到整屏无损时，从着色器那侧读回刚画好的画面（RGB 逐像素、从上到下）存到这个文件，和被控端原图逐像素比
 const DIAG_LOSSLESS_DUMP: &str = "DDPRO_DIAG_LOSSLESS_DUMP";
 
@@ -448,6 +450,9 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
     let mut format_checked: Option<(u32, u32)> = None;
     let lossless_dump = std::env::var_os(DIAG_LOSSLESS_DUMP);
     let mut was_full = false;
+    let always_present = std::env::var_os(DIAG_ALWAYS_PRESENT).is_some();
+    // 这一段日志间隔里因为静止而没上屏的帧数
+    let mut idle_frames = 0u64;
     // 主循环包一层：中途任何一步出错，也马上告诉被控端不要了（不让它白等 3 秒心跳超时）
     let mut main_loop = || -> ResultType<(Kind, String)> {
         Ok(loop {
@@ -618,17 +623,39 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
             // 已到的帧都记上了变化，再放方块（见 view_lossless 开头）；只在 1:1 着色器显示时用
             let one_to_one = lossless.size() == Some(size);
             lossless.apply(shader.as_mut().filter(|_| one_to_one));
+            // 静止且整屏已是无损像素：屏幕上的就是被控端的原图，这一帧解出来再画一遍也一字不差——只等解码完（解码出错照样要关键帧），
+            // 不转换、不交给合成器（静止时专业窗口和合成器每秒白画 60 帧）。哪块一动，那一帧照常画
+            let latest = match latest {
+                Some((frame, _)) if !always_present && one_to_one && shader.is_some() && lossless.settled() => {
+                    if let Err(e) = dec.wait(&frame) {
+                        throttled_log!(
+                            PEER_LOG_INTERVAL,
+                            warn,
+                            "ddpro: pro view decode error while waiting for the GPU, asking for a keyframe: {e}"
+                        );
+                        resync.store(true, Ordering::Release);
+                    }
+                    idle_frames += 1;
+                    None
+                }
+                other => other,
+            };
             if let Some((frame, times)) = latest {
                 // 门槛按结果定（P0 设计决定 3）：实际解出来的不是谈好的 4:4:4 8bit 就大声失败，不静默降级
-                let size = (frame.width(), frame.height());
-                if format_checked != Some(size) {
+                // 不叫 size：下面「1:1 才用着色器」要和外层的窗口尺寸比
+                let frame_size = (frame.width(), frame.height());
+                if format_checked != Some(frame_size) {
                     let f = frame.format();
                     if !(f.chroma_444 && f.bit_depth == 8) {
                         bail!("the decoded video is {} ({}bit, 4:4:4 {}), not the agreed 4:4:4 8bit", f.name, f.bit_depth, f.chroma_444);
                     }
-                    format_checked = Some(size);
+                    format_checked = Some(frame_size);
                     panel.format = Some((f.chroma_444, f.bit_depth));
-                    panel.frame = Some(size);
+                    panel.frame = Some(frame_size);
+                    // 画面尺寸变了，解码器重建了画面池，编号会被新画面复用：着色器按编号缓存的导入作废
+                    if let Some(s) = shader.as_mut() {
+                        s.forget_sources();
+                    }
                 }
                 // 显卡驱动的单帧解码错误常常在这一步才报出来（iHD：等表面时报解码错误）：和上面一样丢这一帧、
                 // 要关键帧，不当成专业窗口的致命错误
@@ -682,6 +709,7 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
                 }
                 let converted = now_ns();
                 win.present(slot).map_err(|e| anyhow!("{e}"))?;
+                lossless.presented(by_shader);
                 panel.frames += 1;
                 if !ready {
                     // 第一帧专业画面交给合成器了：会话进程据此撤掉「非专业模式」提示
@@ -706,14 +734,16 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
                 last_report = Instant::now();
                 // 合成器直接送显示（不再合成一遍）的帧数：叠加层、输出画面的排布都会影响它
                 log::info!(
-                    "ddpro: pro view latency {}; direct scanout {}/{} presented; lossless {:?}% {:?}",
+                    "ddpro: pro view latency {}; direct scanout {}/{} presented, {} not presented (still); lossless {:?}% {:?}",
                     ledger.take(),
                     scanout.0,
                     scanout.1,
+                    idle_frames,
                     lossless.coverage(),
                     lossless.counts
                 );
                 scanout = (0, 0);
+                idle_frames = 0;
                 lossless.counts = Default::default();
             }
             if panel.since.elapsed() >= PANEL {

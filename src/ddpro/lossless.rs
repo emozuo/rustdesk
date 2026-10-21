@@ -23,11 +23,13 @@ use std::{
 const STILL_FRAMES: u8 = 6;
 /// 每帧最多读回多少块：整屏一次读回让那一帧晚出约 5 毫秒（P1 实施记录第 7 节），分散到几帧里
 const READS_PER_FRAME: usize = 40;
-/// 读回了还没发出的最多这么多块：压缩或网络跟不上时不再读，免得读一堆过时的
+/// 读回了还没发出的（在压缩、压好待发）最多这么多块：压缩或网络跟不上时不再读，免得读一堆过时的
 const MAX_IN_FLIGHT: usize = 3 * READS_PER_FRAME;
 const WORKERS: usize = 3;
 /// 零星几块的「补完」日志最多这么久一行（画面里有光标闪烁时几乎每 0.5 秒补完一次）
 const LOG_INTERVAL: Duration = Duration::from_secs(5);
+/// 整屏级的「补完」日志最多这么久一行（幻灯片、低帧率动画会一直整屏变）
+const BIG_LOG_INTERVAL: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum State {
@@ -166,9 +168,10 @@ impl Lossless {
         self.send(sender)?;
         if !self.complete && self.in_flight == 0 && self.ready.is_empty() && self.state.iter().all(|s| *s == State::Sent) {
             self.complete = true;
-            // 补了四分之一屏以上的每次都记（量整屏补完的时间和数据量），零星几块的节流
+            // 补了四分之一屏以上的基本都记（量整屏补完的时间和数据量），零星几块的多节流一些
             let big = self.since_change.0 as usize * 4 >= self.grid.count();
-            if big || self.last_log.map_or(true, |t| t.elapsed() >= LOG_INTERVAL) {
+            let interval = if big { BIG_LOG_INTERVAL } else { LOG_INTERVAL };
+            if self.last_log.map_or(true, |t| t.elapsed() >= interval) {
                 self.last_log = Some(Instant::now());
                 log::info!(
                     "ddpro: lossless complete {} ms after the last change: {} tiles, {} bytes",
@@ -182,7 +185,12 @@ impl Lossless {
     }
 
     fn read(&mut self, enc: &mut Encoder, ts: u32) -> ResultType<()> {
-        let room = MAX_IN_FLIGHT.saturating_sub(self.in_flight).min(READS_PER_FRAME);
+        // 压好待发的也算在内（发不完的会越攒越多）；里面已经过时的先扔掉，不占名额
+        let generation = &self.generation;
+        self.ready.retain(|d| d.generation == generation[d.index]);
+        let room = MAX_IN_FLIGHT
+            .saturating_sub(self.in_flight + self.ready.len())
+            .min(READS_PER_FRAME);
         let picked: Vec<usize> = (0..self.grid.count())
             .filter(|&t| self.state[t] == State::Dirty && self.still[t] >= STILL_FRAMES)
             .take(room)
