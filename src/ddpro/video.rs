@@ -46,11 +46,16 @@ const BITRATE_KBPS: u32 = 30_000;
 const PRESET: u8 = 4;
 /// 静止无损补发的预算上限：内网实测 800 Mbps 突发不丢包，给一半（P1 实施记录第 7 节）；链路扛不住时带宽保护往下调（`lossless.rs`）
 const LOSSLESS_KBPS: u32 = 400_000;
-/// 静止不编码（P1 第 9 项）：画面内容不变后照旧重编这么多帧再停——给用不上无损补块的主控端（缩放显示）留画质收敛
-/// （P1 第 1 项实测静止后第 30 帧 PSNR 58 dB）。要大于无损的静止门槛（`lossless.rs` 的 STILL_FRAMES，6 帧）：停编期间
-/// 不再给无损模块报「这帧哪些块没变」，各块的静止计数得在停编前到顶
-const STILL_TAIL: u32 = FPS;
-const _: () = assert!(STILL_TAIL > super::lossless::STILL_FRAMES as u32);
+/// 静止不编码（P1 第 9 项）：大变化之后画面内容不变了，照旧重编这么多帧再停——给用不上无损补块的主控端（缩放显示）留画质收敛。
+/// 和 RustDesk 通用模式的「静止刷新」同一思路（`video_service/static_refresh.rs`：停下后按实测预算重复编码再停），
+/// 它给 H.265 NVENC 最高画质档的预算是 30 帧；P1 第 1 项实测静止后第 30 帧 PSNR 58 dB。要大于无损的静止门槛
+/// （`lossless.rs` 的 STILL_FRAMES，6 帧）：停编期间不再给无损模块报「这帧哪些块没变」，各块的静止计数得在停编前到顶
+const STILL_TAIL: u32 = 30;
+/// 小变化（不到八分之一屏：任务栏时钟、光标闪烁、小图标）只重编这么多帧：小块区域第一帧就编得清楚，1:1 显示时还马上被无损补齐。
+/// 按 STILL_TAIL 收尾的话时钟每秒跳一次编码器就停不下来（2026-10-21 夜 209.32 实测：两块屏任务栏每秒变 2 块，「静止」时编码器仍占 20–26%）
+const STILL_TAIL_SMALL: u32 = 8;
+const _: () = assert!(STILL_TAIL_SMALL > super::lossless::STILL_FRAMES as u32);
+const _: () = assert!(STILL_TAIL >= STILL_TAIL_SMALL);
 /// 停编期间每隔这么久还编一帧（重复画面）：主控端 3 秒收不到画面包就判通道断了；这一帧也让主控端发现停编前最后一帧丢的包、要求补发
 const STILL_KEEPALIVE: Duration = Duration::from_secs(1);
 /// 主控端收到「同意」后来打招呼的时限
@@ -65,6 +70,8 @@ const DIAG_DUMP: &str = "DDPRO_DIAG_DUMP";
 const DIAG_CORRUPT: &str = "DDPRO_DIAG_CORRUPT_SECS";
 /// 诊断：不做静止无损（只发视频，对比画质、排查问题用）
 const DIAG_NO_LOSSLESS: &str = "DDPRO_DIAG_NO_LOSSLESS";
+/// 诊断：停编期间心跳帧的间隔（毫秒，默认 [`STILL_KEEPALIVE`]），量「隔多久编一帧显卡才不降频」用；0 = 不停编（和改之前一样每帧编）
+const DIAG_STILL_KEEPALIVE_MS: &str = "DDPRO_DIAG_STILL_KEEPALIVE_MS";
 /// 显示变化检查的间隔（和 RustDesk 通用画面服务一样）
 const DISPLAY_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 /// 画面源变了之后重建前等多久：和 RustDesk 服务框架出错重跑的退避一样（30 毫秒起、加倍、最多 1 秒）
@@ -531,8 +538,14 @@ fn stream(ps: &ProService, session: &Session, channel: Channel) -> ResultType<(E
     // 分段延迟只记新采集到的画面：第一帧在通道建立前就取了（含等主控端打招呼的时间），
     // 没有新画面时编码器重复上一帧，这两种都不带时间
     let mut captured = None;
-    // 静止不编码：画面内容连续多少个节拍没变、上次真编码是什么时候
+    // 静止不编码：画面内容连续多少个节拍没变、这一段变化要重编多少帧收尾、上次真编码是什么时候
     let mut still: u32 = 0;
+    let mut tail = STILL_TAIL;
+    let tiles = w.div_ceil(TILE) * h.div_ceil(TILE);
+    let keepalive = std::env::var(DIAG_STILL_KEEPALIVE_MS)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .map_or(STILL_KEEPALIVE, Duration::from_millis);
     let mut last_encode = first;
     let mut last_display_check = first;
     let end = loop {
@@ -582,20 +595,34 @@ fn stream(ps: &ProService, session: &Session, channel: Channel) -> ResultType<(E
             None => enc.unchanged(),
         };
         let moved = changed.as_ref().map_or(src.is_some(), |b| b.iter().any(|&x| x != 0));
-        still = if moved { 0 } else { still.saturating_add(1) };
+        if moved {
+            let n: u32 = changed.as_ref().map_or(tiles, |b| b.iter().map(|x| x.count_ones()).sum());
+            let need = if n * 8 >= tiles { STILL_TAIL } else { STILL_TAIL_SMALL };
+            // 上一段变化已经收完尾（停编了或正在停编）就从这次重新算；还在收尾就取大的（这一段里有过大变化就按大的收）
+            tail = if still > tail { need } else { tail.max(need) };
+            still = 0;
+        } else {
+            still = still.saturating_add(1);
+        }
         let want = session.dither.load(Ordering::Acquire);
         if want != dither {
             dither = want;
             enc.set_dither(dither);
-            // 改了颜色转换：重编的帧才带上新设置，按刚有变化处理
+            // 改了颜色转换：重编的帧才带上新设置，按整屏刚变处理
             still = 0;
+            tail = STILL_TAIL;
             log::info!("ddpro: pro video on display {display}: dither {}", if dither { "on" } else { "off" });
         }
         let force = sender.take_keyframe_request();
+        if force {
+            // 关键帧（主控端救不回丢包、解码出错）之后整屏按大变化收尾
+            still = 0;
+            tail = STILL_TAIL;
+        }
         let ts = (ts_base + i * 90_000 / FPS as u64) as u32;
         // 静止不编码（P1 第 9 项）：画面停了一阵就不再每帧重编同一张画面，硬件编码器空出来（多屏时给别的屏用、也给用户自己的
         // 程序用）；主控端要关键帧时照编，隔一阵编一帧当心跳。无损补块照常在每个节拍补
-        let idle = !force && still > STILL_TAIL && last_encode.elapsed() < STILL_KEEPALIVE;
+        let idle = !force && still > tail && last_encode.elapsed() < keepalive;
         if !idle {
             let f = enc.encode_loaded(force).map_err(|e| anyhow!("{e}"))?;
             last_encode = Instant::now();
