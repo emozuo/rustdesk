@@ -64,7 +64,8 @@ const ISSUE_SCALED: &str = "scaled";
 const IDLE_WAIT: Duration = Duration::from_millis(100);
 /// 诊断：静止且整屏无损时照样每帧上屏（默认不上屏，见主循环）
 const DIAG_ALWAYS_PRESENT: &str = "DDPRO_DIAG_ALWAYS_PRESENT";
-/// 诊断：画面每次补到整屏无损时，从着色器那侧读回刚画好的画面（RGB 逐像素、从上到下）存到这个文件，和被控端原图逐像素比
+/// 诊断：画面每次补到整屏无损时，从着色器那侧读回刚画好的画面（RGB 逐像素、从上到下）存到这个文件，和被控端原图逐像素比。
+/// 文件名后面接 `.屏号`（多屏时每块屏一个专业窗口，各存各的）
 const DIAG_LOSSLESS_DUMP: &str = "DDPRO_DIAG_LOSSLESS_DUMP";
 
 // RustDesk 鼠标入口的编码（`src/common.rs`）：mask = 事件类型 | (按键 << 3)
@@ -458,8 +459,14 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
     let mut ready = false;
     // 查过实际解码格式的画面尺寸：第一帧和尺寸变了之后（被控端重建编码器）查一次
     let mut format_checked: Option<(u32, u32)> = None;
-    let lossless_dump = std::env::var_os(DIAG_LOSSLESS_DUMP);
+    let lossless_dump = std::env::var_os(DIAG_LOSSLESS_DUMP).map(|p| {
+        let mut p = p;
+        p.push(format!(".{}", start.display_index));
+        p
+    });
     let mut was_full = false;
+    // 诊断（同上开关）：最近一次带变化的画面到达的时刻，量「无损补齐后多久上屏」
+    let mut last_change = Instant::now();
     let always_present = std::env::var_os(DIAG_ALWAYS_PRESENT).is_some();
     // 这一段日志间隔里因为静止而没上屏的帧数
     let mut idle_frames = 0u64;
@@ -611,6 +618,9 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
                 match frame_rx.try_recv() {
                     Ok(f) => {
                         let f: Incoming = f;
+                        if lossless_dump.is_some() && f.changed.as_ref().is_some_and(|b| b.iter().any(|&x| x != 0)) {
+                            last_change = Instant::now();
+                        }
                         lossless.changed(f.ts, f.changed.as_deref());
                         match dec.decode(&f.data) {
                             Ok(Some(frame)) => {
@@ -712,7 +722,10 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
                     let full = lossless.coverage() == Some(100);
                     if full && !was_full {
                         match s.read_rgb(slot).map_err(|e| e.to_string()).and_then(|rgb| std::fs::write(path, rgb).map_err(|e| e.to_string())) {
-                            Ok(()) => log::info!("ddpro: diagnostic {DIAG_LOSSLESS_DUMP}: saved a fully lossless frame"),
+                            Ok(()) => log::info!(
+                                "ddpro: diagnostic {DIAG_LOSSLESS_DUMP}: saved a fully lossless frame, shown {} ms after the last change arrived",
+                                last_change.elapsed().as_millis()
+                            ),
                             Err(e) => log::warn!("ddpro: diagnostic {DIAG_LOSSLESS_DUMP}: {e}"),
                         }
                     }
