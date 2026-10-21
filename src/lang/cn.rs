@@ -530,7 +530,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("display_is_plugged_out_msg", "显示器被拔出，切换到第一个显示器。"),
         ("No displays", "没有显示器。"),
         ("Open in new window", "在新的窗口中打开"),
-        ("Show displays as individual windows", "在单个窗口中打开显示器"),
+        ("Show displays as individual windows", "每个显示器单独开一个窗口"),
         ("Use all my displays for the remote session", "将我的所有显示器用于远程会话"),
         ("selinux_tip", "SELinux 处于启用状态，RustDesk 可能无法作为被控正常运行。"),
         ("Change view", "更改视图"),
