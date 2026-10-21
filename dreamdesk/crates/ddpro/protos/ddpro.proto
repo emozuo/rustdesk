@@ -205,6 +205,8 @@ message ViewStats {
   // limited_range、night_light、gamma_curve、color_transform、scaled，界面按代号显示名字和处理办法）
   bool display_checked = 8;
   repeated string display_issues = 9;
+  // 静止无损：画面里已是原始像素的方块比例（0–100）；用不上无损（缩放显示、着色器不可用、还没有画面）时为 -1
+  int32 lossless_percent = 10;
 }
 
 message ViewEnded {

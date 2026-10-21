@@ -764,9 +764,10 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
             }
             if panel.since.elapsed() >= PANEL {
                 let display = panel.display(&win, &display_watch);
-                let stats = panel.take(&counters, display);
+                let mut stats = panel.take(&counters, display);
                 // 悬浮球的网络状态块和 RustDesk 质量面板用同一份实测值
                 let coverage = lossless.coverage().filter(|_| shader.is_some() && lossless.size() == Some(size));
+                stats.lossless_percent = coverage.map_or(-1, |p| p as i32);
                 ball.set_status(status_lines(&stats, counters.rtt_us.load(Ordering::Relaxed), panel.frame, coverage));
                 if send_up(up, view_up::Union::Stats(stats)).is_err() {
                     session_gone.store(true, Ordering::Release);

@@ -1,5 +1,5 @@
 // DreamDesk：专业窗口开着时，RustDesk 质量面板末尾多几行——专业画面的延迟、收到的码率、位深、丢包与补发、
-// 显示链路检查、连接是否加密。
+// 静止无损的覆盖比例、显示链路检查、连接是否加密。
 //
 // Rust 侧 `src/ddpro/view_link.rs` 每秒推 `ddpro_quality` 事件；不带数据的事件表示专业窗口关了，撤掉这几行。
 // 帧率、编码、色度 RustDesk 面板本来就有，Rust 侧直接把它们换成专业画面的实测值，不在这里。
@@ -42,6 +42,7 @@ Widget ddproQualityRows(FFI? ffi, QualityRow row) {
         row('Received', '${v['kbps'] ?? '-'}kb'),
         row('Bit depth', '${v['bit_depth'] ?? '-'}bit'),
         row('Lost / recovered', '${v['lost'] ?? '-'} / ${v['recovered'] ?? '-'}'),
+        _losslessRow(v, row),
         _displayRow(v, row),
         row(
             'Encryption',
@@ -54,6 +55,13 @@ Widget ddproQualityRows(FFI? ffi, QualityRow row) {
       ],
     );
   });
+}
+
+/// 静止无损：画面里已是原始像素的方块比例，补满（和被控端逐像素一致）时绿色；用不上无损（缩放显示等）时「-」
+Widget _losslessRow(Map<String, dynamic> v, QualityRow row) {
+  final p = int.tryParse(v['lossless']?.toString() ?? '') ?? -1;
+  if (p < 0) return row('Lossless', '-');
+  return row('Lossless', '$p%', rightColor: p == 100 ? Colors.green : null);
 }
 
 /// 显示链路问题的代号（Rust 侧 `src/ddpro/view.rs`）→ 面板里的短名、处理办法（多语言表的键，鼠标停上去显示）

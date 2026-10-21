@@ -182,7 +182,7 @@ pub fn set_dither<T: InvokeUiSession>(session: &Session<T>, on: bool) -> Option<
     l.down.is_some().then_some(l.index)
 }
 
-/// 质量面板里 RustDesk 原来没有的几项（专业画面的延迟、收到的码率、位深、丢包与补发、显示链路检查），
+/// 质量面板里 RustDesk 原来没有的几项（专业画面的延迟、收到的码率、位深、丢包与补发、无损覆盖比例、显示链路检查），
 /// 推给 Dart 加在面板末尾；`None` 时撤掉这几行（专业窗口关了）。
 fn push_quality<T: InvokeUiSession>(session: &Session<T>, stats: Option<&ViewStats>) {
     let conn_type = session.lc.read().unwrap().conn_type;
@@ -196,6 +196,7 @@ fn push_quality<T: InvokeUiSession>(session: &Session<T>, stats: Option<&ViewSta
             ("bit_depth", v.bit_depth.to_string()),
             ("lost", v.lost_packets.to_string()),
             ("recovered", v.recovered_packets.to_string()),
+            ("lossless", v.lossless_percent.to_string()),
             ("display_checked", v.display_checked.to_string()),
             (
                 "display_issues",
