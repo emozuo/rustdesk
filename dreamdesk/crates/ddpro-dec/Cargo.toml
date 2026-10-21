@@ -1,4 +1,4 @@
-[package]
+﻿[package]
 name = "ddpro-dec"
 version = "0.1.0"
 edition = "2021"
@@ -8,8 +8,14 @@ publish = false
 # - 链接由 hwcodec 提供，和 RustDesk 的硬件编解码同一份 FFmpeg，这里不再自己链接一次；
 # - libva 由 FFmpeg 在运行时加载（RustDesk 给 FFmpeg 打的 dlopen 补丁），函数表从设备上下文里取，不直接链接 libva；
 # - 接口绑定在编译时按头文件生成（和 hwcodec 一样要求 libclang），FFmpeg 升级时绑定跟着变，不会对不上。
+#
+# 转 RGB 用显卡着色器（OpenGL ES 3，P1 第 7 项）：EGL 绑定 khronos-egl、GLES 函数加载 glow，都在运行时打开系统的
+# libEGL / libGLESv2（Mesa 自带），不在编译时链接；libgbm 同样用 libloading 运行时打开（khronos-egl 本身就依赖它）。
 [target.'cfg(target_os = "linux")'.dependencies]
 hwcodec = { git = "https://github.com/rustdesk-org/hwcodec" }
+khronos-egl = { version = "6", features = ["dynamic"] }
+glow = "0.16"
+libloading = "0.8"
 
 [target.'cfg(target_os = "linux")'.build-dependencies]
 bindgen = "0.72"

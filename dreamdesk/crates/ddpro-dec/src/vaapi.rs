@@ -7,16 +7,17 @@ use crate::ffi;
 use std::{
     ffi::{c_void, CStr},
     fmt,
+    io::{Seek, SeekFrom},
     mem::{size_of, zeroed},
     os::{
-        fd::{FromRawFd, OwnedFd},
+        fd::{AsRawFd, FromRawFd, OwnedFd},
         raw::c_char,
     },
     ptr::{self, null_mut},
 };
 
 #[derive(Debug)]
-pub struct Error(String);
+pub struct Error(pub(crate) String);
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -331,6 +332,18 @@ impl Decoder {
     pub fn wait(&self, frame: &Frame) -> Result<()> {
         self.dev.sync(frame.surface())
     }
+
+    /// 把这一帧所在的显卡画面导出成 dmabuf（着色器转 RGB 时直接导入，不拷贝）。
+    pub(crate) fn export(&self, frame: &Frame) -> Result<Exported> {
+        export_surface(&self.dev, frame.surface(), ffi::VA_EXPORT_SURFACE_READ_ONLY, "export the decoded surface as dmabuf")
+    }
+}
+
+impl Frame {
+    /// 显卡画面的编号：解码器的画面池里反复用同几张，着色器按它缓存导入结果
+    pub(crate) fn surface_id(&self) -> u32 {
+        self.surface()
+    }
 }
 
 impl Drop for Decoder {
@@ -365,7 +378,90 @@ pub struct Converter {
 unsafe impl Send for Converter {}
 
 impl Converter {
+    /// 自己建 `count` 张输出画面（驱动默认排布，iHD 给的是线性）。
     pub fn new(dev: &Device, width: u32, height: u32, count: usize) -> Result<Self> {
+        Self::build(dev, width, height, |c| {
+            let display = c.dev.display();
+            let mut attr: ffi::VASurfaceAttrib = unsafe { zeroed() };
+            attr.type_ = ffi::VASurfaceAttribPixelFormat;
+            attr.flags = ffi::VA_SURFACE_ATTRIB_SETTABLE;
+            attr.value.type_ = ffi::VAGenericValueTypeInteger;
+            attr.value.value.i = ffi::VA_FOURCC_BGRX as i32;
+            let mut surfaces = vec![VA_INVALID; count];
+            va_call!(
+                c.dev,
+                vaCreateSurfaces(
+                    display,
+                    ffi::VA_RT_FORMAT_RGB32,
+                    width,
+                    height,
+                    surfaces.as_mut_ptr(),
+                    count as u32,
+                    &mut attr,
+                    1
+                ),
+                "create the RGB output surfaces"
+            )?;
+            c.surfaces = surfaces;
+            Ok(())
+        })
+    }
+
+    /// 输出画面用别处分配好的 dmabuf（[`crate::GlConverter::new`] 用 GBM 按分块排布分配的那组）：要缩放时视频处理单元
+    /// 也画进同一组，窗口只登记一组画面。驱动建画面时不认指定的排布（iHD 照旧给线性），所以排布由 GBM 定、这里导入。
+    pub fn with_images(dev: &Device, width: u32, height: u32, images: &[Exported]) -> Result<Self> {
+        Self::build(dev, width, height, |c| {
+            let display = c.dev.display();
+            for img in images {
+                let ([layer], [fd]) = (img.layers.as_slice(), img.fds.as_slice()) else {
+                    return Err(Error(format!("{} layer(s) / {} object(s): expected one packed plane", img.layers.len(), img.fds.len())));
+                };
+                let [plane] = layer.planes.as_slice() else {
+                    return Err(Error(format!("{} plane(s): expected one packed plane", layer.planes.len())));
+                };
+                // dmabuf 的大小只能从文件末尾的位置读（fstat 报 0）
+                let size = fd
+                    .try_clone()
+                    .and_then(|f| std::fs::File::from(f).seek(SeekFrom::End(0)))
+                    .map_err(|e| Error(format!("size of an output image: {e}")))?;
+                let mut d: ffi::VADRMPRIMESurfaceDescriptor = unsafe { zeroed() };
+                d.fourcc = ffi::VA_FOURCC_BGRX;
+                d.width = width;
+                d.height = height;
+                d.num_objects = 1;
+                d.objects[0].fd = fd.as_raw_fd();
+                d.objects[0].size = size as u32;
+                d.objects[0].drm_format_modifier = img.modifiers.first().copied().unwrap_or(0);
+                d.num_layers = 1;
+                d.layers[0].drm_format = layer.drm_format;
+                d.layers[0].num_planes = 1;
+                d.layers[0].object_index[0] = 0;
+                d.layers[0].offset[0] = plane.offset;
+                d.layers[0].pitch[0] = plane.pitch;
+                let mut attrs: [ffi::VASurfaceAttrib; 2] = unsafe { zeroed() };
+                attrs[0].type_ = ffi::VASurfaceAttribMemoryType;
+                attrs[0].flags = ffi::VA_SURFACE_ATTRIB_SETTABLE;
+                attrs[0].value.type_ = ffi::VAGenericValueTypeInteger;
+                attrs[0].value.value.i = ffi::VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2 as i32;
+                attrs[1].type_ = ffi::VASurfaceAttribExternalBufferDescriptor;
+                attrs[1].flags = ffi::VA_SURFACE_ATTRIB_SETTABLE;
+                attrs[1].value.type_ = ffi::VAGenericValueTypePointer;
+                attrs[1].value.value.p = &mut d as *mut _ as *mut c_void;
+                let mut s = VA_INVALID;
+                va_call!(
+                    c.dev,
+                    vaCreateSurfaces(display, ffi::VA_RT_FORMAT_RGB32, width, height, &mut s, 1, attrs.as_mut_ptr(), 2),
+                    "import an output image"
+                )?;
+                // 逐张记下：中途失败时析构会把已经导入的放掉
+                c.surfaces.push(s);
+            }
+            Ok(())
+        })
+    }
+
+    /// 建视频处理配置，`surfaces` 填好输出画面，再建处理上下文。
+    fn build(dev: &Device, width: u32, height: u32, surfaces: impl FnOnce(&mut Self) -> Result<()>) -> Result<Self> {
         let mut c = Self {
             dev: dev.share()?,
             config: VA_INVALID,
@@ -380,27 +476,8 @@ impl Converter {
             vaCreateConfig(display, ffi::VAProfileNone, ffi::VAEntrypointVideoProc, null_mut(), 0, &mut c.config),
             "create the video processing config"
         )?;
-        let mut attr: ffi::VASurfaceAttrib = unsafe { zeroed() };
-        attr.type_ = ffi::VASurfaceAttribPixelFormat;
-        attr.flags = ffi::VA_SURFACE_ATTRIB_SETTABLE;
-        attr.value.type_ = ffi::VAGenericValueTypeInteger;
-        attr.value.value.i = ffi::VA_FOURCC_BGRX as i32;
-        let mut surfaces = vec![VA_INVALID; count];
-        va_call!(
-            c.dev,
-            vaCreateSurfaces(
-                display,
-                ffi::VA_RT_FORMAT_RGB32,
-                width,
-                height,
-                surfaces.as_mut_ptr(),
-                count as u32,
-                &mut attr,
-                1
-            ),
-            "create the RGB output surfaces"
-        )?;
-        c.surfaces = surfaces;
+        surfaces(&mut c)?;
+        let count = c.surfaces.len();
         va_call!(
             c.dev,
             vaCreateContext(
@@ -420,6 +497,10 @@ impl Converter {
 
     pub fn count(&self) -> usize {
         self.surfaces.len()
+    }
+
+    pub(crate) fn size(&self) -> (u32, u32) {
+        (self.width, self.height)
     }
 
     /// 把 `src` 转成 RGB 写进第 `index` 张输出画面：等比缩放、居中、四周黑边。只提交，要等做完用 [`Converter::wait`]。
@@ -531,41 +612,51 @@ impl Converter {
 
     /// 把第 `index` 张输出画面导出成 dmabuf（交给显示用，零拷贝）。
     pub fn export(&self, index: usize) -> Result<Exported> {
-        let mut d: ffi::VADRMPRIMESurfaceDescriptor = unsafe { zeroed() };
-        va_call!(
-            self.dev,
-            vaExportSurfaceHandle(
-                self.dev.display(),
-                self.surfaces[index],
-                ffi::VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2,
-                ffi::VA_EXPORT_SURFACE_READ_ONLY | ffi::VA_EXPORT_SURFACE_COMPOSED_LAYERS,
-                &mut d as *mut _ as *mut c_void
-            ),
-            "export the RGB surface as dmabuf"
-        )?;
-        let objects = &d.objects[..d.num_objects as usize];
-        Ok(Exported {
-            fourcc: d.fourcc,
-            width: d.width,
-            height: d.height,
-            modifiers: objects.iter().map(|o| o.drm_format_modifier).collect(),
-            // 每个 fd 交给 OwnedFd，不用时自动关闭
-            fds: objects.iter().map(|o| unsafe { OwnedFd::from_raw_fd(o.fd) }).collect(),
-            layers: d.layers[..d.num_layers as usize]
-                .iter()
-                .map(|l| Layer {
-                    drm_format: l.drm_format,
-                    planes: (0..l.num_planes as usize)
-                        .map(|i| Plane {
-                            object: l.object_index[i],
-                            offset: l.offset[i],
-                            pitch: l.pitch[i],
-                        })
-                        .collect(),
-                })
-                .collect(),
-        })
+        export_surface(&self.dev, self.surfaces[index], ffi::VA_EXPORT_SURFACE_READ_ONLY, "export the RGB surface as dmabuf")
     }
+
+    /// 同一张输出画面再导出一份可写的（着色器转 RGB 时往里画，见 [`crate::GlConverter`]）。
+    pub(crate) fn export_writable(&self, index: usize) -> Result<Exported> {
+        export_surface(&self.dev, self.surfaces[index], ffi::VA_EXPORT_SURFACE_READ_WRITE, "export the RGB surface for drawing")
+    }
+}
+
+/// 显卡画面导出成 dmabuf（单层合成排布：打包格式一层一个平面）。
+fn export_surface(dev: &Device, surface: ffi::VASurfaceID, access: u32, what: &str) -> Result<Exported> {
+    let mut d: ffi::VADRMPRIMESurfaceDescriptor = unsafe { zeroed() };
+    va_call!(
+        dev,
+        vaExportSurfaceHandle(
+            dev.display(),
+            surface,
+            ffi::VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2,
+            access | ffi::VA_EXPORT_SURFACE_COMPOSED_LAYERS,
+            &mut d as *mut _ as *mut c_void
+        ),
+        what
+    )?;
+    let objects = &d.objects[..d.num_objects as usize];
+    Ok(Exported {
+        fourcc: d.fourcc,
+        width: d.width,
+        height: d.height,
+        modifiers: objects.iter().map(|o| o.drm_format_modifier).collect(),
+        // 每个 fd 交给 OwnedFd，不用时自动关闭
+        fds: objects.iter().map(|o| unsafe { OwnedFd::from_raw_fd(o.fd) }).collect(),
+        layers: d.layers[..d.num_layers as usize]
+            .iter()
+            .map(|l| Layer {
+                drm_format: l.drm_format,
+                planes: (0..l.num_planes as usize)
+                    .map(|i| Plane {
+                        object: l.object_index[i],
+                        offset: l.offset[i],
+                        pitch: l.pitch[i],
+                    })
+                    .collect(),
+            })
+            .collect(),
+    })
 }
 
 impl Drop for Converter {

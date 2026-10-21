@@ -1,7 +1,10 @@
 //! 第 5 步验证工具（瘦客户机上跑，不需要桌面）：显卡硬解 + 视频处理单元转 RGB，和被控端原图比颜色、量每帧耗时、
 //! 试导出显存画面。
 //!
-//!   vaapi_check IN.h265 [--ref REF.bgra --ref-frame 30] [--out DIR]
+//!   vaapi_check IN.h265 [--ref REF.bgra --ref-frame 30] [--out DIR] [--gl] [--tiled]
+//!
+//! `--gl`：用着色器转 RGB（专业窗口 1:1 时走的路径），参考帧上再用视频处理单元转一遍逐像素比，读回的着色器结果存
+//! DIR/shader<帧号>.rgb（可拿去和软件解码按公式算的结果逐像素核对）。
 //!
 //! - 开显卡，报驱动和 HEVC 4:4:4 / 视频处理能力；
 //! - 逐帧硬解（等显卡解完）→ 转 RGB（等显卡转完），记两段耗时；
@@ -25,7 +28,7 @@ fn main() {
 
 #[cfg(target_os = "linux")]
 mod linux {
-    use ddpro_dec::{Converter, Decoder, Device, RgbStandard};
+    use ddpro_dec::{Converter, Decoder, Device, GlConverter, RgbStandard};
     use ddpro_media::hevc;
     use std::{fs, path::PathBuf, time::Instant};
 
@@ -37,22 +40,39 @@ mod linux {
         reference: Option<String>,
         ref_frame: usize,
         out: Option<PathBuf>,
+        /// 用着色器转 RGB（专业窗口 1:1 时的路径）；参考帧上再用视频处理单元转一遍，逐像素比两者
+        gl: bool,
+        /// 输出画面用 Intel 的 Y / X 分块排布（专业窗口在合成器能用时就这样建）
+        tiled: bool,
     }
 
     fn opts() -> Result<Opts, Box<dyn std::error::Error>> {
         let args: Vec<String> = std::env::args().skip(1).collect();
         let input = args
             .first()
-            .ok_or("usage: vaapi_check IN.h265 [--ref REF.bgra --ref-frame N] [--out DIR]")?
+            .ok_or("usage: vaapi_check IN.h265 [--ref REF.bgra --ref-frame N] [--out DIR] [--gl]")?
             .clone();
         let mut o = Opts {
             input,
             reference: None,
             ref_frame: 30,
             out: None,
+            gl: false,
+            tiled: false,
         };
         let mut it = args[1..].iter();
         while let Some(k) = it.next() {
+            match k.as_str() {
+                "--gl" => {
+                    o.gl = true;
+                    continue;
+                }
+                "--tiled" => {
+                    o.tiled = true;
+                    continue;
+                }
+                _ => {}
+            }
             let v = it.next().ok_or_else(|| format!("{k} needs a value"))?;
             match k.as_str() {
                 "--ref" => o.reference = Some(v.clone()),
@@ -80,6 +100,7 @@ mod linux {
 
         let mut dec = Decoder::new(&dev)?;
         let mut conv: Option<Converter> = None;
+        let mut gl: Option<GlConverter> = None;
         let (mut decode_ms, mut convert_ms) = (Vec::new(), Vec::new());
         let (mut decoded, mut errors) = (0usize, 0usize);
         for (i, au) in aus.iter().enumerate() {
@@ -99,15 +120,36 @@ mod linux {
             if conv.is_none() {
                 let f = frame.format();
                 println!("first frame: {w}x{h}, surface format {} (4:4:4: {}, {} bit)", f.name, f.chroma_444, f.bit_depth);
-                if !f.chroma_444 || f.bit_depth != 8 {
+                // 着色器也认 10bit（Y410），专业协议目前只谈 8bit
+                if !f.chroma_444 || !(f.bit_depth == 8 || (o.gl && f.bit_depth == 10)) {
                     return Err("the decoded surface is not 4:4:4 8bit".into());
                 }
-                conv = Some(Converter::new(&dev, w, h, SURFACES)?);
+                // --tiled：和专业窗口一样，着色器用 GBM 按 Intel Y / X 分块分配输出画面，视频处理单元导入同一组
+                let (c, g) = if o.tiled {
+                    let g = GlConverter::new(w, h, SURFACES, &[0x0100_0000_0000_0002, 0x0100_0000_0000_0001])?;
+                    let images = (0..SURFACES).map(|i| g.export(i)).collect::<Result<Vec<_>, _>>()?;
+                    (Converter::with_images(&dev, w, h, &images)?, Some(g))
+                } else {
+                    let c = Converter::new(&dev, w, h, SURFACES)?;
+                    let g = if o.gl { Some(GlConverter::on(&c)?) } else { None };
+                    (c, g)
+                };
+                if let Some(g) = &g {
+                    println!("shader conversion on {}", g.renderer());
+                }
+                // 只给了 --tiled 没给 --gl：输出画面照样是 GBM 分块的，但只用视频处理单元转
+                gl = if o.gl { g } else { None };
+                conv = Some(c);
             }
             let Some(conv) = conv.as_mut() else { unreachable!() };
             let slot = decoded % SURFACES;
-            conv.convert(&frame, slot, RgbStandard::Bt709)?;
-            conv.wait(slot)?;
+            match gl.as_mut() {
+                Some(g) => g.convert(&dec, &frame, slot)?,
+                None => {
+                    conv.convert(&frame, slot, RgbStandard::Bt709)?;
+                    conv.wait(slot)?;
+                }
+            }
             let t2 = Instant::now();
             decode_ms.push((t1 - t0).as_secs_f64() * 1000.0);
             convert_ms.push((t2 - t1).as_secs_f64() * 1000.0);
@@ -124,7 +166,44 @@ mod linux {
                     e.layers
                 );
             }
-            if let (Some(r), true) = (&reference, i == o.ref_frame) {
+            if let (Some(g), true) = (gl.as_mut(), i == o.ref_frame) {
+                // 每张输出画面都画同一帧（着色器写一次、视频处理单元写一次），都从着色器那侧读回，数最上面 32 行里的纯黑像素。
+                // 不用视频处理单元那侧读回：iHD 读导入的 GBM 画面（vaGetImage）不可靠——读出过整块黑、视频处理单元写过之后再读
+                // 会在驱动里崩溃（2026-10-21 瘦客户机实测）；正式显示不读回，不受影响
+                let black = |rgb: &[u8]| rgb[..w as usize * 32 * 3].chunks_exact(3).filter(|p| p == &[0, 0, 0]).count();
+                for round in 0..3 {
+                    for s in 0..SURFACES {
+                        g.convert(&dec, &frame, s)?;
+                        let by_shader = black(&g.read_rgb(s)?);
+                        conv.convert(&frame, s, RgbStandard::Bt709)?;
+                        conv.wait(s)?;
+                        let by_vpp = black(&g.read_rgb(s)?);
+                        println!("round {round} slot {s}: black in the top 32 rows — written by shader {by_shader}, by video processor {by_vpp}");
+                    }
+                }
+                // 同一帧两种转法各写一张输出画面，逐像素比（视频处理单元自己有约 0.5% 的像素差 1 级）
+                let other = (slot + 1) % SURFACES;
+                g.convert(&dec, &frame, slot)?;
+                conv.convert(&frame, other, RgbStandard::Bt709)?;
+                conv.wait(other)?;
+                let (by_gl, by_vpp) = (g.read_rgb(slot)?, g.read_rgb(other)?);
+                let (mut diff, mut max) = (0usize, 0u8);
+                for (a, b) in by_gl.chunks_exact(3).zip(by_vpp.chunks_exact(3)) {
+                    let d = (0..3).map(|c| a[c].abs_diff(b[c])).max().unwrap_or(0);
+                    diff += (d > 0) as usize;
+                    max = max.max(d);
+                }
+                let n = by_gl.len() / 3;
+                println!("frame {i} shader vs video processor: {diff} of {n} pixels differ ({:.3}%), max {max}", diff as f64 * 100.0 / n as f64);
+                if let Some(r) = &reference {
+                    println!("frame {i} vs original, shader: {}", compare(r, &by_gl, w, h)?);
+                    println!("frame {i} vs original, video processor: {}", compare(r, &by_vpp, w, h)?);
+                }
+                if let Some(dir) = &o.out {
+                    fs::create_dir_all(dir)?;
+                    fs::write(dir.join(format!("shader{i}.rgb")), &by_gl)?;
+                }
+            } else if let (Some(r), true) = (&reference, i == o.ref_frame) {
                 for std in [RgbStandard::Bt709, RgbStandard::Srgb] {
                     conv.convert(&frame, slot, std)?;
                     conv.wait(slot)?;

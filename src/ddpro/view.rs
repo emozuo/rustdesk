@@ -15,7 +15,7 @@ use crate::ddpro::{
 };
 use base::message_proto::{message, misc, CursorData, Message};
 use ddpro::{
-    dec::{fit_rect, Converter, Decoder, Device, RgbStandard},
+    dec::{fit_rect, Converter, Decoder, Device, GlConverter, RgbStandard},
     media::{Event as MediaEvent, Ledger, Receiver, Stage},
     view::{
         display_check::{Cards, Issue},
@@ -42,6 +42,10 @@ use std::{
 };
 
 const SLOTS: usize = 4;
+/// DRM 格式 XRGB8888（'XR24'）
+const XRGB8888: u32 = 0x3432_5258;
+/// 输出画面想要的分块排布（按偏好）：Intel 的 Y 分块、X 分块。带压缩辅助平面的排布不要——着色器导入只认单平面
+const TILED: [u64; 2] = [0x0100_0000_0000_0002, 0x0100_0000_0000_0001];
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const REPORT: Duration = Duration::from_secs(5);
 /// 质量面板多久报一次实测值（和 RustDesk 通用画面那条链路推面板数据的间隔一样）
@@ -393,7 +397,7 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
             .name("ddpro-view-recv".into())
             .spawn(move || receive(peer, keys, frame_tx, wake_tx, quit, bye, resync, channel, counters))?
     };
-    let (mut win, dev, mut dec, mut conv) = match open_display(&start) {
+    let (mut win, dev, mut dec, mut conv, mut shader) = match open_display(&start) {
         Ok(v) => v,
         Err(e) => {
             // 显示不了：马上告诉被控端不要了（不让它白等 3 秒心跳超时），它退回通用画面
@@ -425,6 +429,8 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
     let mut ledger = Ledger::default();
     let mut shown: HashMap<usize, Shown> = HashMap::new();
     let mut last_report = Instant::now();
+    // 这一段日志间隔里：(合成器直接送显示的帧数, 上屏的帧数)
+    let mut scanout = (0u64, 0u64);
     let mut panel = Panel::new();
     let mut ready = false;
     // 查过实际解码格式的画面尺寸：第一帧和尺寸变了之后（被控端重建编码器）查一次
@@ -450,8 +456,11 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
                         slot,
                         present_ns,
                         foreign_clock,
+                        zero_copy,
                         ..
                     } => {
+                        scanout.0 += zero_copy as u64;
+                        scanout.1 += 1;
                         if let (Some(s), false) = (shown.remove(&slot), foreign_clock) {
                             let mut stages = s.times.stages.to_vec();
                             stages.extend([
@@ -476,7 +485,9 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
                         );
                         size = (width, height);
                         shown.clear();
-                        conv = attach(&mut win, &dev)?;
+                        // 旧的转换器先放掉（窗口还登记着它们的画面，下面重新登记），再按新尺寸建
+                        let on = shader.take().is_some();
+                        (conv, shader) = attach(&mut win, &dev, on)?;
                         input.set_window(size);
                         ball.set_screen(size);
                     }
@@ -616,9 +627,23 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
                     );
                     continue;
                 };
-                conv.convert(&frame, slot, RgbStandard::Bt709)
-                    .map_err(|e| anyhow!("{e}"))?;
-                conv.wait(slot).map_err(|e| anyhow!("{e}"))?;
+                // 1:1 用着色器转（和公式逐像素一致）；要缩放、或着色器出过错，用视频处理单元
+                let by_shader = match shader.as_mut() {
+                    Some(s) if (frame.width(), frame.height()) == size => match s.convert(&dec, &frame, slot) {
+                        Ok(()) => true,
+                        Err(e) => {
+                            log::warn!("ddpro: pro view shader conversion failed, using the video processor from now on: {e}");
+                            shader = None;
+                            false
+                        }
+                    },
+                    _ => false,
+                };
+                if !by_shader {
+                    conv.convert(&frame, slot, RgbStandard::Bt709)
+                        .map_err(|e| anyhow!("{e}"))?;
+                    conv.wait(slot).map_err(|e| anyhow!("{e}"))?;
+                }
                 let converted = now_ns();
                 win.present(slot).map_err(|e| anyhow!("{e}"))?;
                 panel.frames += 1;
@@ -643,7 +668,14 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
             }
             if last_report.elapsed() >= REPORT {
                 last_report = Instant::now();
-                log::info!("ddpro: pro view latency {}", ledger.take());
+                // 合成器直接送显示（不再合成一遍）的帧数：叠加层、输出画面的排布都会影响它
+                log::info!(
+                    "ddpro: pro view latency {}; direct scanout {}/{} presented",
+                    ledger.take(),
+                    scanout.0,
+                    scanout.1
+                );
+                scanout = (0, 0);
             }
             if panel.since.elapsed() >= PANEL {
                 let display = panel.display(&win, &display_watch);
@@ -666,7 +698,7 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
 }
 
 /// 开全屏窗口、显卡解码器和转换器（设备留着，本机屏幕分辨率变了要按新尺寸重建转换器）。
-fn open_display(start: &ViewStart) -> ResultType<(Window, Device, Decoder, Converter)> {
+fn open_display(start: &ViewStart) -> ResultType<(Window, Device, Decoder, Converter, Option<GlConverter>)> {
     // 桌面文件按应用名装（产品版 dreamdesk-pro.desktop，原版 rustdesk.desktop），和通用窗口同一个应用名
     let app_id = crate::get_app_name().to_lowercase();
     let mut win = Window::open(
@@ -677,7 +709,7 @@ fn open_display(start: &ViewStart) -> ResultType<(Window, Device, Decoder, Conve
     let (w, h) = win.size();
     let dev = Device::open().map_err(|e| anyhow!("{e}"))?;
     let dec = Decoder::new(&dev).map_err(|e| anyhow!("{e}"))?;
-    let conv = attach(&mut win, &dev)?;
+    let (conv, shader) = attach(&mut win, &dev, true)?;
     log::info!(
         "ddpro: pro view {w}x{h} fullscreen for remote {}x{} at ({},{}), keeping the screen awake: {}",
         start.remote_width,
@@ -686,19 +718,73 @@ fn open_display(start: &ViewStart) -> ResultType<(Window, Device, Decoder, Conve
         start.remote_y,
         win.idle_inhibited()
     );
-    Ok((win, dev, dec, conv))
+    Ok((win, dev, dec, conv, shader))
 }
 
-/// 按窗口当前尺寸建转换器，把它的几张输出画面登记给窗口（换掉原来登记的）。
-fn attach(win: &mut Window, dev: &Device) -> ResultType<Converter> {
+/// 按窗口当前尺寸建输出画面和转换器，把输出画面登记给窗口（换掉原来登记的）。按顺序试（P1 第 7 项）：
+/// 1. 着色器用 GBM 按合成器能用的分块排布分配输出画面，视频处理单元导入同一组（要缩放时用它）——着色器画得快
+///    （1.75 对 4.1 毫秒），合成器能直接送显示（瘦客户机实测 Y 分块约 100%，视频处理单元自己建的线性画面 0%）；
+/// 2. 视频处理单元自己建输出画面（线性），着色器画在上面；
+/// 3. 只用视频处理单元。
+///
+/// `shader` 为假（之前着色器出过错）时直接走第 3 种。
+fn attach(win: &mut Window, dev: &Device, shader: bool) -> ResultType<(Converter, Option<GlConverter>)> {
     let (w, h) = win.size();
+    if shader {
+        let tiled: Vec<u64> = win
+            .formats()
+            .map(|f| TILED.iter().copied().filter(|m| f.usable.contains(&(XRGB8888, *m))).collect())
+            .unwrap_or_default();
+        if tiled.is_empty() {
+            log::info!("ddpro: pro view: the compositor takes no tiled XRGB8888 images");
+        } else {
+            match tiled_outputs(win, dev, w, h, &tiled) {
+                Ok(v) => return Ok(v),
+                Err(e) => log::info!("ddpro: pro view tiled output images unavailable ({e}), using the video processor's"),
+            }
+        }
+    }
     let conv = Converter::new(dev, w, h, SLOTS).map_err(|e| anyhow!("{e}"))?;
     win.reset_slots(SLOTS);
     for slot in 0..SLOTS {
         let image = conv.export(slot).map_err(|e| anyhow!("{e}"))?;
         win.import(slot, &image).map_err(|e| anyhow!("{e}"))?;
     }
-    Ok(conv)
+    let gl = if shader {
+        match GlConverter::on(&conv) {
+            Ok(s) => {
+                log::info!("ddpro: pro view converts to RGB with shaders on {} (linear output images)", s.renderer());
+                Some(s)
+            }
+            Err(e) => {
+                log::warn!("ddpro: pro view shader conversion unavailable, using the video processor: {e}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    Ok((conv, gl))
+}
+
+/// 上面第 1 种：GBM 分块输出画面，着色器和视频处理单元都画进它，窗口登记它
+fn tiled_outputs(win: &mut Window, dev: &Device, w: u32, h: u32, modifiers: &[u64]) -> Result<(Converter, Option<GlConverter>), String> {
+    let gl = GlConverter::new(w, h, SLOTS, modifiers).map_err(|e| e.to_string())?;
+    let images = (0..SLOTS)
+        .map(|i| gl.export(i))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    let conv = Converter::with_images(dev, w, h, &images).map_err(|e| e.to_string())?;
+    win.reset_slots(SLOTS);
+    for (slot, image) in images.iter().enumerate() {
+        win.import(slot, image).map_err(|e| e.to_string())?;
+    }
+    log::info!(
+        "ddpro: pro view converts to RGB with shaders on {} (output images modifier {:#x})",
+        gl.renderer(),
+        images[0].modifiers.first().copied().unwrap_or_default()
+    );
+    Ok((conv, Some(gl)))
 }
 
 /// 收包线程：收画面交给主线程（并往 `wake` 写一个字节叫醒它）；主线程要退出时，用户关窗的话先告诉被控端不要了。
