@@ -12,7 +12,9 @@ use crate::{
     ddpro::wire::{wrap, PEER_LOG_INTERVAL},
     ui_session_interface::{InvokeUiSession, Session},
 };
-use base::message_proto::{message, misc, KeyboardMode, Message, PeerInfo};
+use base::message_proto::{
+    message, misc, KeyboardMode, Message, Misc, PeerInfo, Resolution, SupportedResolutions, SwitchDisplay,
+};
 use ddpro::{
     reject, stopped, view_action, view_down, view_ended::Kind, view_up, DisplayCaps, FormatCaps,
     MediaChannel, Reject, Stopped, ViewDown, ViewEnded, ViewStart, ViewStats, ViewUp,
@@ -41,6 +43,9 @@ struct Link {
     /// 远程各块屏的位置尺寸：对端信息里的显示列表，之后被控端每次报显示变化就更新那一块。
     /// 用户切屏时新屏的尺寸当场就有，不必等被控端回显示变化
     rects: HashMap<i32, (i32, i32, u32, u32)>,
+    /// 远程各块屏支持的分辨率和原始分辨率（悬浮球「分辨率」菜单用）：RustDesk 自己收到的那份（对端信息里只有当前屏的列表，
+    /// 之后被控端每次报显示变化都带上那块屏的），和它工具栏「分辨率」菜单用的同一份
+    resolutions: HashMap<i32, (Vec<(i32, i32)>, (i32, i32))>,
     /// 专业窗口的进程号和给它发消息的通道。换屏时旧窗口还没退出新窗口就开了，旧窗口收尾时凭进程号
     /// 只清自己的
     down: Option<(u32, mpsc::Sender<ViewDown>)>,
@@ -337,6 +342,15 @@ pub fn remember_display<T: InvokeUiSession>(pi: &PeerInfo, session: &Session<T>)
         .zip(&pi.displays)
         .map(|(i, d)| (i, (d.x, d.y, d.width.max(0) as u32, d.height.max(0) as u32)))
         .collect();
+    let list: Vec<_> = pi.resolutions.resolutions.iter().map(|r| (r.width, r.height)).collect();
+    for (i, d) in (0..).zip(&pi.displays) {
+        let original = (d.original_resolution.width, d.original_resolution.height);
+        let entry = link.resolutions.entry(i).or_default();
+        entry.1 = original;
+        if i == pi.current_display {
+            entry.0 = list.clone();
+        }
+    }
 }
 
 /// 用户在 RustDesk 里切屏：换到别的屏、而专业窗口开着（或上次因和屏有关的故障没进专业模式）时关掉专业窗口，
@@ -471,6 +485,36 @@ pub fn start<T: InvokeUiSession>(
             tx.send(down(view_down::Union::Rustdesk(bytes))).ok();
         }
     }
+    // 悬浮球「分辨率」菜单的初始数据：拼一条和被控端报显示变化同样的消息（之后被控端真报的照常转发过去，走同一处）
+    let res = links().lock().unwrap().get(&k).and_then(|l| l.resolutions.get(&l.index).cloned());
+    if let Some((list, original)) = res {
+        let resolution = |(width, height): (i32, i32)| Resolution {
+            width,
+            height,
+            ..Default::default()
+        };
+        let s = SwitchDisplay {
+            display: display_index,
+            x: display.0,
+            y: display.1,
+            width: display.2 as i32,
+            height: display.3 as i32,
+            resolutions: Some(SupportedResolutions {
+                resolutions: list.into_iter().map(resolution).collect(),
+                ..Default::default()
+            })
+            .into(),
+            original_resolution: Some(resolution(original)).into(),
+            ..Default::default()
+        };
+        let mut misc = Misc::new();
+        misc.set_switch_display(s);
+        let mut m = Message::new();
+        m.set_misc(misc);
+        if let Ok(bytes) = m.write_to_bytes() {
+            tx.send(down(view_down::Union::Rustdesk(bytes))).ok();
+        }
+    }
     let pid = child.id();
     let dither = {
         let mut links = links().lock().unwrap();
@@ -594,6 +638,15 @@ pub fn start<T: InvokeUiSession>(
                         log::info!("ddpro: floating menu: switch to general mode");
                         choose_general(&session);
                     }
+                    // 和 RustDesk 工具栏「分辨率」菜单同一个函数：被控端改分辨率、记下按屏的自定义分辨率、断开时恢复原分辨率
+                    // 都照它来；专业画面随被控端的显示变化自己重建
+                    Some(view_action::Union::ChangeResolution(r)) => {
+                        let display = links().lock().unwrap().get(&k).map(|l| l.index);
+                        if let Some(display) = display {
+                            log::info!("ddpro: floating menu: change display {display} to {}x{}", r.width, r.height);
+                            session.change_resolution(display, r.width as i32, r.height as i32);
+                        }
+                    }
                     _ => {}
                 },
                 Some(view_up::Union::Ready(_)) => {
@@ -697,6 +750,15 @@ pub fn on_rustdesk_message<T: InvokeUiSession>(msg: &Message, session: &Session<
     if let Some(s) = switch {
         if s.width > 0 && s.height > 0 {
             link.rects.insert(s.display, (s.x, s.y, s.width as u32, s.height as u32));
+        }
+        if !s.resolutions.resolutions.is_empty() {
+            link.resolutions.insert(
+                s.display,
+                (
+                    s.resolutions.resolutions.iter().map(|r| (r.width, r.height)).collect(),
+                    (s.original_resolution.width, s.original_resolution.height),
+                ),
+            );
         }
         if s.display != link.index {
             return;

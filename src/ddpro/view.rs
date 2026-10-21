@@ -23,7 +23,7 @@ use ddpro::{
         now_ns, CursorImage, Event, Window,
     },
     view_action, view_down, view_ended::Kind, view_up, ViewAction, ViewDown, ViewEnded, ViewKey, ViewMouse,
-    ViewStart, ViewStats, ViewUp,
+    ViewResolution, ViewStart, ViewStats, ViewUp,
 };
 use hbb_common::{anyhow::anyhow, bail, log, protobuf::Message as _, throttled_log, ResultType};
 use std::{
@@ -101,8 +101,13 @@ struct Times {
 /// 读标准输入的线程交给主线程的
 enum FromSession {
     Cursor(CursorImage),
-    /// 远程这块屏的新位置和尺寸（被控端切了分辨率等）
-    Display(i32, i32, i32, i32),
+    /// 远程这块屏的新位置和尺寸（被控端切了分辨率等），和它支持的分辨率、原始分辨率（悬浮球「分辨率」菜单用；
+    /// 消息里没带列表时为空）
+    Display {
+        rect: (i32, i32, i32, i32),
+        resolutions: Vec<(u32, u32)>,
+        original: (u32, u32),
+    },
 }
 
 /// 收包线程的累计统计，给主线程报质量面板用（收包线程每收一轮照抄一遍）
@@ -354,6 +359,11 @@ fn view_action(a: Action) -> Option<ViewAction> {
         Action::LockScreen => view_action::Union::LockScreen(true),
         Action::ShowStatus(on) => view_action::Union::ShowStatus(on),
         Action::GeneralMode => view_action::Union::GeneralMode(true),
+        Action::ChangeResolution(width, height) => view_action::Union::ChangeResolution(ViewResolution {
+            width,
+            height,
+            ..Default::default()
+        }),
         Action::Disconnect => return None,
     };
     Some(ViewAction {
@@ -575,7 +585,11 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
                             );
                         }
                     }
-                    Ok(FromSession::Display(x, y, w, h)) => {
+                    Ok(FromSession::Display {
+                        rect: (x, y, w, h),
+                        resolutions,
+                        original,
+                    }) => {
                         // 多久来一次由被控端决定，节流
                         throttled_log!(
                             PEER_LOG_INTERVAL,
@@ -583,6 +597,7 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
                             "ddpro: pro view: the remote display is now {w}x{h} at ({x},{y})"
                         );
                         input.set_remote(x, y, w, h);
+                        ball.set_resolutions((w.max(0) as u32, h.max(0) as u32), resolutions, original);
                     }
                     Err(_) => break,
                 }
@@ -1004,7 +1019,20 @@ fn read_session(
                 None => continue,
             },
             Some(message::Union::Misc(misc)) => match misc.union {
-                Some(misc::Union::SwitchDisplay(s)) => FromSession::Display(s.x, s.y, s.width, s.height),
+                Some(misc::Union::SwitchDisplay(s)) => FromSession::Display {
+                    rect: (s.x, s.y, s.width, s.height),
+                    resolutions: s
+                        .resolutions
+                        .resolutions
+                        .iter()
+                        .filter(|r| r.width > 0 && r.height > 0)
+                        .map(|r| (r.width as u32, r.height as u32))
+                        .collect(),
+                    original: (
+                        s.original_resolution.width.max(0) as u32,
+                        s.original_resolution.height.max(0) as u32,
+                    ),
+                },
                 _ => continue,
             },
             _ => continue,

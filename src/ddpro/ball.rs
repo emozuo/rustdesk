@@ -39,6 +39,8 @@ const IDLE_DOCK: Duration = Duration::from_secs(1);
 // 面板尺寸、配色、字号都照旧 DreamDesk（`client/src/dd_ui_ball.c`，浅色）
 const MENU_W: f32 = 238.0;
 const SUB_W: f32 = 200.0;
+/// 子菜单文字左边距（前面留给「当前项」的圆点）
+const SUB_TEXT_X: f32 = 34.0;
 const ROW_H: f32 = 34.0;
 const PAD: f32 = 6.0;
 const PANEL_RADIUS: f32 = 10.0;
@@ -77,6 +79,8 @@ const KEY_ESC: u32 = 1;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
     SwitchDisplay(i32),
+    /// 把远程这块屏改成这个分辨率（宽, 高）
+    ChangeResolution(u32, u32),
     /// 网络状态块开 / 关之后的状态（会话进程记下来，换屏开新窗口时照旧）
     ShowStatus(bool),
     GeneralMode,
@@ -95,6 +99,7 @@ enum Edge {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Item {
     SwitchDisplay,
+    Resolution,
     Status,
     General,
     CtrlAltDel,
@@ -102,7 +107,22 @@ enum Item {
     Disconnect,
 }
 
-const ITEMS: [Item; 6] = [Item::SwitchDisplay, Item::Status, Item::General, Item::CtrlAltDel, Item::Lock, Item::Disconnect];
+const ITEMS: [Item; 7] = [
+    Item::SwitchDisplay,
+    Item::Resolution,
+    Item::Status,
+    Item::General,
+    Item::CtrlAltDel,
+    Item::Lock,
+    Item::Disconnect,
+];
+
+/// 子菜单的一行：文字、是不是当前选中的（前面一个圆点）、点了做什么（None = 点了只关菜单）
+struct SubEntry {
+    label: String,
+    current: bool,
+    action: Option<Action>,
+}
 
 impl Item {
     /// 菜单文字尽量用 RustDesk 自己菜单里的同一批词条，叫法一致、不新增翻译（切换模式是我们独有的）
@@ -110,6 +130,7 @@ impl Item {
         crate::lang::translate(
             match self {
                 Item::SwitchDisplay => "Switch display",
+                Item::Resolution => "Resolution",
                 // 状态块里就是 RustDesk 质量面板在专业模式下显示的那份实测值，叫法跟它一致
                 Item::Status => "Show quality monitor",
                 Item::General => "Switch to general mode",
@@ -122,7 +143,7 @@ impl Item {
     }
 
     fn has_sub(self) -> bool {
-        self == Item::SwitchDisplay
+        matches!(self, Item::SwitchDisplay | Item::Resolution)
     }
 }
 
@@ -168,6 +189,10 @@ pub struct Ball {
     free_since: Option<Instant>,
     display_count: u32,
     display_index: i32,
+    /// 「分辨率」子菜单：远程这块屏现在的分辨率、支持的分辨率、原始分辨率（被控端报来的，和 RustDesk 工具栏用的同一份）
+    remote_size: (u32, u32),
+    resolutions: Vec<(u32, u32)>,
+    original: (u32, u32),
     dirty: bool,
 }
 
@@ -201,8 +226,75 @@ impl Ball {
             free_since: None,
             display_count: display_count.max(1),
             display_index,
+            remote_size: (0, 0),
+            resolutions: Vec::new(),
+            original: (0, 0),
             dirty: true,
         }
+    }
+
+    /// 被控端报来远程这块屏的分辨率信息（列表为空时只更新当前分辨率，菜单沿用上次的列表）
+    pub fn set_resolutions(&mut self, current: (u32, u32), resolutions: Vec<(u32, u32)>, original: (u32, u32)) {
+        self.remote_size = current;
+        if !resolutions.is_empty() {
+            self.resolutions = resolutions;
+            self.original = original;
+        }
+        self.dirty |= self.menu_open;
+    }
+
+    /// 打开的子菜单里的各行。分辨率照 RustDesk 工具栏「分辨率」菜单（`remote_toolbar.dart` 的 `_ResolutionsMenu`）：
+    /// 原始分辨率（设过、不是当前、在支持列表里时）、适应本地分辨率（支持列表里有和本机一样的、且不是当前时）、
+    /// 然后是支持的分辨率列表；自定义宽高只对虚拟显示器、要输入数字，悬浮球不做
+    fn sub_entries(&self) -> Vec<SubEntry> {
+        let Some(item) = self.sub_open.map(|r| ITEMS[r]) else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        match item {
+            Item::SwitchDisplay => {
+                let monitor = crate::lang::translate("Monitor".to_owned());
+                for i in 0..self.display_count as i32 {
+                    out.push(SubEntry {
+                        label: format!("{monitor} {}", i + 1),
+                        current: i == self.display_index,
+                        action: (i != self.display_index).then_some(Action::SwitchDisplay(i)),
+                    });
+                }
+            }
+            Item::Resolution => {
+                let size = |(w, h): (u32, u32)| format!("{w}x{h}");
+                let change = |r: (u32, u32)| (r != self.remote_size).then_some(Action::ChangeResolution(r.0, r.1));
+                let original = self.original;
+                if original.0 > 0 && original != self.remote_size && self.resolutions.contains(&original) {
+                    out.push(SubEntry {
+                        label: format!("{} {}", crate::lang::translate("resolution_original_tip".to_owned()), size(original)),
+                        current: false,
+                        action: change(original),
+                    });
+                }
+                let local = (self.screen.0 as u32, self.screen.1 as u32);
+                if local != self.remote_size && self.resolutions.contains(&local) {
+                    out.push(SubEntry {
+                        label: format!("{} {}", crate::lang::translate("resolution_fit_local_tip".to_owned()), size(local)),
+                        current: false,
+                        action: change(local),
+                    });
+                }
+                for &r in &self.resolutions {
+                    out.push(SubEntry {
+                        label: size(r),
+                        current: r == self.remote_size,
+                        action: change(r),
+                    });
+                }
+            }
+            _ => {}
+        }
+        // 整屏放不下的截掉后面的
+        let fit = ((self.screen.1 - 2.0 * PAD) / ROW_H).max(1.0) as usize;
+        out.truncate(fit);
+        out
     }
 
     /// 本机屏幕分辨率变了：球回到默认位置
@@ -317,8 +409,9 @@ impl Ball {
                 }
             }
             Target::SubRow(r) if self.sub_row_at() == Some(r) => {
+                let action = self.sub_entries().get(r).and_then(|e| e.action);
                 self.close_menu();
-                (r as i32 != self.display_index).then_some(Action::SwitchDisplay(r as i32))
+                action
             }
             _ => None,
         };
@@ -517,11 +610,18 @@ impl Ball {
 
     fn sub_rect(&self) -> Option<(f32, f32, f32, f32)> {
         let r = self.sub_open?;
+        let entries = self.sub_entries();
         let (mx, my, mw, _) = self.main_rect();
-        let h = self.display_count as f32 * ROW_H + 2.0 * PAD;
-        let x = if mx + mw + 4.0 + SUB_W <= self.screen.0 { mx + mw + 4.0 } else { mx - 4.0 - SUB_W };
+        let h = entries.len() as f32 * ROW_H + 2.0 * PAD;
+        // 「适应本地分辨率 2560x1440」这类长的行放宽
+        let text = self
+            .face
+            .as_ref()
+            .map_or(0.0, |f| entries.iter().map(|e| text_width(f, &e.label, FONT_PX)).fold(0.0, f32::max));
+        let w = SUB_W.max((SUB_TEXT_X + text + 20.0).ceil());
+        let x = if mx + mw + 4.0 + w <= self.screen.0 { mx + mw + 4.0 } else { mx - 4.0 - w };
         let y = (my + r as f32 * ROW_H).clamp(0.0, (self.screen.1 - h).max(0.0));
-        Some((x.max(0.0), y, SUB_W, h))
+        Some((x.max(0.0), y, w, h))
     }
 
     fn row_at(&self) -> Option<usize> {
@@ -542,7 +642,7 @@ impl Ball {
             return None;
         }
         let r = ((self.pointer.1 - y - PAD) / ROW_H) as usize;
-        (r < self.display_count as usize).then_some(r)
+        (r < self.sub_entries().len()).then_some(r)
     }
 
     fn draw_ball(&self) -> Option<LayerImage> {
@@ -625,19 +725,18 @@ impl Ball {
         }
 
         if let Some((sx, sy, sw, _)) = sub {
-            let monitor = crate::lang::translate("Monitor".to_owned());
-            for i in 0..self.display_count as usize {
+            for (i, e) in self.sub_entries().iter().enumerate() {
                 let ry = sy + PAD + i as f32 * ROW_H;
                 if self.hover_sub == Some(i) {
                     fill(&mut pm, rounded(sx + 4.0, ry, sw - 8.0, ROW_H - 2.0, 7.0), C_HOVER);
                 }
                 let cy = ry + ROW_H / 2.0;
-                // 当前看的那块屏前面一个圆点
-                if i as i32 == self.display_index {
+                // 当前那一项（看的那块屏、现在的分辨率）前面一个圆点
+                if e.current {
                     fill(&mut pm, PathBuilder::from_circle(sx + 18.0, cy, 3.2), C_TEXT);
                 }
                 if let Some(face) = &self.face {
-                    draw_text(&mut pm, face, &format!("{monitor} {}", i + 1), sx + 34.0, cy, C_TEXT, FONT_PX);
+                    draw_text(&mut pm, face, &e.label, sx + SUB_TEXT_X, cy, C_TEXT, FONT_PX);
                 }
             }
         }
@@ -729,6 +828,20 @@ fn draw_icon(pm: &mut Pixmap, item: Item, cx: f32, cy: f32, color: [u8; 4]) {
             pb.line_to(cx + 7.0, cy);
             pb.line_to(cx + 4.5, cy + 2.5);
             stroke(pm, pb.finish(), color, lw);
+        }
+        // 屏幕外框 + 一条斜向双头箭头：改尺寸
+        Item::Resolution => {
+            stroke(pm, rounded(cx - 7.5, cy - 5.5, 15.0, 11.0, 1.6), color, lw);
+            let mut pb = PathBuilder::new();
+            pb.move_to(cx - 3.5, cy + 2.5);
+            pb.line_to(cx + 3.5, cy - 2.5);
+            pb.move_to(cx + 0.5, cy - 2.5);
+            pb.line_to(cx + 3.5, cy - 2.5);
+            pb.line_to(cx + 3.5, cy + 0.3);
+            pb.move_to(cx - 0.5, cy + 2.5);
+            pb.line_to(cx - 3.5, cy + 2.5);
+            pb.line_to(cx - 3.5, cy - 0.3);
+            stroke(pm, pb.finish(), color, 1.3);
         }
         // 键盘：圆角外框 + 两排键点 + 一条空格键
         Item::CtrlAltDel => {
