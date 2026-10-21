@@ -3156,7 +3156,19 @@ impl Connection {
                     .lock()
                     .unwrap()
                     .retain(|_, v| v.0.elapsed() < SWITCH_SIDES_UUID_TTL);
-                let uuid_old = SWITCH_SIDES_UUID.lock().unwrap().remove(&lr.my_id);
+                let uuid_old = {
+                    let mut uuids = SWITCH_SIDES_UUID.lock().unwrap();
+                    uuids.remove(&lr.my_id).or_else(|| {
+                        // DreamDesk: when this side switched sides on a connection made by IP, the
+                        // grant is filed under that IP (a direct IP connection exchanges no
+                        // identity, so this side never learns the peer's ID), but the peer calls
+                        // back with its ID. Find the grant by its UUID instead: 128 random bits,
+                        // valid for SWITCH_SIDES_UUID_TTL, removed on first use.
+                        let received = uuid::Uuid::from_slice(_s.uuid.to_vec().as_ref()).ok()?;
+                        let key = uuids.iter().find(|(_, v)| v.1 == received).map(|(k, _)| k.clone())?;
+                        uuids.remove(&key)
+                    })
+                };
                 if let Ok(uuid) = uuid::Uuid::from_slice(_s.uuid.to_vec().as_ref()) {
                     if let Some((_instant, uuid_old)) = uuid_old {
                         if uuid == uuid_old {
