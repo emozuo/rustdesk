@@ -75,8 +75,16 @@ cargo install flutter_rust_bridge_codegen --version 1.80.1 --features uuid --loc
 # Flutter 3.24.5（版本必须对齐，项目 pin 了 pubspec.lock）
 #   下载 flutter_windows_3.24.5-stable.zip 解压后打补丁：
 git -C <flutter-sdk> apply <rustdesk>\.github\patches\flutter_3.24.4_dropdown_menu_enableFilter.diff
-# vcpkg：VCPKG_ROOT 指向 vcpkg 目录，然后在仓库根执行
+# vcpkg：commit 和 vcpkg.json 的 baseline 对齐（同 Linux 侧）。本机 2026-10-21 起用单独检出的
+#   D:\WORKPLACE\CODING\_toolchain\vcpkg-rustdesk（从 C:\vcpkg 建的 git worktree，C:\vcpkg 停在 5 月的提交不动）：
+#   git -C C:\vcpkg fetch origin
+#   git -C C:\vcpkg worktree add --detach D:\WORKPLACE\CODING\_toolchain\vcpkg-rustdesk 9e593bb18ea69cc5095e012465dcd675a822ed0d
+#   powershell -File D:\WORKPLACE\CODING\_toolchain\vcpkg-rustdesk\scripts\bootstrap.ps1 -disableMetrics
+# 然后在仓库根执行。宿主三元组必须和目标一样是静态的（官方流程 VCPKG_DEFAULT_HOST_TRIPLET 同样这么设）：
+# FFmpeg 在清单里是「宿主」包，NVIDIA / AMD / Intel 硬件编码只在静态三元组里开，默认的动态宿主编出来的 FFmpeg 没有硬件编码
+$env:VCPKG_DEFAULT_HOST_TRIPLET = "x64-windows-static"
 vcpkg install --triplet x64-windows-static --x-install-root="$env:VCPKG_ROOT\installed"
+# vcpkg 换了版本（库变了）之后，cargo 不会自己重新链接：先 cargo clean --release -p hwcodec -p scrap -p magnum-opus
 ```
 
 **装的是 VS 2026（major 18）时还要补一处**。Flutter 3.24.5 能认出 VS 2026，但「VS 主版本 →
@@ -104,7 +112,7 @@ Remove-Item <flutter-sdk>\bin\cache\flutter_tools.stamp
 # 环境
 $env:PATH = "<flutter-sdk>\bin;C:\Python312;C:\Python312\Scripts;$env:USERPROFILE\.cargo\bin;" + $env:PATH
 $env:ALL_PROXY = "socks5h://127.0.0.1:10808"
-$env:VCPKG_ROOT = "C:\vcpkg"
+$env:VCPKG_ROOT = "D:\WORKPLACE\CODING\_toolchain\vcpkg-rustdesk"   # 2026-10-21 前是 C:\vcpkg（FFmpeg 7.1，旧）
 Copy-Item C:\Python312\python.exe C:\Python312\python3.exe   # build.py 调的是 python3
 
 cd <rustdesk>
