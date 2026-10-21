@@ -6,8 +6,9 @@
 //! Powered by RustDesk 等），这是它给品牌版本设计的正规路径。
 //!
 //! 产品版只在内网用（企业内部禁止连外网）：RustDesk 默认会连官方注册 / 中继 / 账号服务器和写死的公网
-//! STUN，这里把服务器预置成内网的，并关掉会去连公网 STUN 的两项。用 RustDesk 的「强制设置」
-//! （官方定制客户端用的同一层），用户在界面上改不回公网。
+//! STUN，这里把服务器预置成内网的（RustDesk 的「默认设置」，官方定制客户端用的同一层：没改过就用它，
+//! 设置里「ID/中继服务器」照样能改——用户 2026-10-21 要求放开，原来用「强制设置」锁死、那一栏是灰的），
+//! 并强制关掉会去连公网 STUN 的两项。
 
 use base::config::keys;
 use hbb_common::config;
@@ -26,7 +27,7 @@ const INTRANET_STUN: &str = "stun:dreamdesk.of3d.com:3478";
 /// 在程序入口最早处调用，先于 RustDesk 读应用名、加载定制配置。
 pub fn apply() {
     *config::APP_NAME.write().unwrap() = APP_NAME.to_owned();
-    config::OVERWRITE_SETTINGS.write().unwrap().extend(
+    config::DEFAULT_SETTINGS.write().unwrap().extend(
         [
             (keys::OPTION_CUSTOM_RENDEZVOUS_SERVER, INTRANET_SERVER),
             (keys::OPTION_RELAY_SERVER, INTRANET_SERVER),
