@@ -297,8 +297,14 @@ fn run(ps: ProService) -> ResultType<()> {
             log::info!("ddpro: pro video on display {display} ended")
         }
         Ok((End::ControllerClosed, _)) => match back_to_general(display, &session) {
-            Back::General => log::info!("ddpro: the controller closed the pro view on display {display}; back to general view"),
-            Back::OtherDisplay => log::info!("ddpro: the controller closed the pro view on display {display}; the connection already watches other displays"),
+            Back::General => {
+                log::info!("ddpro: the controller closed the pro view on display {display}; back to general view");
+                tell_released(&session, display);
+            }
+            Back::OtherDisplay => {
+                log::info!("ddpro: the controller closed the pro view on display {display}; the connection already watches other displays");
+                tell_released(&session, display);
+            }
             Back::Superseded => log::info!("ddpro: the pro view on display {display} ended; a newer pro session took the display"),
             Back::Closed => {}
         },
@@ -336,6 +342,14 @@ fn tell_controller(session: &Session, display: usize, e: &hbb_common::anyhow::Er
         None => Reason::VIDEO_ERROR,
     };
     if let Some(msg) = super::wire::wrap(ddpro::stopped(reason, e.to_string(), display as u32)) {
+        session.conn.clone().send(Arc::new(msg));
+    }
+}
+
+/// 主控端关了这块屏的专业窗口、本会话已退订专业服务：告诉主控端这块屏放回来了。多屏时这块屏的窗口还在的话，
+/// 主控端会把它的普通画面要回去（[`back_to_general`] 看到连接还在看别的屏就不订回来，那是单窗口切屏的情形）
+fn tell_released(session: &Session, display: usize) {
+    if let Some(msg) = super::wire::wrap(ddpro::released(display as u32)) {
         session.conn.clone().send(Arc::new(msg));
     }
 }

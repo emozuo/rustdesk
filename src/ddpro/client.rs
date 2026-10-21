@@ -50,7 +50,7 @@ pub fn on_peer_info<T: InvokeUiSession>(pi: &PeerInfo, session: &Session<T>) {
         log::info!("ddpro: the peer does not offer pro mode, staying in general mode");
         // 重连到了不提供专业模式的对端：上次挂的提示不再适用（对普通 RustDesk 对端不显示提示）
         #[cfg(all(feature = "flutter", target_os = "linux"))]
-        super::view_link::clear_notice(session);
+        super::view_link::clear_notices(session);
         return;
     };
     let peer_version = u32::try_from(peer_version).unwrap_or(u32::MAX);
@@ -62,14 +62,32 @@ pub fn on_peer_info<T: InvokeUiSession>(pi: &PeerInfo, session: &Session<T>) {
     }
     let display = u32::try_from(pi.current_display).unwrap_or(0);
     log::info!("ddpro: the peer offers pro protocol v{peer_version}, requesting a pro session for display {display}");
+    #[cfg(all(feature = "flutter", target_os = "linux"))]
+    super::view_link::mark_offered(session);
     request_pro(session, display);
+    // 断线重连：「将我的所有显示器」开的子窗口还在、不会再开一次，它们的屏也在这里重新请求（P1 第 8 项）
+    #[cfg(all(feature = "flutter", target_os = "linux"))]
+    for d in super::view_link::child_displays(session) {
+        log::info!("ddpro: requesting a pro session for remote display {d} shown in another window");
+        request_pro(session, u32::try_from(d).unwrap_or(0));
+    }
+}
+
+/// RustDesk 为某块远程屏开了新窗口（`session_start_with_displays` 的钩子；「将我的所有显示器用于远程会话」连上时按屏铺满就走这里）：
+/// 对端提供专业模式时这块屏也进专业模式，专业窗口和这个窗口对应（P1 第 8 项）。别的多屏看法（每屏单独窗口、所有屏一个窗口）不接。
+#[cfg(all(feature = "flutter", target_os = "linux"))]
+pub fn on_window_start<T: InvokeUiSession>(session: &Session<T>, window: uuid::Uuid, displays: &[i32]) {
+    if let Some(display) = super::view_link::on_window_start(session, window, displays) {
+        log::info!("ddpro: RustDesk opened a window for remote display {display}; requesting a pro session for it");
+        request_pro(session, u32::try_from(display).unwrap_or(0));
+    }
 }
 
 /// 对 `display` 发起专业请求（开会话、换屏各算新的一次）。本机能力第一次探测要打开显卡、连 Wayland，
 /// 几十到几百毫秒，放到单独的线程里做，不占 RustDesk 的消息循环；请求经会话的发送通道发出。
 fn request_pro<T: InvokeUiSession>(session: &Session<T>, display: u32) {
     #[cfg(all(feature = "flutter", target_os = "linux"))]
-    super::view_link::clear_notice(session);
+    super::view_link::clear_notice(session, display as i32);
     let session = session.clone();
     std::thread::spawn(move || {
         if let Some(m) = wrap(ddpro::hello(decode_caps(), display_caps(), display)) {
@@ -78,11 +96,11 @@ fn request_pro<T: InvokeUiSession>(session: &Session<T>, display: u32) {
     });
 }
 
-/// 用户点「非专业模式」提示上的「重新进入专业模式」，或通用模式标签上的「进入专业模式」：故障值得再试、
-/// 或用户切过通用模式时，对当前屏重新发起专业请求。
-pub fn retry<T: InvokeUiSession>(_session: &Session<T>) {
+/// 用户点「非专业模式」提示上的「重新进入专业模式」，或通用模式标签上的「进入专业模式」（`_window` 是点的那个窗口）：
+/// 故障值得再试、或用户切过通用模式时，对那个窗口的屏重新发起专业请求（切过通用模式的，各块屏一起回专业模式）。
+pub fn retry<T: InvokeUiSession>(_session: &Session<T>, _window: uuid::Uuid) {
     #[cfg(all(feature = "flutter", target_os = "linux"))]
-    if let Some(display) = super::view_link::retry(_session) {
+    for display in super::view_link::retry(_session, _window) {
         log::info!("ddpro: retrying pro mode on remote display {display}");
         request_pro(_session, u32::try_from(display).unwrap_or(0));
     }
@@ -92,7 +110,7 @@ pub fn retry<T: InvokeUiSession>(_session: &Session<T>) {
 /// 马上告诉被控端；之后换屏开新的专业窗口也照这个设置（见 `view_link::start`）。
 pub fn set_dither<T: InvokeUiSession>(_session: &Session<T>, _on: bool) {
     #[cfg(all(feature = "flutter", target_os = "linux"))]
-    if let Some(display) = super::view_link::set_dither(_session, _on) {
+    for display in super::view_link::set_dither(_session, _on) {
         log::info!("ddpro: dither {} for remote display {display}", if _on { "on" } else { "off" });
         if let Some(m) = wrap(ddpro::set_dither(u32::try_from(display).unwrap_or(0), _on)) {
             _session.send(Data::Message(m));
@@ -146,14 +164,15 @@ pub fn on_message<T: InvokeUiSession>(data: &[u8], sender: &UnboundedSender<Data
             throttled_log!(
                 PEER_LOG_INTERVAL,
                 info,
-                "ddpro: pro session accepted, format {}",
+                "ddpro: pro session accepted on display {}, format {}",
+                accept.display_index,
                 ddpro::describe_format(&accept.format)
             );
             if receive_only() {
                 start_receiver(&accept.media, sender.clone());
             } else {
                 #[cfg(all(feature = "flutter", target_os = "linux"))]
-                super::view_link::start(&accept.media, sender.clone(), _session);
+                super::view_link::start(&accept.media, sender.clone(), _session, accept.display_index as i32);
                 #[cfg(not(all(feature = "flutter", target_os = "linux")))]
                 log::error!("ddpro: this build has no pro view; the peer should not have accepted");
             }
@@ -184,6 +203,12 @@ pub fn on_message<T: InvokeUiSession>(data: &[u8], sender: &UnboundedSender<Data
             );
             #[cfg(all(feature = "flutter", target_os = "linux"))]
             super::view_link::peer_stopped(_session, &s);
+        }
+        Some(dd_pro::Union::Released(r)) => {
+            #[cfg(all(feature = "flutter", target_os = "linux"))]
+            super::view_link::released(_session, r.display_index as i32);
+            #[cfg(not(all(feature = "flutter", target_os = "linux")))]
+            let _ = r;
         }
         _ => throttled_log!(
             PEER_LOG_INTERVAL,

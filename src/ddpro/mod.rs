@@ -15,6 +15,13 @@ pub fn apply() {
         base::config::keys::OPTION_ENABLE_OPEN_NEW_CONNECTIONS_IN_TABS.to_owned(),
         "N".to_owned(),
     );
+    // 「将我的所有显示器用于远程会话」默认打开（用户 2026-10-21 定）：双屏瘦客户机连上即每块屏一个专业窗口（P1 第 8 项）。
+    // 是默认值，用户在设置里关了按用户的
+    #[cfg(feature = "dd-pro")]
+    hbb_common::config::DEFAULT_DISPLAY_SETTINGS.write().unwrap().insert(
+        base::config::keys::OPTION_USE_ALL_MY_DISPLAYS_FOR_THE_REMOTE_SESSION.to_owned(),
+        "Y".to_owned(),
+    );
 }
 
 // 专业窗口的悬浮球和菜单，和专业窗口同条件

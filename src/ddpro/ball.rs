@@ -189,6 +189,8 @@ pub struct Ball {
     free_since: Option<Instant>,
     display_count: u32,
     display_index: i32,
+    /// 多屏时这个窗口固定看这块屏（P1 第 8 项）：「切换显示器」只列它，别的屏归别的窗口
+    display_fixed: bool,
     /// 「分辨率」子菜单：远程这块屏现在的分辨率、支持的分辨率、原始分辨率（被控端报来的，和 RustDesk 工具栏用的同一份）
     remote_size: (u32, u32),
     resolutions: Vec<(u32, u32)>,
@@ -197,7 +199,7 @@ pub struct Ball {
 }
 
 impl Ball {
-    pub fn new((w, h): (u32, u32), display_count: u32, display_index: i32, show_status: bool) -> Self {
+    pub fn new((w, h): (u32, u32), display_count: u32, display_index: i32, display_fixed: bool, show_status: bool) -> Self {
         let (face, mono) = load_faces();
         if face.is_none() {
             log::warn!("ddpro: pro view menu has no font, showing no text");
@@ -226,6 +228,7 @@ impl Ball {
             free_since: None,
             display_count: display_count.max(1),
             display_index,
+            display_fixed,
             remote_size: (0, 0),
             resolutions: Vec::new(),
             original: (0, 0),
@@ -257,6 +260,9 @@ impl Ball {
             Item::SwitchDisplay => {
                 let monitor = crate::lang::translate("Monitor".to_owned());
                 for i in 0..self.display_count as i32 {
+                    if self.display_fixed && i != self.display_index {
+                        continue;
+                    }
                     out.push(SubEntry {
                         label: format!("{monitor} {}", i + 1),
                         current: i == self.display_index,

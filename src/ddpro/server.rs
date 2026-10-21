@@ -19,6 +19,28 @@ pub fn is_pro_service(name: &str) -> bool {
     name.starts_with(PRO_SERVICE_PREFIX)
 }
 
+/// RustDesk 要给连接订某块屏的普通画面（切屏、多屏开窗都经服务器的订阅入口），而这块屏正由这条连接自己的专业会话占着：
+/// 不放行，免得同一块屏编两路（P1 第 8 项）。只看专业服务还订没订着：专业会话一结束（专业服务退订了）就不再拦，退回通用画面照常订。
+#[cfg(all(windows, feature = "vram"))]
+pub fn holds_display(server: &crate::server::Server, name: &str, conn_id: i32) -> bool {
+    use crate::server::video_service::VideoSource;
+    let Some(display) = name
+        .strip_prefix(VideoSource::Monitor.service_name_prefix())
+        .and_then(|d| d.parse::<usize>().ok())
+    else {
+        return false;
+    };
+    let held = server.is_subscribed(&format!("{PRO_SERVICE_PREFIX}{display}"), conn_id);
+    if held {
+        throttled_log!(
+            PEER_LOG_INTERVAL,
+            info,
+            "ddpro: keeping the general video of display {display} off: this connection's pro session has it"
+        );
+    }
+    held
+}
+
 /// 登录应答的名片：只写专业协议版本，详细能力在请求 / 答复里谈。
 pub fn add_name_card(platform_additions: &mut Map<String, Value>) {
     platform_additions.insert(
@@ -73,7 +95,15 @@ fn handle(data: &[u8], ctx: &ConnCtx) -> Option<Message> {
         return wrap(reject(reject::Reason::VERSION_MISMATCH, mismatch));
     }
     match msg.union {
-        Some(dd_pro::Union::Hello(hello)) => wrap(answer(&hello, ctx)),
+        Some(dd_pro::Union::Hello(hello)) => {
+            let mut reply = answer(&hello, ctx);
+            match &mut reply {
+                dd_pro::Union::Accept(a) => a.display_index = hello.display_index,
+                dd_pro::Union::Reject(r) => r.display_index = hello.display_index,
+                _ => {}
+            }
+            wrap(reply)
+        }
         Some(dd_pro::Union::SetDither(s)) => {
             set_dither(&s, ctx);
             None

@@ -544,6 +544,11 @@ impl Server {
     }
 
     pub fn subscribe(&mut self, name: &str, conn: ConnInner, sub: bool) {
+        // The connection's pro session has this display (src/ddpro/server.rs).
+        #[cfg(all(feature = "dd-pro", windows, feature = "vram"))]
+        if sub && crate::ddpro::server::holds_display(self, name, conn.id()) {
+            return;
+        }
         if let Some(s) = self.services.get(name) {
             if s.is_subed(conn.id()) == sub {
                 return;

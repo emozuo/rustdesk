@@ -420,7 +420,7 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
             .name("ddpro-view-recv".into())
             .spawn(move || receive(peer, keys, frame_tx, wake_tx, decoders, quit, bye, resync, channel, counters))?
     };
-    let (mut win, dev, mut dec, mut conv, mut shader) = match open_display(&start) {
+    let (mut win, dev, mut dec, mut conv, mut shader, display_fixed) = match open_display(&start) {
         Ok(v) => v,
         Err(e) => {
             // 显示不了：马上告诉被控端不要了（不让它白等 3 秒心跳超时），它退回通用画面
@@ -447,8 +447,8 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
             .spawn(move || read_session(stdin, session_tx, gone))?;
     }
 
-    let mut input = Input::new(&start, size);
-    let mut ball = Ball::new(size, start.display_count, start.display_index, start.show_status);
+    let mut input = Input::new(&start, size, display_fixed);
+    let mut ball = Ball::new(size, start.display_count, start.display_index, display_fixed, start.show_status);
     let mut ledger = Ledger::default();
     let mut shown: HashMap<usize, Shown> = HashMap::new();
     let mut last_report = Instant::now();
@@ -785,7 +785,8 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
 }
 
 /// 开全屏窗口、显卡解码器和转换器（设备留着，本机屏幕分辨率变了要按新尺寸重建转换器）。
-fn open_display(start: &ViewStart) -> ResultType<(Window, Device, Decoder, Converter, Option<GlConverter>)> {
+/// 最后一项：多屏时这个窗口固定看这块远程屏（见 [`screen_rank`]）。
+fn open_display(start: &ViewStart) -> ResultType<(Window, Device, Decoder, Converter, Option<GlConverter>, bool)> {
     // 桌面文件按应用名装（产品版 dreamdesk-pro.desktop，原版 rustdesk.desktop），和通用窗口同一个应用名
     let app_id = crate::get_app_name().to_lowercase();
     let mut win = Window::open(
@@ -793,6 +794,17 @@ fn open_display(start: &ViewStart) -> ResultType<(Window, Device, Decoder, Conve
         &app_id,
     )
     .map_err(|e| anyhow!("{e}"))?;
+    let rank = screen_rank(start, win.screen_count());
+    if let Some(rank) = rank {
+        // 还没送过画面，窗口没上屏：这时换全屏目标看不到跳屏
+        let screen = win.fullscreen_on(rank).map_err(|e| anyhow!("{e}"))?;
+        log::info!(
+            "ddpro: pro view of remote display {} goes full screen on local screen {} ({screen:?}) of {}",
+            start.display_index,
+            rank + 1,
+            win.screen_count()
+        );
+    }
     let (w, h) = win.size();
     let dev = Device::open().map_err(|e| anyhow!("{e}"))?;
     let dec = Decoder::new(&dev).map_err(|e| anyhow!("{e}"))?;
@@ -805,7 +817,22 @@ fn open_display(start: &ViewStart) -> ResultType<(Window, Device, Decoder, Conve
         start.remote_y,
         win.idle_inhibited()
     );
-    Ok((win, dev, dec, conv, shader))
+    Ok((win, dev, dec, conv, shader, rank.is_some()))
+}
+
+/// 多屏（P1 第 8 项，主控端打开了「将我的所有显示器用于远程会话」）：本机和远程都多于一块屏时，这块远程屏的窗口全屏到
+/// 按位置对应的本机屏——两边都从左到右、再从上到下排，远程第 k 块对本机第 k 块，鼠标跨屏的方向和实物摆放一致。
+/// RustDesk 按屏号给前 min(远程, 本机) 块远程屏开窗口，所以只在这几块里排。返回本机屏的排位；不是多屏时 None
+/// （照旧由桌面决定放哪块屏）。
+fn screen_rank(start: &ViewStart, local_screens: usize) -> Option<usize> {
+    if !start.all_displays || local_screens < 2 || start.display_origins.len() < 2 {
+        return None;
+    }
+    let shown = start.display_origins.len().min(local_screens);
+    let me = usize::try_from(start.display_index).ok().filter(|&i| i < shown)?;
+    let mut order: Vec<usize> = (0..shown).collect();
+    order.sort_by_key(|&i| (start.display_origins[i].x, start.display_origins[i].y));
+    order.iter().position(|&i| i == me)
 }
 
 /// 按窗口当前尺寸建输出画面和转换器，把输出画面登记给窗口（换掉原来登记的）。按顺序试（P1 第 7 项）：
@@ -1070,10 +1097,14 @@ struct Input {
     /// 按着的键（evdev），焦点离开时替用户抬起
     held: HashSet<u32>,
     pos: (i32, i32),
+    /// 多屏（P1 第 8 项）：指针出了窗口时坐标不夹在这块屏以内。按着键拖出窗口时合成器照旧把指针事件发给这个窗口
+    /// （坐标超出窗口，2026-10-21 瘦客户机实测），照同样的比例延伸到远程相邻的屏，远程那边拖着的窗口才能跟到别的屏上
+    /// （两边按位置对应，见 `screen_rank`）。窗口里（含缩放留的黑边）照旧夹在这块屏以内
+    spill: bool,
 }
 
 impl Input {
-    fn new(start: &ViewStart, window: (u32, u32)) -> Self {
+    fn new(start: &ViewStart, window: (u32, u32), spill: bool) -> Self {
         let mut input = Self {
             window,
             remote: (0, 0, 1, 1),
@@ -1082,6 +1113,7 @@ impl Input {
             locked: 0,
             held: HashSet::new(),
             pos: (start.remote_x, start.remote_y),
+            spill,
         };
         input.set_remote(
             start.remote_x,
@@ -1109,12 +1141,16 @@ impl Input {
         self.fit = (x as f64, y as f64, fw.max(1) as f64, fh.max(1) as f64);
     }
 
-    /// 窗口坐标 → 远程桌面坐标（去掉黑边、按缩放比例，夹在这块屏以内）
+    /// 窗口坐标 → 远程桌面坐标（去掉黑边、按缩放比例，夹在这块屏以内；多屏时指针出了窗口不夹）
     fn remote_pos(&self, x: f64, y: f64) -> (i32, i32) {
         let (fx, fy, fw, fh) = self.fit;
         let (rx, ry, rw, rh) = self.remote;
         let px = ((x - fx) * rw as f64 / fw).floor() as i32;
         let py = ((y - fy) * rh as f64 / fh).floor() as i32;
+        let outside = x < 0.0 || y < 0.0 || x >= self.window.0 as f64 || y >= self.window.1 as f64;
+        if self.spill && outside {
+            return (rx + px, ry + py);
+        }
         (rx + px.clamp(0, rw - 1), ry + py.clamp(0, rh - 1))
     }
 

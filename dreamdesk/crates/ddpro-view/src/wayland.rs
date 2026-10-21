@@ -59,7 +59,7 @@ use std::{
     io::ErrorKind,
     mem,
     os::fd::{AsFd, AsRawFd, BorrowedFd},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 #[derive(Debug)]
@@ -183,6 +183,8 @@ struct State {
     shortcuts_inhibitor: Option<ZwpKeyboardShortcutsInhibitorV1>,
     keyboard_seat: Option<wl_seat::WlSeat>,
     size: Option<(u32, u32)>,
+    /// 收到过几次窗口配置：换全屏目标后等合成器的下一次配置用（两块屏一样大时尺寸不变，只能数次数）
+    configures: u64,
     closed: bool,
     slots: Vec<Slot>,
     formats: Option<FormatSupport>,
@@ -307,6 +309,7 @@ impl Window {
                 shortcuts_inhibitor: None,
                 keyboard_seat: None,
                 size: None,
+                configures: 0,
                 closed: false,
                 slots: Vec::new(),
                 formats: None,
@@ -338,6 +341,43 @@ impl Window {
 
     pub fn size(&self) -> (u32, u32) {
         self.state.size.unwrap_or((0, 0))
+    }
+
+    /// 本机有几块屏
+    pub fn screen_count(&self) -> usize {
+        self.state.outputs.outputs().count()
+    }
+
+    /// 改成在本机第 `rank` 块屏上全屏（屏按桌面坐标从左到右、再从上到下排，从 0 数），等合成器按新屏配置好窗口；
+    /// 返回那块屏的名字。要在第一次提交画面之前调：窗口还没上屏，看不到跳屏。没有这块屏时什么也不做，返回 None。
+    pub fn fullscreen_on(&mut self, rank: usize) -> Result<Option<String>> {
+        let s = &self.state;
+        let mut screens: Vec<_> = s
+            .outputs
+            .outputs()
+            .filter_map(|o| {
+                let info = s.outputs.info(&o)?;
+                let (x, y) = info.logical_position.unwrap_or(info.location);
+                Some(((x, y), o, info.name.clone()))
+            })
+            .collect();
+        screens.sort_by_key(|((x, y), ..)| (*x, *y));
+        let Some((_, output, name)) = screens.into_iter().nth(rank) else {
+            return Ok(None);
+        };
+        let seen = self.state.configures;
+        self.state.window.set_fullscreen(Some(&output));
+        self.state.window.commit();
+        // 窗口本来就在那块屏上时合成器不一定再配置一次：最多等 1 秒
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while self.state.configures == seen && Instant::now() < deadline {
+            if self.state.closed {
+                return Err(Error("the window was closed before it was shown".into()));
+            }
+            self.dispatch(Duration::from_millis(50), None)?;
+        }
+        self.state.events.clear();
+        Ok(Some(name.unwrap_or_default()))
     }
 
     /// 设置 / 撤掉第 `index` 块叠加图层。内容不变只挪位置时传同样的内容也行（照样重传一次，图层都很小）。
@@ -639,6 +679,7 @@ impl WindowHandler for State {
     }
 
     fn configure(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &XdgWindow, c: WindowConfigure, _: u32) {
+        self.configures += 1;
         // 全屏时合成器会给出屏幕尺寸；万一没给，取第一块屏当前分辨率
         let size = match c.new_size {
             (Some(w), Some(h)) => Some((w.get(), h.get())),
