@@ -51,14 +51,23 @@ void main() {
 }";
 
 /// 公式和被控端颜色转换着色器（ddpro-enc 的 rgb_to_yuv444.hlsl）互逆：BT.709、全范围。
-/// 最后显式四舍五入到 8 位再交出去——交给显卡自己从浮点写成 8 位时，实测 0.33% 的像素差 1 级
+/// 最后显式四舍五入到 8 位再交出去——交给显卡自己从浮点写成 8 位时，实测 0.33% 的像素差 1 级。
+/// 静止无损（`tile` > 0）：掩码里置了的方块直接取无损纹理里的原始像素，不用视频
 const FRAGMENT: &str = "#version 300 es
 precision highp float;
 uniform highp sampler2D yuv;
+uniform highp sampler2D lossless;
+uniform highp sampler2D mask;
 uniform int ten;
+uniform int tile;
 out vec4 o;
 void main() {
-    vec4 s = texelFetch(yuv, ivec2(gl_FragCoord.xy), 0);
+    ivec2 p = ivec2(gl_FragCoord.xy);
+    if (tile > 0 && texelFetch(mask, p / tile, 0).r > 0.5) {
+        o = vec4(floor(texelFetch(lossless, p, 0).rgb * 255.0 + 0.5) / 255.0, 1.0);
+        return;
+    }
+    vec4 s = texelFetch(yuv, p, 0);
     float peak = ten == 1 ? 1023.0 : 255.0;
     float half_ = ten == 1 ? 512.0 : 128.0;
     float y = ten == 1 ? s.g : s.b;
@@ -206,6 +215,11 @@ pub struct GlConverter {
     program: glow::Program,
     vao: glow::VertexArray,
     ten: Option<glow::UniformLocation>,
+    tile: Option<glow::UniformLocation>,
+    /// 静止无损：原始像素（和输出画面一样大，第一次放方块时建）、方块掩码（每块一个字节）和方块边长（0 = 不用）
+    lossless: Option<glow::Texture>,
+    mask: Option<(glow::Texture, u32, u32)>,
+    tile_size: u32,
     targets: Vec<Target>,
     width: u32,
     height: u32,
@@ -284,7 +298,7 @@ impl GlConverter {
             .ok_or_else(|| Error("no glEGLImageTargetTexture2DOES".into()))?;
         let image_target: ImageTargetFn = unsafe { std::mem::transmute(image_target) };
         let renderer = unsafe { gl.get_parameter_string(glow::RENDERER) };
-        let (program, vao, ten) = unsafe { build_program(&gl)? };
+        let (program, vao, ten, tile) = unsafe { build_program(&gl)? };
         Ok(Self {
             egl,
             display,
@@ -294,6 +308,10 @@ impl GlConverter {
             program,
             vao,
             ten,
+            tile,
+            lossless: None,
+            mask: None,
+            tile_size: 0,
             targets: Vec::new(),
             width,
             height,
@@ -362,6 +380,14 @@ impl GlConverter {
             gl.viewport(0, 0, self.width as i32, self.height as i32);
             gl.use_program(Some(self.program));
             gl.uniform_1_i32(self.ten.as_ref(), src.ten as i32);
+            let tile = if self.mask.is_some() && self.lossless.is_some() { self.tile_size } else { 0 };
+            gl.uniform_1_i32(self.tile.as_ref(), tile as i32);
+            if tile > 0 {
+                gl.active_texture(glow::TEXTURE1);
+                gl.bind_texture(glow::TEXTURE_2D, self.lossless);
+                gl.active_texture(glow::TEXTURE2);
+                gl.bind_texture(glow::TEXTURE_2D, self.mask.map(|m| m.0));
+            }
             gl.active_texture(glow::TEXTURE0);
             gl.bind_texture(glow::TEXTURE_2D, Some(src.texture));
             gl.bind_vertex_array(Some(self.vao));
@@ -370,6 +396,93 @@ impl GlConverter {
             match gl.get_error() {
                 glow::NO_ERROR => Ok(()),
                 e => Err(Error(format!("OpenGL error {e:#x} converting a frame"))),
+            }
+        }
+    }
+
+    /// 静止无损：把一块原始像素（RGBA，逐行紧排，从上到下）放进无损纹理的 (x, y) 处。掩码里置上这块之后画出来才用它。
+    pub fn put_tile(&mut self, x: u32, y: u32, w: u32, h: u32, rgba: &[u8]) -> Result<()> {
+        if x + w > self.width || y + h > self.height || rgba.len() != (w * h * 4) as usize {
+            return Err(Error(format!("tile {w}x{h} at ({x},{y}) with {} bytes on a {}x{} image", rgba.len(), self.width, self.height)));
+        }
+        self.egl
+            .make_current(self.display, None, None, Some(self.context))
+            .map_err(err("make the context current"))?;
+        let gl = &self.gl;
+        unsafe {
+            let t = match self.lossless {
+                Some(t) => t,
+                None => {
+                    let t = gl.create_texture().map_err(Error)?;
+                    gl.bind_texture(glow::TEXTURE_2D, Some(t));
+                    gl.tex_storage_2d(glow::TEXTURE_2D, 1, glow::RGBA8, self.width as i32, self.height as i32);
+                    self.lossless = Some(t);
+                    t
+                }
+            };
+            gl.bind_texture(glow::TEXTURE_2D, Some(t));
+            gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 1);
+            gl.tex_sub_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                x as i32,
+                y as i32,
+                w as i32,
+                h as i32,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                glow::PixelUnpackData::Slice(Some(rgba)),
+            );
+            match gl.get_error() {
+                glow::NO_ERROR => Ok(()),
+                e => Err(Error(format!("OpenGL error {e:#x} uploading a lossless tile"))),
+            }
+        }
+    }
+
+    /// 静止无损的方块掩码：`tile` 像素一块、`cols`×`rows` 块，每块一个字节（非 0 = 这块用无损纹理）。`tile` 为 0 时不用无损。
+    pub fn set_mask(&mut self, tile: u32, cols: u32, rows: u32, mask: &[u8]) -> Result<()> {
+        if tile > 0 && mask.len() != (cols * rows) as usize {
+            return Err(Error(format!("mask of {} bytes for {cols}x{rows} tiles", mask.len())));
+        }
+        self.tile_size = tile;
+        if tile == 0 {
+            return Ok(());
+        }
+        self.egl
+            .make_current(self.display, None, None, Some(self.context))
+            .map_err(err("make the context current"))?;
+        let gl = &self.gl;
+        unsafe {
+            let t = match self.mask {
+                Some((t, c, r)) if (c, r) == (cols, rows) => t,
+                old => {
+                    if let Some((t, ..)) = old {
+                        gl.delete_texture(t);
+                    }
+                    let t = gl.create_texture().map_err(Error)?;
+                    gl.bind_texture(glow::TEXTURE_2D, Some(t));
+                    gl.tex_storage_2d(glow::TEXTURE_2D, 1, glow::R8, cols as i32, rows as i32);
+                    self.mask = Some((t, cols, rows));
+                    t
+                }
+            };
+            gl.bind_texture(glow::TEXTURE_2D, Some(t));
+            gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 1);
+            gl.tex_sub_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                0,
+                0,
+                cols as i32,
+                rows as i32,
+                glow::RED,
+                glow::UNSIGNED_BYTE,
+                glow::PixelUnpackData::Slice(Some(mask)),
+            );
+            match gl.get_error() {
+                glow::NO_ERROR => Ok(()),
+                e => Err(Error(format!("OpenGL error {e:#x} uploading the lossless mask"))),
             }
         }
     }
@@ -476,7 +589,9 @@ impl GlConverter {
     }
 }
 
-unsafe fn build_program(gl: &glow::Context) -> Result<(glow::Program, glow::VertexArray, Option<glow::UniformLocation>)> {
+type Uniform = Option<glow::UniformLocation>;
+
+unsafe fn build_program(gl: &glow::Context) -> Result<(glow::Program, glow::VertexArray, Uniform, Uniform)> {
     let program = gl.create_program().map_err(Error)?;
     for (kind, src) in [(glow::VERTEX_SHADER, VERTEX), (glow::FRAGMENT_SHADER, FRAGMENT)] {
         let s = gl.create_shader(kind).map_err(Error)?;
@@ -498,12 +613,15 @@ unsafe fn build_program(gl: &glow::Context) -> Result<(glow::Program, glow::Vert
         return Err(Error(format!("link the conversion shader: {log}")));
     }
     gl.use_program(Some(program));
-    if let Some(l) = gl.get_uniform_location(program, "yuv") {
-        gl.uniform_1_i32(Some(&l), 0);
+    for (name, unit) in [("yuv", 0), ("lossless", 1), ("mask", 2)] {
+        if let Some(l) = gl.get_uniform_location(program, name) {
+            gl.uniform_1_i32(Some(&l), unit);
+        }
     }
     let ten = gl.get_uniform_location(program, "ten");
+    let tile = gl.get_uniform_location(program, "tile");
     let vao = gl.create_vertex_array().map_err(Error)?;
-    Ok((program, vao, ten))
+    Ok((program, vao, ten, tile))
 }
 
 impl Drop for GlConverter {
@@ -516,6 +634,12 @@ impl Drop for GlConverter {
                 self.gl.delete_framebuffer(t.fbo);
                 self.gl.delete_texture(t.texture);
                 self.egl.destroy_image(self.display, t.image).ok();
+            }
+            if let Some(t) = self.lossless.take() {
+                self.gl.delete_texture(t);
+            }
+            if let Some((t, ..)) = self.mask.take() {
+                self.gl.delete_texture(t);
             }
             self.gl.delete_vertex_array(self.vao);
             self.gl.delete_program(self.program);

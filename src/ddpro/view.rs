@@ -11,6 +11,7 @@
 
 use crate::ddpro::{
     ball::{Action, Ball},
+    view_lossless::{self, Decoders},
     wire::PEER_LOG_INTERVAL,
 };
 use base::message_proto::{message, misc, CursorData, Message};
@@ -61,6 +62,8 @@ const ISSUE_TRANSFORM: &str = "color_transform";
 const ISSUE_SCALED: &str = "scaled";
 /// 没有窗口事件、也没有新画面时最多等这么久（只为定时检查会话是否还在；新画面由收包线程叫醒，不靠它）
 const IDLE_WAIT: Duration = Duration::from_millis(100);
+/// 诊断：画面每次补到整屏无损时，从着色器那侧读回刚画好的画面（RGB 逐像素、从上到下）存到这个文件，和被控端原图逐像素比
+const DIAG_LOSSLESS_DUMP: &str = "DDPRO_DIAG_LOSSLESS_DUMP";
 
 // RustDesk 鼠标入口的编码（`src/common.rs`）：mask = 事件类型 | (按键 << 3)
 const MOUSE_TYPE_MOVE: i32 = 0;
@@ -81,6 +84,9 @@ struct Incoming {
     data: Vec<u8>,
     /// 被控端拿到画面的时刻、首包到达、末包到达；时钟还没对上时 None
     times: Option<Times>,
+    /// RTP 时间戳和被控端说这一帧哪些方块变了（静止无损）
+    ts: u32,
+    changed: Option<Vec<u8>>,
 }
 
 #[derive(Clone, Copy)]
@@ -316,8 +322,9 @@ pub fn run() {
 }
 
 /// 悬浮球网络状态块的几行：帧率、码率、专业通道往返、端到端延迟、丢包与补齐、画面尺寸、实际解出的格式。
-/// 画面静止时被控端只重编上一帧、不带采集时间，端到端延迟这一秒算不出，显示「-」
-fn status_lines(v: &ViewStats, rtt_us: u64, frame: Option<(u32, u32)>) -> Vec<String> {
+/// 画面静止时被控端只重编上一帧、不带采集时间，端到端延迟这一秒算不出，显示「-」。
+/// `lossless` 是画面里无损方块的比例（1:1 着色器显示时才有）
+fn status_lines(v: &ViewStats, rtt_us: u64, frame: Option<(u32, u32)>, lossless: Option<u32>) -> Vec<String> {
     let mut lines = vec![
         format!("{} fps", v.fps),
         format!("{:.1} Mbps", v.kbps as f64 / 1000.0),
@@ -330,6 +337,9 @@ fn status_lines(v: &ViewStats, rtt_us: u64, frame: Option<(u32, u32)>) -> Vec<St
     }
     if v.bit_depth > 0 {
         lines.push(format!("H265 {} {}bit", v.chroma, v.bit_depth));
+    }
+    if let Some(p) = lossless {
+        lines.push(format!("lossless {p}%"));
     }
     lines
 }
@@ -390,12 +400,13 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
     let (wake_rx, wake_tx) = UnixStream::pair()?;
     wake_rx.set_nonblocking(true)?;
     wake_tx.set_nonblocking(true)?;
+    let (decoders, mut lossless) = view_lossless::start(&wake_tx)?;
     let receiver = {
         let (quit, bye, resync, channel, counters) =
             (quit.clone(), bye.clone(), resync.clone(), channel.clone(), counters.clone());
         std::thread::Builder::new()
             .name("ddpro-view-recv".into())
-            .spawn(move || receive(peer, keys, frame_tx, wake_tx, quit, bye, resync, channel, counters))?
+            .spawn(move || receive(peer, keys, frame_tx, wake_tx, decoders, quit, bye, resync, channel, counters))?
     };
     let (mut win, dev, mut dec, mut conv, mut shader) = match open_display(&start) {
         Ok(v) => v,
@@ -435,6 +446,8 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
     let mut ready = false;
     // 查过实际解码格式的画面尺寸：第一帧和尺寸变了之后（被控端重建编码器）查一次
     let mut format_checked: Option<(u32, u32)> = None;
+    let lossless_dump = std::env::var_os(DIAG_LOSSLESS_DUMP);
+    let mut was_full = false;
     // 主循环包一层：中途任何一步出错，也马上告诉被控端不要了（不让它白等 3 秒心跳超时）
     let mut main_loop = || -> ResultType<(Kind, String)> {
         Ok(loop {
@@ -488,6 +501,9 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
                         // 旧的转换器先放掉（窗口还登记着它们的画面，下面重新登记），再按新尺寸建
                         let on = shader.take().is_some();
                         (conv, shader) = attach(&mut win, &dev, on)?;
+                        // 无损纹理随旧转换器没了：要关键帧，被控端整屏重新补
+                        lossless.reset();
+                        resync.store(true, Ordering::Release);
                         input.set_window(size);
                         ball.set_screen(size);
                     }
@@ -574,8 +590,12 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
                 match frame_rx.try_recv() {
                     Ok(f) => {
                         let f: Incoming = f;
+                        lossless.changed(f.ts, f.changed.as_deref());
                         match dec.decode(&f.data) {
-                            Ok(Some(frame)) => latest = Some((frame, f.times)),
+                            Ok(Some(frame)) => {
+                                lossless.resize(frame.width(), frame.height(), f.ts);
+                                latest = Some((frame, f.times));
+                            }
                             Ok(None) => {}
                             // 码流坏了或驱动报错：参考帧不可信了。编码端是无限 GOP，不要关键帧就一直坏下去
                             Err(e) => {
@@ -595,6 +615,9 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
                     }
                 }
             }
+            // 已到的帧都记上了变化，再放方块（见 view_lossless 开头）；只在 1:1 着色器显示时用
+            let one_to_one = lossless.size() == Some(size);
+            lossless.apply(shader.as_mut().filter(|_| one_to_one));
             if let Some((frame, times)) = latest {
                 // 门槛按结果定（P0 设计决定 3）：实际解出来的不是谈好的 4:4:4 8bit 就大声失败，不静默降级
                 let size = (frame.width(), frame.height());
@@ -629,16 +652,29 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
                 };
                 // 1:1 用着色器转（和公式逐像素一致）；要缩放、或着色器出过错，用视频处理单元
                 let by_shader = match shader.as_mut() {
-                    Some(s) if (frame.width(), frame.height()) == size => match s.convert(&dec, &frame, slot) {
-                        Ok(()) => true,
-                        Err(e) => {
-                            log::warn!("ddpro: pro view shader conversion failed, using the video processor from now on: {e}");
-                            shader = None;
-                            false
+                    Some(s) if (frame.width(), frame.height()) == size => {
+                        lossless.update_mask(s);
+                        match s.convert(&dec, &frame, slot) {
+                            Ok(()) => true,
+                            Err(e) => {
+                                log::warn!("ddpro: pro view shader conversion failed, using the video processor from now on: {e}");
+                                shader = None;
+                                false
+                            }
                         }
-                    },
+                    }
                     _ => false,
                 };
+                if let (Some(path), Some(s), true) = (&lossless_dump, shader.as_ref(), by_shader) {
+                    let full = lossless.coverage() == Some(100);
+                    if full && !was_full {
+                        match s.read_rgb(slot).map_err(|e| e.to_string()).and_then(|rgb| std::fs::write(path, rgb).map_err(|e| e.to_string())) {
+                            Ok(()) => log::info!("ddpro: diagnostic {DIAG_LOSSLESS_DUMP}: saved a fully lossless frame"),
+                            Err(e) => log::warn!("ddpro: diagnostic {DIAG_LOSSLESS_DUMP}: {e}"),
+                        }
+                    }
+                    was_full = full;
+                }
                 if !by_shader {
                     conv.convert(&frame, slot, RgbStandard::Bt709)
                         .map_err(|e| anyhow!("{e}"))?;
@@ -670,18 +706,22 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
                 last_report = Instant::now();
                 // 合成器直接送显示（不再合成一遍）的帧数：叠加层、输出画面的排布都会影响它
                 log::info!(
-                    "ddpro: pro view latency {}; direct scanout {}/{} presented",
+                    "ddpro: pro view latency {}; direct scanout {}/{} presented; lossless {:?}% {:?}",
                     ledger.take(),
                     scanout.0,
-                    scanout.1
+                    scanout.1,
+                    lossless.coverage(),
+                    lossless.counts
                 );
                 scanout = (0, 0);
+                lossless.counts = Default::default();
             }
             if panel.since.elapsed() >= PANEL {
                 let display = panel.display(&win, &display_watch);
                 let stats = panel.take(&counters, display);
                 // 悬浮球的网络状态块和 RustDesk 质量面板用同一份实测值
-                ball.set_status(status_lines(&stats, counters.rtt_us.load(Ordering::Relaxed), panel.frame));
+                let coverage = lossless.coverage().filter(|_| shader.is_some() && lossless.size() == Some(size));
+                ball.set_status(status_lines(&stats, counters.rtt_us.load(Ordering::Relaxed), panel.frame, coverage));
                 if send_up(up, view_up::Union::Stats(stats)).is_err() {
                     session_gone.store(true, Ordering::Release);
                 }
@@ -793,6 +833,7 @@ fn receive(
     keys: ddpro::media::Keys,
     frames: Tx<Incoming>,
     wake: UnixStream,
+    mut tiles: Decoders,
     quit: Arc<AtomicBool>,
     bye: Arc<AtomicBool>,
     resync: Arc<AtomicBool>,
@@ -824,7 +865,12 @@ fn receive(
             break "closing".to_owned();
         }
         match r.recv() {
-            Ok(MediaEvent::Frame { data, times, .. }) => {
+            Ok(MediaEvent::Frame {
+                data,
+                timestamp,
+                times,
+                changed,
+            }) => {
                 // 收包时刻在收包线程自己的时间轴上，换成本机单调时钟交给主线程
                 let shift = now_ns() - r.now_us() * 1000;
                 let times = times.and_then(|t| {
@@ -834,7 +880,15 @@ fn receive(
                         last_arrival: t.last_arrival * 1000 + shift,
                     })
                 });
-                if frames.send(Incoming { data, times }).is_err() {
+                if frames
+                    .send(Incoming {
+                        data,
+                        times,
+                        ts: timestamp,
+                        changed,
+                    })
+                    .is_err()
+                {
                     break "the window is gone".to_owned();
                 }
                 // 缓冲满（写不进）说明主线程已经有一个没读的叫醒，不用再写
@@ -845,8 +899,7 @@ fn receive(
                 info,
                 "ddpro: pro view lost {packets} packet(s), keyframe requested"
             ),
-            // 静止无损第 2 步之四（主控端合成）接上之前先不用
-            Ok(MediaEvent::Tile { .. }) => {}
+            Ok(MediaEvent::Tile { timestamp, index, data }) => tiles.submit(timestamp, index, data),
             Err(e) => break e.to_string(),
         }
         counters.bytes.store(r.stats.bytes, Ordering::Relaxed);

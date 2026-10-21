@@ -149,6 +149,7 @@ mod win {
             bitrate_kbps: o.bitrate,
             preset: o.preset,
             dither: o.dither,
+            tile: 0,
         };
         println!("{cfg:?}");
         let mut enc = Encoder::new(cap.device().device, cfg)?;
@@ -455,7 +456,7 @@ mod win {
             dev.CreateTexture2D(&desc, None, Some(&mut tex))?;
             (tex.ok_or("CreateTexture2D returned nothing")?, dev.GetImmediateContext()?)
         };
-        let cfg = Config { width: w, height: h, fps, bitrate_kbps: bitrate, preset, dither };
+        let cfg = Config { width: w, height: h, fps, bitrate_kbps: bitrate, preset, dither, tile: 0 };
         println!("{cfg:?}; move {} frames at {speed} px/frame, then still {} frames", s.move_frames, s.still_frames);
         let mut enc = Encoder::new(device, cfg)?;
         let mut stream = fs::File::create(out.join("out.h265"))?;

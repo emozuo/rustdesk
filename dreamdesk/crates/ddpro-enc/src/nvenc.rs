@@ -196,6 +196,8 @@ pub struct Config {
     pub preset: u8,
     /// 颜色转换时加有序抖动；不加就是普通四舍五入（8bit 源用这个，见着色器开头的说明）。
     pub dither: bool,
+    /// 静止无损用的方块边长：每帧和上一帧按方块比，0 = 不比。
+    pub tile: u32,
 }
 
 /// 编出的一帧。
@@ -204,6 +206,8 @@ pub struct EncodedFrame {
     pub is_idr: bool,
     /// 编码器报告的这一帧平均量化参数（验证工具看码控行为用）。
     pub avg_qp: u32,
+    /// 按方块比时：这一帧哪些方块变了（每位一块、低位在前、行优先），第一帧全变。
+    pub changed: Option<Vec<u8>>,
 }
 
 /// HEVC 4:4:4 8bit 编码器。只能在创建它的线程上使用。
@@ -238,7 +242,7 @@ impl Encoder {
             )));
         }
         unsafe { Self::initialize(&session, &cfg)? };
-        let conv = Converter::new(&d3d, cfg.width, cfg.height, cfg.dither)?;
+        let conv = Converter::new(&d3d, cfg.width, cfg.height, cfg.dither, cfg.tile)?;
 
         let mut enc = Self {
             session,
@@ -330,9 +334,10 @@ impl Encoder {
     /// 编一帧。`src` 是采集到的桌面纹理（BGRA 8bit，和编码器同一设备）；`None` 表示画面没变，
     /// 重编上一帧（静止时仍按帧率出帧）。第一帧总是关键帧。
     pub fn encode(&mut self, src: Option<*mut c_void>, force_idr: bool) -> Result<EncodedFrame, Error> {
-        if let Some(src) = src {
-            self.conv.load_source(src)?;
-        }
+        let changed = match src {
+            Some(src) => self.conv.load_source(src)?,
+            None => self.conv.unchanged(),
+        };
         self.conv.convert();
         let is_idr = force_idr || self.frame_idx == 0;
         unsafe {
@@ -346,9 +351,10 @@ impl Encoder {
 
             let s = nv!(self.session.api, nvEncUnmapInputResource)(self.session.enc, m.mappedResource);
             let unmapped = self.session.check(s, "nvEncUnmapInputResource");
-            let frame = result?;
+            let mut frame = result?;
             unmapped?;
             self.frame_idx += 1;
+            frame.changed = changed;
             Ok(frame)
         }
     }
@@ -383,12 +389,17 @@ impl Encoder {
         let avg_qp = l.frameAvgQP;
         let s = nv!(self.session.api, nvEncUnlockBitstream)(self.session.enc, self.bitstream);
         self.session.check(s, "nvEncUnlockBitstream")?;
-        Ok(EncodedFrame { data, is_idr, avg_qp })
+        Ok(EncodedFrame { data, is_idr, avg_qp, changed: None })
     }
 
     /// 把最近一次载入的源画面读回内存（BGRA，逐行紧排）。只给颜色比对用，正常编码不走这里。
     pub fn read_source_bgra(&self) -> Result<Vec<u8>, Error> {
         self.conv.read_source_bgra()
+    }
+
+    /// 从最近一次载入的源画面读回几块原始像素（静止无损用）：`rects` 是 (x, y, 宽, 高)，返回每块的 BGRA（逐行紧排）。
+    pub fn read_tiles(&mut self, rects: &[(u32, u32, u32, u32)]) -> Result<Vec<Vec<u8>>, Error> {
+        self.conv.read_tiles(rects)
     }
 
     /// 开 / 关抖动，下一帧生效：只改颜色转换的一个参数，不重建编码器、不出关键帧。

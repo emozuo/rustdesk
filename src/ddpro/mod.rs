@@ -16,10 +16,14 @@ pub mod server;
 // 专业视频要采集模块直接输出显卡纹理，这在 RustDesk 里绑在 vram 功能上（官方 Windows 版本来就开着）
 #[cfg(all(feature = "dd-pro", windows, feature = "vram"))]
 mod video;
+#[cfg(all(feature = "dd-pro", windows, feature = "vram"))]
+mod lossless;
 // 主控端专业窗口进程（`--pro-view`）：只有 Linux 版（Wayland），并且用 RustDesk Flutter 版的光标解码
 #[cfg(all(feature = "dd-pro", feature = "flutter", target_os = "linux"))]
 pub mod view;
 #[cfg(all(feature = "dd-pro", feature = "flutter", target_os = "linux"))]
 mod view_link;
+#[cfg(all(feature = "dd-pro", feature = "flutter", target_os = "linux"))]
+mod view_lossless;
 #[cfg(feature = "dd-pro")]
 mod wire;

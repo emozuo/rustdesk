@@ -10,6 +10,7 @@
 //! 一样）。专业通道跨重建保留，只按新尺寸重建采集器和编码器（P0 实施记录第 5 步「专业模式跟随画面源变化」）。
 
 use crate::{
+    ddpro::lossless::Lossless,
     privacy_mode::{
         get_privacy_mode_conn_id, is_current_privacy_mode_impl, DEFAULT_PRIVACY_MODE_IMPL,
         INVALID_PRIVACY_MODE_CONN_ID, PRIVACY_MODE_IMPL_WIN_EXCLUDE_FROM_CAPTURE, PRIVACY_MODE_IMPL_WIN_MAG,
@@ -23,7 +24,7 @@ use crate::{
 };
 use ddpro::{
     enc::{Config, Encoder},
-    media::{Keys, Listener, Sender, Stamp},
+    media::{tile::TILE, Keys, Listener, Sender, Stamp},
     MediaChannel,
 };
 use hbb_common::{anyhow::anyhow, bail, log, throttled_log, ResultType};
@@ -43,6 +44,8 @@ use std::{
 const FPS: u32 = 60;
 const BITRATE_KBPS: u32 = 30_000;
 const PRESET: u8 = 4;
+/// 静止无损补发的预算：内网实测 800 Mbps 突发不丢包，给一半（P1 实施记录第 7 节）
+const LOSSLESS_KBPS: u32 = 400_000;
 /// 主控端收到「同意」后来打招呼的时限
 const CHANNEL_TIMEOUT: Duration = Duration::from_secs(3);
 /// 一个采集器建好后第一帧最多等多久（DXGI 开始采集后第一次取帧总会给出整屏）
@@ -53,6 +56,8 @@ const STARTUP_TIMEOUT: Duration = Duration::from_secs(3);
 const DIAG_DUMP: &str = "DDPRO_DIAG_DUMP";
 /// 诊断：每隔这么多秒故意弄坏一帧非关键帧中间的一个字节，验证主控端解码出错后能不能自己恢复
 const DIAG_CORRUPT: &str = "DDPRO_DIAG_CORRUPT_SECS";
+/// 诊断：不做静止无损（只发视频，对比画质、排查问题用）
+const DIAG_NO_LOSSLESS: &str = "DDPRO_DIAG_NO_LOSSLESS";
 /// 显示变化检查的间隔（和 RustDesk 通用画面服务一样）
 const DISPLAY_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 /// 画面源变了之后重建前等多久：和 RustDesk 服务框架出错重跑的退避一样（30 毫秒起、加倍、最多 1 秒）
@@ -460,6 +465,10 @@ fn stream(ps: &ProService, session: &Session, channel: Channel) -> ResultType<(E
     let mut src = Some(first_frame);
     let (w, h) = texture_size(src)?;
     let mut dither = session.dither.load(Ordering::Acquire);
+    let mut lossless = match std::env::var_os(DIAG_NO_LOSSLESS) {
+        None => Some(Lossless::new(w, h)?),
+        Some(_) => None,
+    };
     let mut enc = Encoder::new(
         dev.device,
         Config {
@@ -469,6 +478,7 @@ fn stream(ps: &ProService, session: &Session, channel: Channel) -> ResultType<(E
             bitrate_kbps: BITRATE_KBPS,
             preset: PRESET,
             dither,
+            tile: if lossless.is_some() { TILE } else { 0 },
         },
     )
     .map_err(|e| anyhow!("{e}"))?;
@@ -483,9 +493,13 @@ fn stream(ps: &ProService, session: &Session, channel: Channel) -> ResultType<(E
         Channel::Open(open) => open,
     };
     sender.pace(BITRATE_KBPS, FPS);
+    if lossless.is_some() {
+        sender.pace_tiles(LOSSLESS_KBPS, FPS);
+    }
     log::info!(
-        "ddpro: pro video on display {display} started: {w}x{h} 4:4:4 8bit {FPS} fps {BITRATE_KBPS} kbps, dither {} -> {}",
+        "ddpro: pro video on display {display} started: {w}x{h} 4:4:4 8bit {FPS} fps {BITRATE_KBPS} kbps, dither {}, lossless {} -> {}",
         if dither { "on" } else { "off" },
+        if lossless.is_some() { "on" } else { "off" },
         sender.peer()
     );
 
@@ -559,7 +573,13 @@ fn stream(ps: &ProService, session: &Session, channel: Channel) -> ResultType<(E
                 log::warn!("ddpro: diagnostic {DIAG_CORRUPT}: corrupted byte {k} of a {}-byte frame", data.len());
             }
         }
+        if let Some(bitmap) = lossless.as_mut().and_then(|l| l.changed(f.changed, f.is_idr)) {
+            sender.send_changed(ts, &bitmap).map_err(|e| anyhow!("{e}"))?;
+        }
         sender.send_frame(&data, ts, stamp).map_err(|e| anyhow!("{e}"))?;
+        if let Some(l) = lossless.as_mut() {
+            l.pump(&mut enc, &mut sender, ts)?;
+        }
         if let Some(d) = dump.as_mut() {
             if std::io::Write::write_all(d, &data).is_err() {
                 dump = None;
@@ -581,11 +601,13 @@ fn stream(ps: &ProService, session: &Session, channel: Channel) -> ResultType<(E
     if !matches!(end, End::SourceChanged(_)) {
         let st = &sender.stats;
         log::info!(
-            "ddpro: pro video on display {display} sent {} frames, {} packets, {} bytes, {} retransmitted",
+            "ddpro: pro video on display {display} sent {} frames, {} packets, {} bytes, {} retransmitted, {} lossless tiles ({} bytes)",
             st.frames,
             st.packets,
             st.bytes,
-            st.retransmitted
+            st.retransmitted,
+            st.tiles,
+            st.tile_bytes
         );
     }
     Ok((end, Channel::Open(Open { sender, epoch })))
