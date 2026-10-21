@@ -299,9 +299,11 @@ impl Receiver {
         }
         let p = match (p.header.payload_type, p.header.ssrc) {
             (PT_VIDEO | PT_TILE, ssrc) if ssrc == self.keys.ssrc_media => p,
+            // 补发只对还在缺包表里的有用（末尾试探也先把序号放进表里）：已经放弃、或原包先到了的晚到补发扔掉。整屏补发时
+            // 序号走得快，晚到约 0.8 秒的补发包序号会被当成很远的将来，误判成大断档或占住将来那个包的位置
             (PT_RTX | PT_RTX_TILE, ssrc) if ssrc == self.keys.ssrc_rtx() => match rtx_unwrap(p, &self.keys) {
-                Some(p) => p,
-                None => return Ok(()),
+                Some(p) if self.missing.contains_key(&p.header.sequence_number) => p,
+                _ => return Ok(()),
             },
             _ => return Ok(()),
         };
