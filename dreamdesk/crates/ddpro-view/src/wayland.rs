@@ -115,6 +115,8 @@ pub enum Event {
     PointerMotion { x: f64, y: f64 },
     /// 鼠标按键（Linux BTN_* 码），带按下时的窗口坐标
     PointerButton { button: u32, down: bool, x: f64, y: f64 },
+    /// 指针离开窗口或某个叠加图层。按着键时合成器把指针抢走（比如弹出系统对话框）也是这个，之后收不到那次松开
+    PointerLeave,
     /// 滚轮格数（往下 / 往右为正，和 Wayland 一致）
     Wheel { dx: i32, dy: i32 },
     /// 合成器报告系统快捷键是否已经让给本窗口（Win、Alt+Tab 等发给远程）：用户在合成器的确认框里允许、
@@ -883,7 +885,10 @@ impl PointerHandler for State {
                     self.apply_cursor().ok();
                     self.events.push(Event::PointerMotion { x, y });
                 }
-                PointerEventKind::Leave { .. } => self.pointer_serial = None,
+                PointerEventKind::Leave { .. } => {
+                    self.pointer_serial = None;
+                    self.events.push(Event::PointerLeave);
+                }
                 PointerEventKind::Motion { .. } => self.events.push(Event::PointerMotion { x, y }),
                 PointerEventKind::Press { button, .. } => {
                     self.events.push(Event::PointerButton { button, down: true, x, y })

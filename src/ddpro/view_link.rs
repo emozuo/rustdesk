@@ -65,6 +65,15 @@ fn key<T: InvokeUiSession>(session: &Session<T>) -> u64 {
     session.lc.read().unwrap().session_id
 }
 
+/// 进程号为 `pid` 的专业窗口还是这个会话当前的那个
+fn is_current_view(k: u64, pid: u32) -> bool {
+    links()
+        .lock()
+        .unwrap()
+        .get(&k)
+        .is_some_and(|l| l.down.as_ref().is_some_and(|(p, _)| *p == pid))
+}
+
 /// 「非专业模式」提示的原因。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Notice {
@@ -481,6 +490,7 @@ pub fn start<T: InvokeUiSession>(
         }
     }
 
+    let session_over = rustdesk.clone();
     // 写：启动参数、光标；会话结束或专业窗口结束时停，关掉管道
     std::thread::spawn(move || loop {
         match rx.recv_timeout(Duration::from_millis(500)) {
@@ -557,6 +567,11 @@ pub fn start<T: InvokeUiSession>(
                 Some(view_up::Union::Mouse(m)) => {
                     session.send_mouse(m.mask, m.x, m.y, m.alt, m.ctrl, m.shift, m.command);
                 }
+                // 换屏 / 被拒的时序下旧窗口晚到的「就绪」和菜单动作：只认当前这个专业窗口的（和实测值那一支一样核对进程号），
+                // 否则会清掉新屏的提示、藏起通用窗口，或把动作作用到新屏上
+                Some(view_up::Union::Action(_)) | Some(view_up::Union::Ready(_)) if !is_current_view(k, pid) => {
+                    log::info!("ddpro: ignored a late message from an old pro view (pid {pid})");
+                }
                 // 悬浮球菜单：调 RustDesk 会话已有的功能（和它自己工具栏里的同一套）
                 Some(view_up::Union::Action(a)) => match a.union {
                     Some(view_action::Union::SwitchDisplay(i)) => {
@@ -628,6 +643,19 @@ pub fn start<T: InvokeUiSession>(
             push_quality(&session, None);
         }
         if !current {
+            // 换屏时会话进程先放掉旧窗口、再给新屏发专业请求。这个空档里 RustDesk 连接断了的话新窗口不会再开，通用窗口
+            // 却还藏着，断开 / 重连提示看不到（2026-10-20 审查第 4 条）。等到新窗口开起来或挂上了提示（那时通用窗口已经
+            // 照常显示）就不管；等的时候连接断了，把通用窗口露出来
+            if none_open {
+                while !session_over.is_closed() {
+                    if links().lock().unwrap().get(&k).is_none_or(|l| l.down.is_some() || l.notice.is_some()) {
+                        return;
+                    }
+                    std::thread::sleep(Duration::from_millis(200));
+                }
+                log::info!("ddpro: the RustDesk connection ended while switching displays; showing the general window");
+                push_window(&session, "show");
+            }
             return;
         }
         let detail = ended.as_ref().map_or(String::new(), |e| e.detail.clone());

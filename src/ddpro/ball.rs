@@ -327,6 +327,19 @@ impl Ball {
         (true, action)
     }
 
+    /// 指针离开窗口或图层。按着球 / 菜单时离开，说明指针被合成器抢走了（比如拖球时弹出系统对话框），那次松开不会来：
+    /// 清掉按下状态，不然之后发给远程的鼠标移动会一直被球拦着，直到再点一下球（2026-10-20 审查第 3 条）。
+    /// 没按着时从球挪到画面上也会离开图层，这时什么都不用做
+    pub fn pointer_leave(&mut self) {
+        if let Some(p) = self.press.take() {
+            if p.dragging {
+                self.drop_ball();
+            }
+            self.dirty = true;
+        }
+        self.swallowed.clear();
+    }
+
     /// 滚轮：鼠标在球 / 菜单上时不发给远程
     pub fn wheel(&self) -> bool {
         self.over_ui()

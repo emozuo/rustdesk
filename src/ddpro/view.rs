@@ -513,6 +513,7 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
                         ball.set_screen(size);
                     }
                     Event::Resized { .. } => {}
+                    Event::PointerLeave => ball.pointer_leave(),
                     // 只在用户允许 / 拒绝、窗口得失键盘焦点时来，不会刷屏
                     Event::ShortcutsInhibited(on) => log::info!(
                         "ddpro: pro view system shortcuts {}",

@@ -64,7 +64,13 @@ impl Cards {
                 .open(&path)
                 .or_else(|_| File::open(&path));
             match file {
-                Ok(f) => cards.push((path.display().to_string(), Card(f))),
+                Ok(f) => {
+                    let card = Card(f);
+                    // 多显卡的主控端：没被合成器占着的那块显卡没有主控者，打开它就自动成了主控者，会挡住别的程序用它。
+                    // 只读属性不需要主控权，立刻放掉（不是主控者时内核报错，不用管；5.8 起的内核允许自己放掉）
+                    drm::Device::release_master_lock(&card).ok();
+                    cards.push((path.display().to_string(), card))
+                }
                 Err(e) => errors.push(format!("open {}: {e}", path.display())),
             }
         }

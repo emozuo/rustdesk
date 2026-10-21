@@ -100,7 +100,7 @@ mod linux {
                     Event::Wheel { dx, dy } => println!("wheel {dx},{dy}"),
                     Event::ShortcutsInhibited(on) => println!("system shortcuts inhibited: {on}"),
                     Event::Modifiers { depressed, locked } => println!("modifiers depressed {depressed:#x} locked {locked:#x}"),
-                    Event::KeyboardLeave | Event::PointerMotion { .. } => {}
+                    Event::KeyboardLeave | Event::PointerMotion { .. } | Event::PointerLeave => {}
                 }
             }
             if Instant::now() < next {
