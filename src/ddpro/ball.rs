@@ -378,7 +378,12 @@ impl Ball {
     pub fn render(&mut self) -> Vec<(usize, Option<LayerImage>)> {
         let mut out = Vec::new();
         if std::mem::take(&mut self.dirty) {
-            if let Some(ball) = self.draw_ball() {
+            // 缩进时整块撤掉、一点都不露（鼠标靠近原来露边的地方照样滑出来）：屏幕上有任何叠加图层，合成器就不能把画面
+            // 直接送显示、每帧都要重新合成一遍（2026-10-21 瘦客户机实测：露一条时直接送显示 0%、合成器 CPU 约 22%，
+            // 不露时 100%、约 14%）。用户 2026-10-21 定：缩进时完全隐藏
+            if self.tucked {
+                out.push((LAYER_BALL, None));
+            } else if let Some(ball) = self.draw_ball() {
                 out.push((LAYER_BALL, Some(ball)));
             }
             out.push((LAYER_MENU, if self.menu_open { self.draw_menu() } else { None }));
