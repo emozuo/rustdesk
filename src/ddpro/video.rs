@@ -651,6 +651,11 @@ fn stream(ps: &ProService, session: &Session, channel: Channel) -> ResultType<(E
         }
         if let Some(l) = lossless.as_mut() {
             l.pump(&mut enc, &mut sender, ts)?;
+            // 无损方块还没补完就不算静止：主控端只在画新的一帧时把放好的方块一起画出来，停编了的话补上的方块要等下一个心跳帧
+            // （最多 1 秒）才上屏。补完之后再按变化大小收尾，跟在最后一批方块后面的帧把它们画出来
+            if !l.complete() {
+                still = 0;
+            }
         }
         if sender.peer_said_bye() {
             break End::ControllerClosed;

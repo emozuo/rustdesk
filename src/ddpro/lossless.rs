@@ -286,6 +286,11 @@ impl Lossless {
     }
 
     /// 这一帧发出之后调：读回该补的方块交去压缩，压好的按预算发出去。`ts` 是刚发的这一帧的时间戳（读回的像素取自它）。
+    /// 最近一次变化之后的方块都补发出去了
+    pub(super) fn complete(&self) -> bool {
+        self.complete
+    }
+
     pub(super) fn pump(&mut self, enc: &mut Encoder, sender: &mut Sender, ts: u32) -> ResultType<()> {
         self.rate.adapt(sender, std::mem::take(&mut self.keyframe));
         self.read(enc, ts)?;
