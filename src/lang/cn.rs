@@ -846,5 +846,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("General mode", "通用模式"),
         ("You switched to general mode for this session: the remote screen is shown here with the usual RustDesk video. Click Enter pro mode to switch back.", "这次会话已切到通用模式：远程画面在这个窗口里按 RustDesk 原有方式显示。点「进入专业模式」切回去。"),
         ("Enter pro mode", "进入专业模式"),
+        ("api_server_connection_tip", "自定义服务器正在使用未加密的 HTTP。请联系管理员启用 HTTPS。"),
+        ("api_server_empty_tip", "API 服务器留空时，自定义服务器默认使用 HTTP。请联系管理员启用 HTTPS。"),
     ].iter().cloned().collect();
 }
