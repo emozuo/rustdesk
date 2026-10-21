@@ -16,6 +16,12 @@
 //!   关键帧请求），被控端下一帧编成关键帧；[`Event::Loss`] 只告诉调用方发生了这种救不回来的丢包。
 //! - 发包节奏：一帧预算以内的量立即发（普通帧不加延迟），超出的部分（关键帧）按平均码率的几倍匀速发，
 //!   免得上千个包一口气冲爆交换机 / 网卡缓冲（[`Sender::pace`]）。
+//!
+//! 静止无损（P1 第 7 项，协议 v8 起）：同一条流、同一套序号里还有「方块消息」（载荷类型 [`PT_TILE`]），排序、丢包补发、
+//! 加密都和画面包共用；补发按 RFC 4588 给它单独的补发载荷类型，补回来知道原来是哪种。两种消息：
+//! - 「这一帧哪些方块变了」：紧贴在那一帧的画面包前面发，接收端挂在那一帧上交出去（[`Event::Frame`] 的 `changed`）；
+//! - 一个方块的无损数据（[`crate::tile`] 编好的）：插在两帧之间发，带它取自哪一帧的时间戳（[`Event::Tile`]）。
+//! 一条消息占连续的若干个包，首包载荷第一个字节标出「消息开头」，末包打结束标记。消息只在两帧之间发，不会插进一帧中间。
 
 use crate::timing::EXT_ID;
 use bytes::Bytes;
@@ -41,7 +47,19 @@ const RTP_PAYLOAD_MAX: usize = UDP_PAYLOAD - RTP_HEADER - SRTP_GCM_TAG - RTX_OSN
 const PT_VIDEO: u8 = 96;
 /// 补发包（RFC 4588）
 const PT_RTX: u8 = 97;
+/// 方块消息（和画面包同一 SSRC、同一套序号）
+const PT_TILE: u8 = 98;
+/// 方块消息的补发包（RFC 4588：每种原载荷类型一个补发载荷类型）
+const PT_RTX_TILE: u8 = 99;
 const PT_CONTROL: u8 = 127;
+/// 方块消息每个包载荷的第一个字节：这一位表示「消息从这个包开始」
+const TILE_FIRST: u8 = 1;
+/// 方块消息里每个包能放的消息字节数（除去开头那一个标记字节）
+const TILE_CHUNK: usize = RTP_PAYLOAD_MAX - 1;
+/// 消息种类：这一帧哪些方块变了（时间戳 u32 + 位图）
+const MSG_CHANGED: u8 = 1;
+/// 消息种类：一个方块的无损数据（时间戳 u32 + 方块号 u16 + 数据）
+const MSG_TILE: u8 = 2;
 const CTRL_HELLO: u8 = 1;
 /// 主控端 → 被控端：心跳，带主控端发出时刻（授时探测）
 const CTRL_KEEPALIVE: u8 = 2;
@@ -54,8 +72,9 @@ const CTRL_BYE: u8 = 5;
 /// 主控端 → 被控端：缺这些序号的画面包，请补发（内容是若干个小端 u16 序号）
 const CTRL_NACK: u8 = 6;
 /// 被控端留多少个最近发过的包备补发：要覆盖主控端放弃等待（40 毫秒）之前发出的所有包。
-/// 30 Mbps 下 40 毫秒只有约 130 个包，但关键帧上千个包是一口气交给发包节奏的，留够一个关键帧
-const HISTORY: usize = 2048;
+/// 30 Mbps 下 40 毫秒只有约 130 个包，但关键帧上千个包是一口气交给发包节奏的；静止无损补发每帧最多约 700 个包
+/// 插在画面之间（400 Mbps），40 毫秒约 1700 个，再加关键帧——留 8192 个（约 10 MB）
+const HISTORY: usize = 8192;
 /// 心跳也是授时探测，所以比「判断对方还在」需要的密得多：授时只取最近 2 秒里最好的样本
 pub const KEEPALIVE_INTERVAL: Duration = Duration::from_millis(100);
 pub const PEER_TIMEOUT: Duration = Duration::from_secs(3);
@@ -213,20 +232,21 @@ fn rtx_packet(orig: &Packet, ssrc: u32, seq: u16) -> Result<Packet, Error> {
     let mut payload = Vec::with_capacity(RTX_OSN + orig.payload.len());
     payload.extend_from_slice(&orig.header.sequence_number.to_be_bytes());
     payload.extend_from_slice(&orig.payload);
-    let mut p = rtp_packet(PT_RTX, ssrc, seq, orig.header.timestamp, orig.header.marker, payload);
+    let pt = if orig.header.payload_type == PT_TILE { PT_RTX_TILE } else { PT_RTX };
+    let mut p = rtp_packet(pt, ssrc, seq, orig.header.timestamp, orig.header.marker, payload);
     if let Some(ext) = orig.header.get_extension(EXT_ID) {
         p.header.set_extension(EXT_ID, ext).map_err(|e| Error::Srtp(e.to_string()))?;
     }
     Ok(p)
 }
 
-/// 补发包还原成原来的画面包。
+/// 补发包还原成原来的画面包 / 方块消息包（按补发载荷类型）。
 fn rtx_unwrap(rtx: Packet, keys: &Keys) -> Option<Packet> {
     if rtx.payload.len() < RTX_OSN {
         return None;
     }
     let mut header = rtx.header;
-    header.payload_type = PT_VIDEO;
+    header.payload_type = if header.payload_type == PT_RTX_TILE { PT_TILE } else { PT_VIDEO };
     header.ssrc = keys.ssrc_media;
     header.sequence_number = u16::from_be_bytes([rtx.payload[0], rtx.payload[1]]);
     Some(Packet {

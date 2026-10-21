@@ -226,6 +226,7 @@ fn start_receiver(media: &MediaChannel, sender: UnboundedSender<Data>) {
                     data,
                     timestamp,
                     times,
+                    ..
                 }) => {
                     if let Some(t) = loss_at.take() {
                         log::info!(
@@ -251,6 +252,8 @@ fn start_receiver(media: &MediaChannel, sender: UnboundedSender<Data>) {
                         }
                     }
                 }
+                // 只收不解：无损方块不用
+                Ok(Event::Tile { .. }) => {}
                 Ok(Event::Loss { packets }) => {
                     loss_at.get_or_insert_with(Instant::now);
                     throttled_log!(

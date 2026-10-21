@@ -32,12 +32,29 @@ fn stamp_now() -> Stamp {
     }
 }
 
+/// `--tiles`：第 `n` 个假方块的数据（开头 4 字节是 n，接收端据此重算核对），大小 2–62 KB 不等
+fn fake_tile(n: u32) -> Vec<u8> {
+    let len = 2000 + (n as usize * 7919) % 60_000;
+    let mut d: Vec<u8> = (0..len).map(|k| (n as usize * 31 + k * 7) as u8).collect();
+    d[..4].copy_from_slice(&n.to_le_bytes());
+    d
+}
+
+/// `--tiles`：第 `i` 帧的「哪些方块变了」位图（30 字节）
+fn fake_changed(i: u32) -> Vec<u8> {
+    (0..30).map(|j| (i * 7 + j) as u8).collect()
+}
+
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let input = args.first().ok_or("usage: loopback IN.h265 [--drop PERMILLE] [--pace KBPS] [--out FILE]")?;
+    let input = args
+        .first()
+        .ok_or("usage: loopback IN.h265 [--drop PERMILLE] [--pace KBPS] [--out FILE] [--tiles KBPS]")?;
     let mut drop = 0u32;
     let mut pace = 30_000u32;
     let mut out = None;
+    // 静止无损的方块消息：每帧前发「哪些方块变了」，帧之间按这个预算插发假方块（0 = 不发）
+    let mut tiles_kbps = 0u32;
     let mut it = args[1..].iter();
     while let Some(k) = it.next() {
         let v = it.next().ok_or_else(|| format!("{k} needs a value"))?;
@@ -45,6 +62,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             "--drop" => drop = v.parse()?,
             "--pace" => pace = v.parse()?,
             "--out" => out = Some(v.clone()),
+            "--tiles" => tiles_kbps = v.parse()?,
             _ => return Err(format!("unknown option {k}").into()),
         }
     }
@@ -61,20 +79,35 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let addr = listener.local_addr()?;
     let sender_epoch = listener.epoch();
     let sent = aus.clone();
-    let sender = std::thread::spawn(move || -> Result<u64, String> {
+    let sender = std::thread::spawn(move || -> Result<(u64, u32), String> {
         let mut s = listener.accept(Duration::from_secs(3)).map_err(|e| e.to_string())?;
         if pace > 0 {
             s.pace(pace, 60);
         }
+        s.pace_tiles(tiles_kbps, 60);
         let start = Instant::now();
         let mut keyframes = 0u64;
+        let mut tiles_sent = 0u32;
         for (i, au) in sent.iter().enumerate() {
+            let ts = (i as u32) * 1500;
+            if tiles_kbps > 0 {
+                s.send_changed(ts, &fake_changed(i as u32)).map_err(|e| e.to_string())?;
+            }
             // 有关键帧请求就先补发一次关键帧（代替编码器按需出关键帧）
             if s.take_keyframe_request() {
-                s.send_frame(&sent[0], (i as u32) * 1500, Some(stamp_now())).map_err(|e| e.to_string())?;
+                s.send_frame(&sent[0], ts, Some(stamp_now())).map_err(|e| e.to_string())?;
                 keyframes += 1;
             }
-            s.send_frame(au, (i as u32) * 1500, Some(stamp_now())).map_err(|e| e.to_string())?;
+            s.send_frame(au, ts, Some(stamp_now())).map_err(|e| e.to_string())?;
+            // 帧之间按预算插发方块，发不下的留到下一帧
+            while tiles_kbps > 0 {
+                let tile = fake_tile(tiles_sent);
+                if s.tile_room() < tile.len() {
+                    break;
+                }
+                s.send_tile(ts, (tiles_sent % 240) as u16, &tile).map_err(|e| e.to_string())?;
+                tiles_sent += 1;
+            }
             if !s.peer_alive() {
                 return Err("controller keepalive lost".into());
             }
@@ -84,7 +117,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         println!("sender: {:?}, keyframes resent on request: {keyframes}", s.stats);
-        Ok(keyframes)
+        Ok((keyframes, tiles_sent))
     });
 
     let mut r = Receiver::connect(addr, keys, Duration::from_secs(3), drop)?;
@@ -96,9 +129,23 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut received = Vec::new();
     let mut loss_at: Option<Instant> = None;
     let mut recoveries_ms = Vec::new();
+    // 方块消息核对：(位图对 / 错 / 缺, 方块对 / 错)
+    let (mut changed_ok, mut changed_bad, mut changed_missing, mut tiles_ok, mut tiles_bad) = (0u32, 0u32, 0u32, 0u32, 0u32);
     let gone = loop {
         match r.recv() {
-            Ok(Event::Frame { data, times, .. }) => {
+            Ok(Event::Frame {
+                data,
+                times,
+                timestamp,
+                changed,
+            }) => {
+                if tiles_kbps > 0 {
+                    match changed {
+                        Some(b) if b == fake_changed(timestamp / 1500) => changed_ok += 1,
+                        Some(_) => changed_bad += 1,
+                        None => changed_missing += 1,
+                    }
+                }
                 if let Some(t) = loss_at.take() {
                     recoveries_ms.push(t.elapsed().as_secs_f64() * 1000.0);
                 }
@@ -110,6 +157,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     clock_err_max = clock_err_max.max((c.offset_us - true_offset).abs());
                 }
                 received.push(data);
+            }
+            Ok(Event::Tile { index, data, .. }) => {
+                let n = data.get(..4).map_or(u32::MAX, |b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+                if n != u32::MAX && index == (n % 240) as u16 && data == fake_tile(n) {
+                    tiles_ok += 1;
+                } else {
+                    tiles_bad += 1;
+                }
             }
             Ok(Event::Loss { .. }) => {
                 loss_at.get_or_insert_with(Instant::now);
@@ -138,6 +193,18 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(path) = out {
         std::fs::write(&path, received.concat())?;
         println!("received stream written to {path}");
+    }
+    if tiles_kbps > 0 {
+        let tiles_sent = sender_result.as_ref().map_or(0, |(_, t)| *t);
+        println!(
+            "tile messages: changed bitmaps ok {changed_ok} / wrong {changed_bad} / missing {changed_missing}; \
+             tiles sent {tiles_sent}, received ok {tiles_ok} / wrong {tiles_bad}"
+        );
+        // 内容错一个都不行；没有救不回来的丢包时，还要求一个不缺
+        let complete = r.stats.loss_events > 0 || (changed_missing == 0 && tiles_ok == tiles_sent);
+        if changed_bad > 0 || tiles_bad > 0 || !complete {
+            return Err("tile messages check failed".into());
+        }
     }
     if r.stats.loss_events == 0 {
         // 逐个 NAL 比（起始码 3 / 4 字节的差别不算）

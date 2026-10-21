@@ -2,8 +2,9 @@
 
 use super::{
     control, is_timeout, micros, micros_u32, open, read_i64, rtp_packet, rtx_packet, seal, srtp, udp, Error, Keys,
-    CTRL_BYE, CTRL_HELLO, CTRL_KEEPALIVE, CTRL_KEYFRAME, CTRL_NACK, CTRL_TIME_ECHO, HISTORY, PEER_TIMEOUT, PT_CONTROL,
-    PT_VIDEO, RTP_HEADER, RTP_PAYLOAD_MAX, SRTP_GCM_TAG, UDP_PAYLOAD,
+    CTRL_BYE, CTRL_HELLO, CTRL_KEEPALIVE, CTRL_KEYFRAME, CTRL_NACK, CTRL_TIME_ECHO, HISTORY, MSG_CHANGED, MSG_TILE,
+    PEER_TIMEOUT, PT_CONTROL, PT_TILE, PT_VIDEO, RTP_HEADER, RTP_PAYLOAD_MAX, SRTP_GCM_TAG, TILE_CHUNK, TILE_FIRST,
+    UDP_PAYLOAD,
 };
 use crate::{
     hevc,
@@ -73,14 +74,36 @@ impl Pacer {
         }
     }
 
-    fn take(&mut self, len: usize) {
+    /// 无损方块的预算：按给定码率匀速补充（不乘倍数），桶容量一帧的量
+    fn tiles(kbps: u32, fps: u32) -> Self {
+        let bytes_per_sec = kbps as f64 * 1000.0 / 8.0;
+        let burst = bytes_per_sec / fps.max(1) as f64;
+        Self {
+            rate: bytes_per_sec,
+            burst,
+            tokens: burst,
+            last: Instant::now(),
+        }
+    }
+
+    fn refill(&mut self) {
         let now = Instant::now();
         self.tokens = (self.tokens + now.duration_since(self.last).as_secs_f64() * self.rate).min(self.burst);
         self.last = now;
+    }
+
+    fn take(&mut self, len: usize) {
+        self.refill();
         self.tokens -= len as f64;
         if self.tokens < -PACE_SLACK {
             std::thread::sleep(Duration::from_secs_f64(-self.tokens / self.rate));
         }
+    }
+
+    /// 现在不用等就能发的字节数
+    fn room(&mut self) -> usize {
+        self.refill();
+        self.tokens.max(0.0) as usize
     }
 }
 
@@ -143,6 +166,9 @@ pub struct SendStats {
     pub retransmitted: u64,
     /// 想补发却没发出去的包：已经不在历史里（太旧）、或加密 / 发送失败
     pub retransmit_failed: u64,
+    /// 发出的无损方块和它们的字节数（不含「哪些方块变了」的消息）
+    pub tiles: u64,
+    pub tile_bytes: u64,
 }
 
 /// 收控制包的线程和发画面的线程共用的补发状态。
@@ -184,6 +210,8 @@ pub struct Sender {
     history: Arc<Mutex<History>>,
     rtx: Arc<Rtx>,
     pacer: Option<Pacer>,
+    /// 无损方块的预算（[`Sender::pace_tiles`]）；没设就不限
+    tile_pacer: Option<Pacer>,
     pub stats: SendStats,
 }
 
@@ -231,6 +259,7 @@ impl Sender {
             history,
             rtx,
             pacer: None,
+            tile_pacer: None,
             stats: SendStats::default(),
         })
     }
@@ -307,6 +336,70 @@ impl Sender {
         if let Some(p) = self.pacer.as_mut() {
             p.take(len);
         }
+    }
+
+    /// 无损方块的预算：`kbps` 平均码率（内网实测 800 Mbps 突发不丢包，见 P1 实施记录第 7 节），`fps` 画面帧率
+    /// （桶容量是一帧的量）。0 = 不限。
+    pub fn pace_tiles(&mut self, kbps: u32, fps: u32) {
+        self.tile_pacer = (kbps > 0).then(|| Pacer::tiles(kbps, fps));
+    }
+
+    /// 现在不用等就能发多少字节的方块（按 [`Sender::pace_tiles`] 的预算）。调用方据此决定这一帧再发哪些方块，
+    /// 发不下的留到下一帧——画面循环不会因为补发停下来等。
+    pub fn tile_room(&mut self) -> usize {
+        self.tile_pacer.as_mut().map_or(usize::MAX, Pacer::room)
+    }
+
+    /// 告诉主控端时间戳为 `ts` 的这一帧哪些方块变了（`bitmap` 每位一块、低位在前），紧接着要发的就是这一帧。
+    /// 没有方块变化就不用发。
+    pub fn send_changed(&mut self, ts: u32, bitmap: &[u8]) -> Result<(), Error> {
+        let mut msg = Vec::with_capacity(5 + bitmap.len());
+        msg.push(MSG_CHANGED);
+        msg.extend_from_slice(&ts.to_le_bytes());
+        msg.extend_from_slice(bitmap);
+        self.send_message(&msg, ts, false)
+    }
+
+    /// 发一个无损方块（[`crate::tile::encode`] 编好的），`ts` 是它的像素取自的那一帧的时间戳，`index` 是方块号。
+    /// 只在两帧之间调（不能插进一帧中间）；不等预算，调用方先看 [`Sender::tile_room`]。
+    pub fn send_tile(&mut self, ts: u32, index: u16, data: &[u8]) -> Result<(), Error> {
+        let mut msg = Vec::with_capacity(7 + data.len());
+        msg.push(MSG_TILE);
+        msg.extend_from_slice(&ts.to_le_bytes());
+        msg.extend_from_slice(&index.to_le_bytes());
+        msg.extend_from_slice(data);
+        self.send_message(&msg, ts, true)?;
+        self.stats.tiles += 1;
+        self.stats.tile_bytes += data.len() as u64;
+        Ok(())
+    }
+
+    /// 一条方块消息切成连续的包发出：首包开头标出「消息开头」，末包打结束标记。方块数据记在方块预算上（不等），
+    /// 「哪些方块变了」很小，和画面一起走画面的发包节奏
+    fn send_message(&mut self, msg: &[u8], ts: u32, tile: bool) -> Result<(), Error> {
+        let chunks: Vec<&[u8]> = msg.chunks(TILE_CHUNK).collect();
+        let last = chunks.len().saturating_sub(1);
+        for (i, chunk) in chunks.into_iter().enumerate() {
+            let mut payload = Vec::with_capacity(1 + chunk.len());
+            payload.push(if i == 0 { TILE_FIRST } else { 0 });
+            payload.extend_from_slice(chunk);
+            let pkt = rtp_packet(PT_TILE, self.keys.ssrc_media, self.seq, ts, i == last, payload);
+            self.seq = self.seq.wrapping_add(1);
+            let data = seal(&mut self.enc, &pkt)?;
+            self.history.lock().unwrap().put(pkt);
+            match (tile, self.tile_pacer.as_mut()) {
+                (true, Some(p)) => {
+                    p.refill();
+                    p.tokens -= data.len() as f64;
+                }
+                (true, None) => {}
+                (false, _) => self.wait_pace(data.len()),
+            }
+            self.sock.send_to(&data, self.peer)?;
+            self.stats.packets += 1;
+            self.stats.bytes += data.len() as u64;
+        }
+        Ok(())
     }
 
     /// 主控端是否还在（3 秒内收到过它的心跳）。

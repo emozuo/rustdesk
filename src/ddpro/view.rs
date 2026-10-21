@@ -845,6 +845,8 @@ fn receive(
                 info,
                 "ddpro: pro view lost {packets} packet(s), keyframe requested"
             ),
+            // 静止无损第 2 步之四（主控端合成）接上之前先不用
+            Ok(MediaEvent::Tile { .. }) => {}
             Err(e) => break e.to_string(),
         }
         counters.bytes.store(r.stats.bytes, Ordering::Relaxed);

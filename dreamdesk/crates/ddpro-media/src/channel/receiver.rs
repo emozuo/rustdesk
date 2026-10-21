@@ -2,8 +2,8 @@
 
 use super::{
     is_timeout, micros, open, read_i64, rtp_packet, rtx_unwrap, seal, srtp, udp, unspecified_like, Error, Keys,
-    CTRL_BYE, CTRL_HELLO, CTRL_KEEPALIVE, CTRL_KEYFRAME, CTRL_NACK, CTRL_TIME_ECHO, HISTORY, KEEPALIVE_INTERVAL, PEER_TIMEOUT,
-    PT_CONTROL, PT_RTX, PT_VIDEO,
+    CTRL_BYE, CTRL_HELLO, CTRL_KEEPALIVE, CTRL_KEYFRAME, CTRL_NACK, CTRL_TIME_ECHO, HISTORY, KEEPALIVE_INTERVAL, MSG_CHANGED,
+    MSG_TILE, PEER_TIMEOUT, PT_CONTROL, PT_RTX, PT_RTX_TILE, PT_TILE, PT_VIDEO, TILE_FIRST,
 };
 use crate::{
     hevc::{self, DepacketizeError, Depacketizer},
@@ -43,11 +43,16 @@ const NACK_PER_PACKET: usize = 256;
 pub enum Event {
     /// 收齐的一帧（带起始码的 H.265 码流）。丢包之后，第一个收到的总是关键帧。
     /// `times` 是这一帧的分段时间，被控端没带时间（如重复上一帧画面）时为 None。
+    /// `changed` 是被控端说这一帧哪些方块变了（每位一块、低位在前）；None 表示没有方块变化。
     Frame {
         data: Vec<u8>,
         timestamp: u32,
         times: Option<FrameTimes>,
+        changed: Option<Vec<u8>>,
     },
+    /// 一个无损方块（[`crate::tile::decode`] 解）：`timestamp` 是它的像素取自的那一帧的时间戳，`index` 是方块号。
+    /// 等关键帧期间（丢包之后）收到的不交出去——接收端在那时已经要撤掉所有方块，被控端随后会重新补。
+    Tile { timestamp: u32, index: u16, data: Vec<u8> },
     /// 救不回来的丢包（补发也没等到）。接收端已经在通道上请求了关键帧，调用方只需记录；
     /// 等关键帧期间每隔 0.2 秒再请求、再报一次（关键帧的包已经开始到了的话不算等太久）。
     /// 补发补回来的丢包不报。
@@ -74,6 +79,9 @@ pub struct RecvStats {
     pub auth_failures: u64,
     /// 诊断开关故意丢掉的包
     pub diag_dropped: u64,
+    /// 交出去的无损方块和它们的字节数
+    pub tiles: u64,
+    pub tile_bytes: u64,
     /// RFC 3550 到达抖动，毫秒
     pub jitter_ms: f64,
 }
@@ -122,6 +130,10 @@ pub struct Receiver {
     /// 正在收的这一帧：首包到达时刻、被控端带来的时间
     frame_first: Option<i64>,
     frame_stamp: Option<SenderStamp>,
+    /// 正在拼的方块消息（收到「消息开头」之后）
+    msg: Option<Vec<u8>>,
+    /// 「哪些方块变了」：等时间戳相同的那一帧收齐时挂上去
+    changed: Option<(u32, Vec<u8>)>,
     buf: Vec<u8>,
     pub stats: RecvStats,
 }
@@ -162,6 +174,8 @@ impl Receiver {
             clock: ClockSync::default(),
             frame_first: None,
             frame_stamp: None,
+            msg: None,
+            changed: None,
             buf: vec![0u8; 2048],
             stats: RecvStats::default(),
         };
@@ -282,8 +296,8 @@ impl Receiver {
             return Ok(());
         }
         let p = match (p.header.payload_type, p.header.ssrc) {
-            (PT_VIDEO, ssrc) if ssrc == self.keys.ssrc_media => p,
-            (PT_RTX, ssrc) if ssrc == self.keys.ssrc_rtx() => match rtx_unwrap(p, &self.keys) {
+            (PT_VIDEO | PT_TILE, ssrc) if ssrc == self.keys.ssrc_media => p,
+            (PT_RTX | PT_RTX_TILE, ssrc) if ssrc == self.keys.ssrc_rtx() => match rtx_unwrap(p, &self.keys) {
                 Some(p) => p,
                 None => return Ok(()),
             },
@@ -451,6 +465,10 @@ impl Receiver {
     /// `arrival` 是这个包到达的时刻。暂存后才拼进来的包到得比补发包早，所以一帧的首包到达取拼进来的包里最早的，
     /// 收齐时刻取末包拼进来的此刻（等补发的时间要算在帧内跨度里）。
     fn feed(&mut self, p: Packet, arrival: i64) {
+        if p.header.payload_type == PT_TILE {
+            self.feed_message(p);
+            return;
+        }
         self.frame_first = Some(self.frame_first.map_or(arrival, |f| f.min(arrival)));
         if let Some(ext) = p.header.get_extension(EXT_ID) {
             self.frame_stamp = SenderStamp::from_bytes(&ext);
@@ -500,11 +518,54 @@ impl Receiver {
         self.update_jitter(p.header.timestamp);
         self.stats.frames += 1;
         let offset = self.clock.estimate(done).map(|e| e.offset_us);
+        // 「哪些方块变了」紧贴在这一帧前面；时间戳对不上的（前面的帧被丢掉了）作废
+        let changed = self
+            .changed
+            .take()
+            .filter(|(ts, _)| *ts == p.header.timestamp)
+            .map(|(_, bitmap)| bitmap);
         self.pending.push_back(Event::Frame {
             data: frame,
             timestamp: p.header.timestamp,
             times: stamp.map(|s| FrameTimes::new(s, offset, first, done)),
+            changed,
         });
+    }
+
+    /// 方块消息的包：按「消息开头」标记和结束标记拼成整条消息。中途丢了包的残消息在 [`Receiver::loss`] 里扔掉；
+    /// 丢包后从中间开始收到的（没见到开头）跳过，直到下一条消息开头。
+    fn feed_message(&mut self, p: Packet) {
+        let Some((&flags, body)) = p.payload.split_first() else {
+            return;
+        };
+        if flags & TILE_FIRST != 0 {
+            self.msg = Some(Vec::new());
+        }
+        let Some(msg) = self.msg.as_mut() else {
+            return;
+        };
+        msg.extend_from_slice(body);
+        if !p.header.marker {
+            return;
+        }
+        let Some(msg) = self.msg.take() else {
+            return;
+        };
+        if msg.len() < 5 {
+            return;
+        }
+        let ts = u32::from_le_bytes([msg[1], msg[2], msg[3], msg[4]]);
+        match msg[0] {
+            MSG_CHANGED => self.changed = Some((ts, msg[5..].to_vec())),
+            MSG_TILE if msg.len() >= 7 && !self.waiting_irap => {
+                let index = u16::from_le_bytes([msg[5], msg[6]]);
+                let data = msg[7..].to_vec();
+                self.stats.tiles += 1;
+                self.stats.tile_bytes += data.len() as u64;
+                self.pending.push_back(Event::Tile { timestamp: ts, index, data });
+            }
+            _ => {}
+        }
     }
 
     /// 发现丢包（`packets` 是序号间隙；0 表示分片残缺等由丢包引起的后果）。
@@ -513,9 +574,12 @@ impl Receiver {
         self.depack.reset();
         self.keyframe_arriving = false;
         self.frame_clean = false;
-        // 残帧的首包时间和被控端时间都作废，不能带到下一帧
+        // 残帧的首包时间和被控端时间都作废，不能带到下一帧；拼了一半的方块消息、没挂上去的「哪些方块变了」也作废
+        // （调用方收到丢包就撤掉所有方块）
         self.frame_first = None;
         self.frame_stamp = None;
+        self.msg = None;
+        self.changed = None;
         if !self.waiting_irap {
             self.waiting_irap = true;
             self.emit_loss(packets);
