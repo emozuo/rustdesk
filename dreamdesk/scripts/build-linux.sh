@@ -71,6 +71,20 @@ for s in postinst prerm preinst postrm; do
     rename "res/DEBIAN/$s" "$D/DEBIAN/$s"
     chmod 755 "$D/DEBIAN/$s"
 done
+# 专业画面通道的 UDP 接收缓冲：通道申请 8 MB（静止无损整屏补发一次约 830 KB 突发），系统默认上限只有约 200 KB，
+# 会被截成约 400 KB——实测每次整屏补发在本机缓冲里丢几百个包、全靠补发救回（P1 实施记录「审查：2026-10-21」后的实测）。
+# 放宽上限是低延迟 UDP 传输的标准部署做法（QUIC、WebRTC、SRT 同样要求）；只放宽「每个程序最多能要多少」，不多占内存。
+# 放在 /usr/lib/sysctl.d（包自己的文件，卸载时一起删）；编号 60，管理员自己的配置（通常 99-）能覆盖它
+mkdir -p "$D/usr/lib/sysctl.d"
+printf '# %s：专业画面通道的 UDP 接收缓冲上限（通道申请 8 MB）\nnet.core.rmem_max = 8388608\n' "$APP" \
+    >"$D/usr/lib/sysctl.d/60-$APP.conf"
+# 装好就生效（不用等重启）；当前上限已经更大时不往小改
+cat >>"$D/DEBIAN/postinst" <<'EOF'
+
+if [ "$1" = configure ] && [ "$(sysctl -n net.core.rmem_max 2>/dev/null || echo 0)" -lt 8388608 ]; then
+	sysctl -q -w net.core.rmem_max=8388608 || true
+fi
+EOF
 # 依赖照 build.py 的 control 模板（同一份列表）；和 rustdesk 包互斥、可替换它（用户 2026-10-20 定：两者的服务抢同一个端口，
 # 本来就不能同时被连；装 dreamdesk-pro 时 apt 自动卸掉 rustdesk）
 DEPENDS=$(sed -n 's/^Depends: \(.*\)%s\r\{0,1\}$/\1/p' build.py)
