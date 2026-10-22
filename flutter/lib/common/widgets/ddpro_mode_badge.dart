@@ -57,6 +57,12 @@ void onDdproWindowEvent(
       // 之后页面真销毁时再关一次，会话已经不在了，什么也不做
       await bind.sessionClose(sessionId: sessionId);
       closeConnection(id: peerId);
+      // 隐藏的窗口不出帧，移除的远程页面就一直不销毁：RustDesk 之后复用这个窗口连同一台时，标签栏缓存的旧页面列表
+      // 长度相同、新页面建不出来，旧页面晚一帧销毁又把新页面按对端 ID 共享的状态删掉——再连这台连不上
+      // （2026-10-22 复现：多屏、悬浮球「断开连接」后再连，8 次全中）。强制出一帧（不可见时也排），当场把移除落实
+      WidgetsBinding.instance.scheduleForcedFrame();
+      await WidgetsBinding.instance.endOfFrame
+          .timeout(const Duration(seconds: 1), onTimeout: () {});
       await WindowController.fromWindowId(id).close();
       break;
   }
