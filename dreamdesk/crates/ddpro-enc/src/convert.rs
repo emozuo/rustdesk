@@ -113,15 +113,6 @@ impl Converter {
         }
     }
 
-    /// 开 / 关抖动，下一次转换生效。
-    pub fn set_dither(&self, dither: bool) {
-        let params: [u32; 4] = [self.width, self.height, dither as u32, 0];
-        unsafe {
-            self.ctx
-                .UpdateSubresource(&self.params, 0, None, params.as_ptr() as *const c_void, 0, 0);
-        }
-    }
-
     /// NVENC 注册用的输出纹理。
     pub fn output_ptr(&self) -> *mut c_void {
         self.output.as_raw()

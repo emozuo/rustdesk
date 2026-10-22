@@ -35,10 +35,7 @@ use std::{
     io::ErrorKind,
     net::IpAddr,
     ops::{Deref, DerefMut},
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
-    },
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
@@ -80,9 +77,6 @@ struct Session {
     server: ServerPtrWeak,
     /// 谈成时开好的专业画面通道，服务线程开始时取走
     channel: Mutex<Option<Channel>>,
-    /// 颜色转换加不加抖动：默认不加——8bit 桌面转 8bit YUV 只需四舍五入（Sunshine 同样不抖动），实测抖动反而误差更大、
-    /// 码流更大。主控端可以经「设置抖动」打开（下一帧生效，重建编码器后照旧），留给第 4 项高位深源压 8bit 时用
-    dither: AtomicBool,
 }
 
 enum Channel {
@@ -147,17 +141,6 @@ pub fn other_session(display: usize, conn_id: i32) -> Option<i32> {
     SESSIONS.lock().unwrap().get(&display).map(|o| o.conn.id()).filter(|&id| id != conn_id)
 }
 
-/// 主控端开 / 关抖动：只认这块屏上本连接自己的专业会话，返回是否认了。
-pub fn set_dither(display: usize, conn_id: i32, dither: bool) -> bool {
-    match SESSIONS.lock().unwrap().get(&display) {
-        Some(s) if s.conn.id() == conn_id => {
-            s.dither.store(dither, Ordering::Release);
-            true
-        }
-        _ => false,
-    }
-}
-
 /// 开通道时发现这块屏已被别的连接占着：谈判前查过一次没人，但两台主控端几乎同时请求同一块屏时，
 /// 先登记的那个在这之间占了屏。答复按「屏幕忙」拒绝，不按「开不了」。
 #[derive(Debug)]
@@ -191,7 +174,6 @@ pub fn start(
         conn: conn.clone(),
         server: server.clone(),
         channel: Mutex::new(Some(Channel::Waiting(listener, Instant::now() + CHANNEL_TIMEOUT))),
-        dither: AtomicBool::new(false),
     });
 
     let server = server.upgrade().ok_or_else(|| anyhow!("server is gone"))?;
@@ -415,7 +397,6 @@ fn stream(ps: &ProService, session: &Session, channel: Channel) -> ResultType<(E
     let dev = cap.device();
     let (w, h) = ddpro::enc::texture_size(first_frame).map_err(|e| anyhow!("{e}"))?;
     let mut src = Some(first_frame);
-    let mut dither = session.dither.load(Ordering::Acquire);
     let mut lossless = match std::env::var_os(DIAG_NO_LOSSLESS) {
         None => Some(Lossless::new(w, h, LOSSLESS_KBPS, FPS)?),
         Some(_) => None,
@@ -428,7 +409,8 @@ fn stream(ps: &ProService, session: &Session, channel: Channel) -> ResultType<(E
             fps: FPS,
             bitrate_kbps: BITRATE_KBPS,
             preset: PRESET,
-            dither,
+            // 8bit 桌面转 8bit YUV 只需四舍五入（Sunshine 同样不抖动），实测抖动反而误差更大、码流更大
+            dither: false,
             tile: if lossless.is_some() { TILE } else { 0 },
         },
     )
@@ -445,8 +427,7 @@ fn stream(ps: &ProService, session: &Session, channel: Channel) -> ResultType<(E
         sender.pace_tiles(LOSSLESS_KBPS, FPS);
     }
     log::info!(
-        "ddpro: pro video on display {display} started: {w}x{h} 4:4:4 8bit {FPS} fps {BITRATE_KBPS} kbps, dither {}, lossless {} -> {}",
-        if dither { "on" } else { "off" },
+        "ddpro: pro video on display {display} started: {w}x{h} 4:4:4 8bit {FPS} fps {BITRATE_KBPS} kbps, lossless {} -> {}",
         if lossless.is_some() { "on" } else { "off" },
         sender.peer()
     );
@@ -528,15 +509,6 @@ fn stream(ps: &ProService, session: &Session, channel: Channel) -> ResultType<(E
             still = 0;
         } else {
             still = still.saturating_add(1);
-        }
-        let want = session.dither.load(Ordering::Acquire);
-        if want != dither {
-            dither = want;
-            enc.set_dither(dither);
-            // 改了颜色转换：重编的帧才带上新设置，按整屏刚变处理
-            still = 0;
-            tail = STILL_TAIL;
-            log::info!("ddpro: pro video on display {display}: dither {}", if dither { "on" } else { "off" });
         }
         let force = sender.take_keyframe_request();
         if force {

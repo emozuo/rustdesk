@@ -108,10 +108,6 @@ fn handle(data: &[u8], ctx: &ConnCtx) -> Option<Message> {
             }
             wrap(reply)
         }
-        Some(dd_pro::Union::SetDither(s)) => {
-            set_dither(&s, ctx);
-            None
-        }
         _ => {
             throttled_log!(
                 PEER_LOG_INTERVAL,
@@ -188,25 +184,6 @@ pub(super) fn busy(s: &crate::server::Server, display: usize, conn_id: i32) -> O
     }
     let viewers = s.display_viewers(display, conn_id).len();
     (viewers > 0).then(|| format!("display {display} is being viewed in general mode by {viewers} other connection(s)"))
-}
-
-/// 主控端开 / 关抖动。不是这个连接在这块屏上的专业会话就不理（多半是换屏前晚到的消息）。
-fn set_dither(s: &ddpro::SetDither, ctx: &ConnCtx) {
-    #[cfg(all(windows, feature = "vram"))]
-    let applied = super::video::set_dither(s.display_index as usize, ctx.conn.id(), s.dither);
-    #[cfg(not(all(windows, feature = "vram")))]
-    let applied = {
-        let _ = ctx;
-        false
-    };
-    if !applied {
-        throttled_log!(
-            PEER_LOG_INTERVAL,
-            info,
-            "ddpro: ignoring a dither change for display {}: no pro session of this connection there",
-            s.display_index
-        );
-    }
 }
 
 /// 本机此刻能编的格式（用这块屏的采集器所在的显卡探测）。做不到时把原因写日志，能力里如实报「没有」。

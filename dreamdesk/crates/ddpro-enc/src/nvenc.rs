@@ -413,14 +413,6 @@ impl Encoder {
     pub fn read_tiles(&mut self, rects: &[(u32, u32, u32, u32)]) -> Result<Vec<Vec<u8>>, Error> {
         self.conv.read_tiles(rects)
     }
-
-    /// 开 / 关抖动，下一帧生效：只改颜色转换的一个参数，不重建编码器、不出关键帧。
-    pub fn set_dither(&mut self, dither: bool) {
-        if self.cfg.dither != dither {
-            self.cfg.dither = dither;
-            self.conv.set_dither(dither);
-        }
-    }
 }
 
 impl Drop for Encoder {

@@ -10,18 +10,11 @@ message DdPro {
     Accept accept = 3;
     Reject reject = 4;
     Stopped stopped = 6;
-    SetDither set_dither = 7;
     Released released = 8;
   }
-  // v2–v3 的「请求关键帧」（经 RustDesk 原连接）；v4 起改在画面通道上回发，编号不再使用
-  reserved 5;
-}
-
-// 主控端 → 被控端（v7 起）：开 / 关专业画面的抖动。默认不抖动（8bit 源四舍五入最准）；留给高位深源压 8bit 时打开。
-// 被控端只改颜色转换的一个参数，下一帧生效；只认这块屏上本连接自己的专业会话
-message SetDither {
-  uint32 display_index = 1;
-  bool dither = 2;
+  // 5：v2–v3 的「请求关键帧」（经 RustDesk 原连接）；v4 起改在画面通道上回发。
+  // 7：v7–v9 的「开 / 关抖动」（界面没有入口，只有诊断开关触发；HDR 定为走 10bit 后用不上，2026-10-22 删）
+  reserved 5, 7;
 }
 
 // 被控端 → 主控端（v5 起）：被控端这一侧的专业画面停了、已退回通用画面。

@@ -21,7 +21,7 @@ use protobuf::Message as _;
 
 /// 专业协议版本。两端必须完全一致，不一致就拒绝。
 /// v6：画面通道加丢包补发和发包节奏；「已停止」带屏号、加隐私模式原因。
-/// v7：主控端可以开 / 关抖动。
+/// v7：主控端可以开 / 关抖动（2026-10-22 删，编号保留）。
 /// v8：画面通道加静止无损方块（「这一帧哪些方块变了」和方块数据）。
 /// v9：多屏——「同意」「拒绝」带屏号；被控端的专业会话因主控端关窗结束时发「放回」。
 pub const PROTOCOL_VERSION: u32 = 9;
@@ -110,14 +110,6 @@ pub fn stopped(reason: stopped::Reason, detail: String, display_index: u32) -> d
 pub fn released(display_index: u32) -> dd_pro::Union {
     dd_pro::Union::Released(Released {
         display_index,
-        ..Default::default()
-    })
-}
-
-pub fn set_dither(display_index: u32, dither: bool) -> dd_pro::Union {
-    dd_pro::Union::SetDither(SetDither {
-        display_index,
-        dither,
         ..Default::default()
     })
 }

@@ -106,18 +106,6 @@ pub fn retry<T: InvokeUiSession>(_session: &Session<T>, _window: uuid::Uuid) {
     }
 }
 
-/// 开 / 关专业画面的抖动（默认不抖动；界面暂时没有入口，留给第 4 项高位深源压 8bit 时用）：记下来，专业窗口开着时
-/// 马上告诉被控端；之后换屏开新的专业窗口也照这个设置（见 `view_link::start`）。
-pub fn set_dither<T: InvokeUiSession>(_session: &Session<T>, _on: bool) {
-    #[cfg(all(feature = "flutter", target_os = "linux"))]
-    for display in super::view_link::set_dither(_session, _on) {
-        log::info!("ddpro: dither {} for remote display {display}", if _on { "on" } else { "off" });
-        if let Some(m) = wrap(ddpro::set_dither(u32::try_from(display).unwrap_or(0), _on)) {
-            _session.send(Data::Message(m));
-        }
-    }
-}
-
 /// RustDesk 每秒推质量面板数据之前（`io_loop` 的钩子）：专业窗口开着时，当前屏的帧率、编码、色度是通用画面那条链路的，
 /// 换成专业画面的实测值。
 pub fn quality_status<T: InvokeUiSession>(_session: &Session<T>, _status: &mut crate::client::QualityStatus) {

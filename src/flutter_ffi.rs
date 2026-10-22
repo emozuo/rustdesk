@@ -587,16 +587,6 @@ pub fn session_ddpro_retry(session_id: SessionID) {
     let _ = session_id;
 }
 
-/// DreamDesk：专业画面开 / 关抖动（默认不抖动；界面暂时没有入口，留给高位深源压 8bit 时用）。不带专业模式的构建什么也不做
-pub fn session_ddpro_set_dither(session_id: SessionID, on: bool) {
-    #[cfg(feature = "dd-pro")]
-    if let Some(session) = sessions::get_session_by_session_id(&session_id) {
-        crate::ddpro::client::set_dither(&session, on);
-    }
-    #[cfg(not(feature = "dd-pro"))]
-    let _ = (session_id, on);
-}
-
 pub fn session_set_custom_fps(session_id: SessionID, fps: i32) {
     if let Some(session) = sessions::get_session_by_session_id(&session_id) {
         session.set_custom_fps(fps);

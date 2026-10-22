@@ -9,7 +9,7 @@
 
 use crate::{
     client::{Data, Interface},
-    ddpro::wire::{wrap, PEER_LOG_INTERVAL},
+    ddpro::wire::PEER_LOG_INTERVAL,
     ui_session_interface::{InvokeUiSession, Session},
 };
 use base::message_proto::{
@@ -51,8 +51,6 @@ struct Link {
     views: HashMap<i32, View>,
     /// 对端提供专业模式、版本也对得上：RustDesk 之后为别的屏开子窗口时，那块屏也请求专业模式
     offered: bool,
-    /// 要被控端加抖动（默认不加）：本会话之后开的专业窗口都照这个设置
-    dither: bool,
     /// 悬浮球的网络状态块开着：换屏开新的专业窗口时照旧
     show_status: bool,
 }
@@ -217,14 +215,6 @@ fn push_mode<T: InvokeUiSession>(session: &Session<T>, display: Option<i32>, lev
         "ddpro_mode",
         &[("level", level), ("text", text), ("tip", tip), ("detail", detail)],
     );
-}
-
-/// 记下要不要抖动；返回开着专业窗口的屏号，由调用方马上告诉被控端。
-pub fn set_dither<T: InvokeUiSession>(session: &Session<T>, on: bool) -> Vec<i32> {
-    let mut links = links().lock().unwrap();
-    let l = links.entry(key(session)).or_default();
-    l.dither = on;
-    l.views.iter().filter(|(_, v)| v.down.is_some()).map(|(d, _)| *d).collect()
 }
 
 /// 质量面板里 RustDesk 原来没有的几项（专业画面的延迟、收到的码率、位深、丢包与补发、无损覆盖比例、显示链路检查），
@@ -717,24 +707,11 @@ pub fn start<T: InvokeUiSession>(
         }
     }
     let pid = child.id();
-    let dither = {
+    {
         let mut links = links().lock().unwrap();
-        let l = links.entry(k).or_default();
-        // 诊断：界面还没有入口，用它从「加抖动」开始，验证「主控端 → 被控端改抖动」这条路
-        if std::env::var("DDPRO_DIAG_DITHER").is_ok_and(|v| v == "1") {
-            l.dither = true;
-        }
-        let dither = l.dither;
-        let view = l.views.entry(display_index).or_default();
+        let view = links.entry(k).or_default().views.entry(display_index).or_default();
         view.down = Some((pid, tx));
         view.stats = None;
-        dither.then_some(display_index)
-    };
-    // 本会话要过抖动：新的专业会话（换屏后）也加。被控端谈成时已经登记好会话，这时发得上
-    if let Some(index) = dither {
-        if let Some(m) = wrap(ddpro::set_dither(u32::try_from(index).unwrap_or(0), true)) {
-            session.send(Data::Message(m));
-        }
     }
 
     let session_over = rustdesk.clone();

@@ -461,11 +461,6 @@ class RustdeskImpl {
     return Future.value();
   }
 
-  Future<void> sessionDdproSetDither(
-      {required UuidValue sessionId, required bool on, dynamic hint}) {
-    return Future.value();
-  }
-
   Future<void> sessionLockScreen({required UuidValue sessionId, dynamic hint}) {
     return Future(() => js.context.callMethod('setByName', ['lock_screen']));
   }
