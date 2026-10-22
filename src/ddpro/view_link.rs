@@ -859,12 +859,14 @@ pub fn start<T: InvokeUiSession>(
 }
 
 /// RustDesk 连接里收到的消息里专业窗口要的（RustDesk 自己的处理照旧）：
-/// - 光标：原样转给所有开着的专业窗口；
+/// - 光标形状、被别的东西挪动后的光标位置：原样转给所有开着的专业窗口（位置在哪块屏上由各窗口自己判断）；
 /// - 显示变化：记下那块屏的新位置尺寸；那块屏开着专业窗口的，原样转给它。被控端发这条消息不只在用户切屏时
 ///   （别的屏改了分辨率、主控端查询显示信息时也发），所以不从它推断「用户切了屏」——切屏看 [`on_switch_display`]。
 pub fn on_rustdesk_message<T: InvokeUiSession>(msg: &Message, session: &Session<T>) {
     let switch = match &msg.union {
-        Some(message::Union::CursorData(_)) | Some(message::Union::CursorId(_)) => None,
+        Some(message::Union::CursorData(_))
+        | Some(message::Union::CursorId(_))
+        | Some(message::Union::CursorPosition(_)) => None,
         Some(message::Union::Misc(m)) => match &m.union {
             Some(misc::Union::SwitchDisplay(s)) => Some(s),
             _ => return,

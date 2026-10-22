@@ -47,3 +47,10 @@ mod view_link;
 mod view_lossless;
 #[cfg(feature = "dd-pro")]
 mod wire;
+// USB 透传（P2 第 1 项）：被控端只有 Windows（usbip-win2），主控端只有 Linux（内核 usbip-host，root 服务代做特权操作）
+#[cfg(all(feature = "dd-pro", windows))]
+mod usb_server;
+#[cfg(all(feature = "dd-pro", target_os = "linux"))]
+mod usb_client;
+#[cfg(all(feature = "dd-pro", target_os = "linux"))]
+pub mod usb_helper;

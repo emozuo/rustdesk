@@ -1,0 +1,9 @@
+[package]
+name = "ddpro-usb"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# libc 是 RustDesk 已经在用的那一份，不新增依赖
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"

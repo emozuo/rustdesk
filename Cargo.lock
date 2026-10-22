@@ -2087,6 +2087,7 @@ dependencies = [
  "ddpro-dec",
  "ddpro-enc",
  "ddpro-media",
+ "ddpro-usb",
  "ddpro-view",
  "protobuf",
  "protobuf-codegen",
@@ -2124,6 +2125,13 @@ dependencies = [
  "webrtc-srtp",
  "webrtc-util",
  "zstd",
+]
+
+[[package]]
+name = "ddpro-usb"
+version = "0.1.0"
+dependencies = [
+ "libc",
 ]
 
 [[package]]

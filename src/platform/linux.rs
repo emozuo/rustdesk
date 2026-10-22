@@ -1129,6 +1129,8 @@ pub fn start_os_service() {
     std::thread::spawn(|| {
         allow_err!(crate::ipc::start(crate::POSTFIX_SERVICE));
     });
+    #[cfg(feature = "dd-pro")]
+    crate::ddpro::usb_helper::start();
 
     // DRM/KMS capture producer (opt-in `drm` feature): a dedicated thread + runtime that streams
     // scanout frames to the user `--server` over the `_drm` service-scoped channel. Runs here

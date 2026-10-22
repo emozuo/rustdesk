@@ -799,6 +799,8 @@ impl Connection {
                             log::info!("Change permission {} -> {}", name, enabled);
                             if &name == "keyboard" {
                                 conn.keyboard = enabled;
+                                #[cfg(feature = "dd-pro")]
+                                crate::ddpro::server::on_keyboard_permission(conn.inner.id(), conn.peer_keyboard_enabled());
                                 conn.send_permission(Permission::Keyboard, enabled).await;
                                 if let Some(s) = conn.server.upgrade() {
                                     s.write().unwrap().subscribe(
@@ -4132,6 +4134,7 @@ impl Connection {
                         conn: self.inner.clone(),
                         server: self.server.clone(),
                         local_ip: self.stream.local_addr().ip(),
+                        keyboard: self.peer_keyboard_enabled(),
                     };
                     if let Some(reply) = crate::ddpro::server::on_message(&data, ctx).await {
                         self.send(reply).await;
@@ -5061,6 +5064,8 @@ impl Connection {
         if let Ok(q) = o.disable_keyboard.enum_value() {
             if q != BoolOption::NotSet {
                 self.disable_keyboard = q == BoolOption::Yes;
+                #[cfg(feature = "dd-pro")]
+                crate::ddpro::server::on_keyboard_permission(self.inner.id(), self.peer_keyboard_enabled());
                 if let Some(s) = self.server.upgrade() {
                     s.write().unwrap().subscribe(
                         super::clipboard_service::NAME,
@@ -5348,6 +5353,8 @@ impl Connection {
         if let Some(mut mux) = self.port_forward_mux.take() {
             mux.close_all();
         }
+        #[cfg(feature = "dd-pro")]
+        crate::ddpro::server::on_conn_closed(self.inner.id());
     }
 
     // The `reason` should be consistent with `check_if_retry` if not empty

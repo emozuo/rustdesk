@@ -11,10 +11,74 @@ message DdPro {
     Reject reject = 4;
     Stopped stopped = 6;
     Released released = 8;
+    UsbOffer usb_offer = 9;
+    UsbStatus usb_status = 10;
+    UsbOpen usb_open = 11;
+    UsbData usb_data = 12;
+    UsbClose usb_close = 13;
   }
   // 5：v2–v3 的「请求关键帧」（经 RustDesk 原连接）；v4 起改在画面通道上回发。
   // 7：v7–v9 的「开 / 关抖动」（界面没有入口，只有诊断开关触发；HDR 定为走 10bit 后用不上，2026-10-22 删）
   reserved 5, 7;
+}
+
+// ---- USB 透传（v10 起，P2 第 1 项）：USB/IP 字节流装在这条会话连接里转发，两种模式都能用 ----
+
+// 主控端要透给被控端的一块设备。device_id 由主控端在本会话内分配，同一块设备一直不变
+message UsbDevice {
+  uint32 device_id = 1;
+  // 主控端 Linux 上的 USB 位置（如 1-1），被控端 attach 时原样带回导入请求里
+  string busid = 2;
+  uint32 vendor_id = 3;
+  uint32 product_id = 4;
+  string name = 5;
+}
+
+// 主控端 → 被控端：本会话现在要透的设备全集（有变化就发全量，被控端对账：新的挂上、没了的撤下）
+message UsbOffer {
+  repeated UsbDevice devices = 1;
+}
+
+// 被控端 → 主控端：某块设备挂上了、被拒了、被撤下了
+message UsbStatus {
+  enum State {
+    ATTACHED = 0;
+    REJECTED = 1;
+    DETACHED = 2;
+  }
+  enum Reason {
+    NONE = 0;
+    // 这条连接没有键鼠控制权（只看，或被控端在连接管理里关了键鼠）
+    NO_PERMISSION = 1;
+    // 被控端没装 USB 透传驱动，或版本不对
+    DRIVER_MISSING = 2;
+    // 驱动挂载失败（detail 里是驱动给的原因）
+    ATTACH_FAILED = 3;
+    // 主控端撤下了这块设备，或连接要结束了
+    WITHDRAWN = 4;
+  }
+  uint32 device_id = 1;
+  State state = 2;
+  Reason reason = 3;
+  string detail = 4;
+}
+
+// 被控端 → 主控端：被控端驱动连上来要这块设备了，为它开一条新流。每次挂载用新的 stream_id，重试时旧流晚到的数据串不进来
+message UsbOpen {
+  uint32 stream_id = 1;
+  uint32 device_id = 2;
+}
+
+// 双向：一条流里的一段 USB/IP 原始字节（第一段是驱动的导入请求）
+message UsbData {
+  uint32 stream_id = 1;
+  bytes data = 2;
+}
+
+// 双向：这条流结束了
+message UsbClose {
+  uint32 stream_id = 1;
+  string detail = 2;
 }
 
 // 被控端 → 主控端（v5 起）：被控端这一侧的专业画面停了、已退回通用画面。

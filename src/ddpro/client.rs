@@ -41,6 +41,9 @@ pub fn on_peer_info<T: InvokeUiSession>(pi: &PeerInfo, session: &Session<T>) {
     log::info!("ddpro: the peer offers pro protocol v{peer_version}, requesting a pro session for display {display}");
     #[cfg(all(feature = "flutter", target_os = "linux"))]
     super::view_link::mark_offered(session);
+    // USB 透传（数位板）两种模式都用，和专业画面谈不谈得成无关
+    #[cfg(target_os = "linux")]
+    super::usb_client::start(session);
     request_pro(session, display);
     // 断线重连：「将我的所有显示器」开的子窗口还在、不会再开一次，它们的屏也在这里重新请求（P1 第 8 项）
     #[cfg(all(feature = "flutter", target_os = "linux"))]
@@ -156,6 +159,17 @@ pub fn on_message<T: InvokeUiSession>(data: &[u8], _sender: &UnboundedSender<Dat
             );
             #[cfg(all(feature = "flutter", target_os = "linux"))]
             super::view_link::peer_stopped(_session, &s);
+        }
+        Some(
+            u @ (dd_pro::Union::UsbStatus(_)
+            | dd_pro::Union::UsbOpen(_)
+            | dd_pro::Union::UsbData(_)
+            | dd_pro::Union::UsbClose(_)),
+        ) => {
+            #[cfg(target_os = "linux")]
+            super::usb_client::on_message(_session, u);
+            #[cfg(not(target_os = "linux"))]
+            let _ = u;
         }
         Some(dd_pro::Union::Released(r)) => {
             #[cfg(all(feature = "flutter", target_os = "linux"))]

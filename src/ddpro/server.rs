@@ -62,12 +62,23 @@ pub struct ConnCtx {
     pub server: ServerPtrWeak,
     /// RustDesk 连接在被控端这一侧的地址：主控端连得到它，画面通道就开在这个地址上
     pub local_ip: IpAddr,
+    /// 这条连接能输入（被控端给了键鼠控制权、主控端也没开「仅查看」，RustDesk 的 `peer_keyboard_enabled`；USB 透传要它）
+    pub keyboard: bool,
 }
 
 /// 处理主控端发来的专业协议消息，返回要回给它的消息。
 /// 探测编码器、开端口要一两百毫秒，放到阻塞线程里做，不卡 RustDesk 的异步运行时；但这个连接自己的消息循环
 /// 在等答复，这期间本连接的通用画面和输入会停一两百毫秒（只发生在开会话、换屏时）。
 pub async fn on_message(data: &[u8], ctx: ConnCtx) -> Option<Message> {
+    // USB 透传的消息很频繁（数位板每秒上百个）、处理都很快：直接处理，不进阻塞线程、不让消息循环等
+    if let Ok(msg) = ddpro::decode(data) {
+        if msg.version == ddpro::PROTOCOL_VERSION {
+            if let Some(u) = msg.union.filter(is_usb) {
+                usb(u, &ctx);
+                return None;
+            }
+        }
+    }
     let data = data.to_vec();
     match tokio::task::spawn_blocking(move || handle(&data, &ctx)).await {
         Ok(reply) => reply,
@@ -117,6 +128,47 @@ fn handle(data: &[u8], ctx: &ConnCtx) -> Option<Message> {
             None
         }
     }
+}
+
+fn is_usb(u: &dd_pro::Union) -> bool {
+    matches!(
+        u,
+        dd_pro::Union::UsbOffer(_) | dd_pro::Union::UsbData(_) | dd_pro::Union::UsbClose(_)
+    )
+}
+
+/// USB 透传（P2 第 1 项）：被控端驱动 usbip-win2 只有 Windows 版
+fn usb(u: dd_pro::Union, ctx: &ConnCtx) {
+    #[cfg(windows)]
+    super::usb_server::on_message(u, &ctx.conn, ctx.keyboard);
+    #[cfg(not(windows))]
+    if let dd_pro::Union::UsbOffer(offer) = u {
+        use ddpro::usb_status::{Reason, State};
+        for d in offer.devices {
+            let s = dd_pro::Union::UsbStatus(ddpro::UsbStatus {
+                device_id: d.device_id,
+                state: State::REJECTED.into(),
+                reason: Reason::DRIVER_MISSING.into(),
+                detail: "USB passthrough needs a Windows controlled side".to_owned(),
+                ..Default::default()
+            });
+            if let Some(m) = wrap(s) {
+                ctx.conn.clone().send(std::sync::Arc::new(m));
+            }
+        }
+    }
+}
+
+/// 这条连接能不能输入变了：被控端在连接管理里切了键鼠控制权，或主控端开 / 关了「仅查看」（`connection.rs` 的钩子）
+pub fn on_keyboard_permission(_conn_id: i32, _enabled: bool) {
+    #[cfg(windows)]
+    super::usb_server::on_keyboard_permission(_conn_id, _enabled);
+}
+
+/// 连接关闭（`connection.rs` 的钩子）
+pub fn on_conn_closed(_conn_id: i32) {
+    #[cfg(windows)]
+    super::usb_server::on_conn_closed(_conn_id);
 }
 
 fn answer(hello: &Hello, ctx: &ConnCtx) -> dd_pro::Union {

@@ -20,7 +20,7 @@ use ddpro::{
     media::{Event as MediaEvent, Ledger, Receiver, Stage},
     view::{
         display_check::{Cards, Issue},
-        now_ns, CursorImage, Event, Window,
+        now_ns, CursorImage, Event, LayerImage, Window,
     },
     view_action, view_down, view_ended::Kind, view_up, ViewAction, ViewDown, ViewEnded, ViewKey, ViewMouse,
     ViewResolution, ViewStart, ViewUp,
@@ -99,6 +99,8 @@ struct Times {
 /// 读标准输入的线程交给主线程的
 enum FromSession {
     Cursor(CursorImage),
+    /// 被控端的光标被别的东西挪到了这里（远程桌面坐标），见 [`RemoteCursor`]
+    CursorPos(i32, i32),
     /// 远程这块屏的新位置和尺寸（被控端切了分辨率等），和它支持的分辨率、原始分辨率（悬浮球「分辨率」菜单用；
     /// 消息里没带列表时为空）
     Display {
@@ -440,6 +442,7 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
     }
 
     let mut input = Input::new(&start, size, display_fixed);
+    let mut remote_cursor = RemoteCursor::default();
     let mut ball = Ball::new(
         size,
         start.display_origins.len() as u32,
@@ -533,6 +536,11 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
                         if on { "go to the remote" } else { "stay with this computer" }
                     ),
                     other => {
+                        if matches!(other, Event::PointerMotion { .. }) {
+                            if let Err(e) = remote_cursor.local_moved(&mut win) {
+                                throttled_log!(PEER_LOG_INTERVAL, warn, "ddpro: pro view cannot restore the pointer: {e}");
+                            }
+                        }
                         // 鼠标、按键先给悬浮球：落在球 / 菜单上的不发给远程
                         let (mine, action) = match &other {
                             Event::PointerMotion { x, y } => (ball.pointer_motion(*x, *y), None),
@@ -580,12 +588,17 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
             loop {
                 match session_rx.try_recv() {
                     Ok(FromSession::Cursor(c)) => {
-                        if let Err(e) = win.set_cursor(Some(c)) {
+                        if let Err(e) = remote_cursor.set_image(&mut win, c) {
                             throttled_log!(
                                 PEER_LOG_INTERVAL,
                                 warn,
                                 "ddpro: pro view cannot set the cursor: {e}"
                             );
+                        }
+                    }
+                    Ok(FromSession::CursorPos(x, y)) => {
+                        if let Err(e) = remote_cursor.moved(&mut win, &input, x, y) {
+                            throttled_log!(PEER_LOG_INTERVAL, warn, "ddpro: pro view cannot draw the remote cursor: {e}");
                         }
                     }
                     Ok(FromSession::Display {
@@ -1050,6 +1063,7 @@ fn read_session(
                 Some(c) => FromSession::Cursor(c.clone()),
                 None => continue,
             },
+            Some(message::Union::CursorPosition(p)) => FromSession::CursorPos(p.x, p.y),
             Some(message::Union::Misc(misc)) => match misc.union {
                 Some(misc::Union::SwitchDisplay(s)) => FromSession::Display {
                     rect: (s.x, s.y, s.width, s.height),
@@ -1074,6 +1088,92 @@ fn read_session(
         }
     }
     gone.store(true, Ordering::Release);
+}
+
+/// 画远程光标用的叠加图层（悬浮球、菜单、状态块占 0–2）
+const LAYER_REMOTE_CURSOR: usize = 3;
+
+/// 被控端的光标被别的东西挪动（USB 透传的数位板、别的连接、程序自己挪）时，在窗口里画出远程光标、藏起本机指针；
+/// 本机鼠标一动就换回本机指针。和 RustDesk Flutter 窗口的做法一致：被控端只报「不是本连接挪的」光标位置
+/// （`input_service` 排除了本连接自己注入的移动），所以收到位置就说明是别的东西在动。Wayland 下窗口挪不了系统指针，只能画
+#[derive(Default)]
+struct RemoteCursor {
+    image: Option<CursorImage>,
+    /// 正画着远程光标（本机指针藏着）
+    shown: bool,
+    pos: (f64, f64),
+}
+
+impl RemoteCursor {
+    /// 被控端换了光标形状
+    fn set_image(&mut self, win: &mut Window, c: CursorImage) -> ddpro::view::Result<()> {
+        self.image = Some(c.clone());
+        if self.shown {
+            self.draw(win)
+        } else {
+            win.set_cursor(Some(c))
+        }
+    }
+
+    /// 被控端报来光标位置（远程桌面坐标）
+    fn moved(&mut self, win: &mut Window, input: &Input, x: i32, y: i32) -> ddpro::view::Result<()> {
+        match input.window_pos(x, y) {
+            Some(p) => {
+                self.pos = p;
+                if !self.shown {
+                    self.shown = true;
+                    // 笔和本机鼠标同时动时会来回切，节流
+                    throttled_log!(
+                        PEER_LOG_INTERVAL,
+                        info,
+                        "ddpro: pro view: the remote cursor is moved by something else; drawing it at {x},{y}"
+                    );
+                    win.set_cursor(None)?;
+                }
+                self.draw(win)
+            }
+            // 挪到别的屏上了（那块屏的专业窗口去画）
+            None => self.local_moved(win),
+        }
+    }
+
+    /// 本机鼠标动了：换回本机指针
+    fn local_moved(&mut self, win: &mut Window) -> ddpro::view::Result<()> {
+        if !self.shown {
+            return Ok(());
+        }
+        self.shown = false;
+        throttled_log!(PEER_LOG_INTERVAL, info, "ddpro: pro view: back to the local pointer");
+        // 先把本机指针放出来：撤图层失败时指针也不至于一直藏着
+        let shown = win.set_cursor(self.image.clone());
+        win.set_layer(LAYER_REMOTE_CURSOR, None)?;
+        shown
+    }
+
+    fn draw(&self, win: &mut Window) -> ddpro::view::Result<()> {
+        let Some(c) = &self.image else {
+            return Ok(());
+        };
+        // wl_shm 的 ARGB8888 在内存里按 B G R A 排，且要求预乘透明度（和系统指针同一转换）
+        let bgra = c
+            .rgba
+            .chunks_exact(4)
+            .flat_map(|p| {
+                let a = p[3] as u32;
+                [(p[2] as u32 * a / 255) as u8, (p[1] as u32 * a / 255) as u8, (p[0] as u32 * a / 255) as u8, p[3]]
+            })
+            .collect();
+        win.set_layer(
+            LAYER_REMOTE_CURSOR,
+            Some(&LayerImage {
+                x: self.pos.0 as i32 - c.hotx as i32,
+                y: self.pos.1 as i32 - c.hoty as i32,
+                width: c.width,
+                height: c.height,
+                bgra,
+            }),
+        )
+    }
 }
 
 /// RustDesk 光标数据 → 图案：解压和校验用 RustDesk 自己的（和 Flutter 界面拿到的完全一样）。
@@ -1143,6 +1243,16 @@ impl Input {
         let (_, _, rw, rh) = self.remote;
         let (x, y, fw, fh) = fit_rect(rw as u32, rh as u32, self.window.0, self.window.1);
         self.fit = (x as f64, y as f64, fw.max(1) as f64, fh.max(1) as f64);
+    }
+
+    /// 远程桌面坐标 → 窗口坐标；不在这块屏上返回 None
+    fn window_pos(&self, x: i32, y: i32) -> Option<(f64, f64)> {
+        let (rx, ry, rw, rh) = self.remote;
+        if x < rx || y < ry || x >= rx + rw || y >= ry + rh {
+            return None;
+        }
+        let (fx, fy, fw, fh) = self.fit;
+        Some((fx + (x - rx) as f64 * fw / rw as f64, fy + (y - ry) as f64 * fh / rh as f64))
     }
 
     /// 窗口坐标 → 远程桌面坐标（去掉黑边、按缩放比例，夹在这块屏以内；多屏时指针出了窗口不夹）

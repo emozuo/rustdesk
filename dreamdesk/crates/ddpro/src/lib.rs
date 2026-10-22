@@ -11,6 +11,7 @@ pub use protos::ddpro::*;
 // RustDesk 只依赖门面这一个 crate，编码器和画面通道经这里拿
 pub use ddpro_enc as enc;
 pub use ddpro_media as media;
+pub use ddpro_usb as usb;
 // 主控端专业显示（硬解 + 窗口）目前只有 Linux 版
 #[cfg(target_os = "linux")]
 pub use ddpro_dec as dec;
@@ -24,7 +25,8 @@ use protobuf::Message as _;
 /// v7：主控端可以开 / 关抖动（2026-10-22 删，编号保留）。
 /// v8：画面通道加静止无损方块（「这一帧哪些方块变了」和方块数据）。
 /// v9：多屏——「同意」「拒绝」带屏号；被控端的专业会话因主控端关窗结束时发「放回」。
-pub const PROTOCOL_VERSION: u32 = 9;
+/// v10：USB 透传（设备全集、挂载状态、USB/IP 流的开 / 数据 / 关）。
+pub const PROTOCOL_VERSION: u32 = 10;
 
 /// 被控端名片在 RustDesk「平台附加信息」里的键，值是 [`PROTOCOL_VERSION`]。
 pub const NAME_CARD_KEY: &str = "ddpro";

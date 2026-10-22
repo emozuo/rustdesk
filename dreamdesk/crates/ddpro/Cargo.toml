@@ -10,6 +10,7 @@ ddpro-media = { path = "../ddpro-media" }
 ddpro-enc = { path = "../ddpro-enc" }
 ddpro-dec = { path = "../ddpro-dec" }
 ddpro-view = { path = "../ddpro-view" }
+ddpro-usb = { path = "../ddpro-usb" }
 
 [build-dependencies]
 protobuf-codegen = "3.7"
