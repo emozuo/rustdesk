@@ -13,7 +13,8 @@ use windows::{
             DISPLAYCONFIG_SDR_WHITE_LEVEL, DISPLAYCONFIG_SOURCE_DEVICE_NAME, QDC_ONLY_ACTIVE_PATHS,
         },
         Graphics::Dxgi::{
-            Common::DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020, CreateDXGIFactory1, IDXGIFactory1, IDXGIOutput6,
+            Common::{DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020, DXGI_MODE_ROTATION_IDENTITY, DXGI_MODE_ROTATION_UNSPECIFIED},
+            CreateDXGIFactory1, IDXGIFactory1, IDXGIOutput6,
         },
     },
 };
@@ -21,7 +22,8 @@ use windows::{
 /// 没读到「SDR 内容亮度」时按 Windows 的默认（80 尼特，scRGB 的 1.0）
 const DEFAULT_SDR_WHITE_NITS: u32 = 80;
 
-/// GDI 名为 `name`（如 `\\.\DISPLAY1`）的屏开着 HDR 时返回普通内容的白有多少尼特，没开（或查不到这块屏）返回 None
+/// GDI 名为 `name`（如 `\\.\DISPLAY1`）的屏开着 HDR 时返回普通内容的白有多少尼特，没开（或查不到这块屏）返回 None。
+/// 旋转了的屏也返回 None：RustDesk 的采集模块对它照旧压成普通 BGRA（旋转那一步只收 BGRA），只能按普通画面编
 pub fn hdr_sdr_white_nits(name: &str) -> Option<u32> {
     is_hdr(name).then(|| sdr_white_nits(name).unwrap_or(DEFAULT_SDR_WHITE_NITS))
 }
@@ -40,6 +42,9 @@ fn is_hdr(name: &str) -> bool {
                 let Ok(desc) = output.GetDesc() else { continue };
                 if !wide_eq(&desc.DeviceName, name) {
                     continue;
+                }
+                if desc.Rotation != DXGI_MODE_ROTATION_IDENTITY && desc.Rotation != DXGI_MODE_ROTATION_UNSPECIFIED {
+                    return false;
                 }
                 return output
                     .cast::<IDXGIOutput6>()

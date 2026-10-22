@@ -361,7 +361,6 @@ impl GlConverter {
         })
     }
 
-    /// 显卡名（日志用）
     /// HDR 画面（P1 第 4 项）：`Some(被控端普通内容的白，尼特)` 时按 BT.2020 + PQ 还原、高光截到白；`None` 是普通画面（默认）。
     /// 着色器参数是程序的状态，设一次一直有效
     pub fn set_hdr(&mut self, sdr_white_nits: Option<u32>) -> Result<()> {
@@ -379,6 +378,7 @@ impl GlConverter {
         Ok(())
     }
 
+    /// 显卡名（日志用）
     pub fn renderer(&self) -> &str {
         &self.renderer
     }

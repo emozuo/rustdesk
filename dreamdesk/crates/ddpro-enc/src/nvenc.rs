@@ -225,13 +225,14 @@ pub struct EncodedFrame {
 /// HEVC 4:4:4 8bit / 10bit 编码器。只能在创建它的线程上使用。
 pub struct Encoder {
     session: Session,
+    /// 10bit：颜色转换的输出每帧经它拷进 CUDA 缓冲区。字段按声明顺序释放，这个位置是两头夹出来的：
+    /// NVENC 会话要先于 CUDA 上下文关；它注销的输出纹理归 `conv` 所有，`conv` 要在它之后释放
+    cuda: Option<TextureCopy>,
     conv: Converter,
     registered: NV_ENC_REGISTERED_PTR,
     bitstream: NV_ENC_OUTPUT_PTR,
     cfg: Config,
     frame_idx: u64,
-    /// 10bit：颜色转换的输出每帧经它拷进 CUDA 缓冲区。放最后：字段按声明顺序释放，NVENC 会话要先于 CUDA 上下文关
-    cuda: Option<TextureCopy>,
 }
 
 impl Encoder {
