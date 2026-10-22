@@ -3,10 +3,12 @@
 //! 从标准输入收启动参数（画面通道）和远程光标；自己收专业画面、硬解、全屏显示；键鼠经标准输出交回会话进程，
 //! 由会话进程走 RustDesk 原有的输入入口发给被控端。会话进程退出时标准输入断开，本进程随之退出。
 //!
-//! 三个线程：
+//! 线程：
 //! - 收包：收画面、发心跳（兼授时、关键帧请求）。和解码显示分开——心跳停 3 秒被控端就退回通用画面，
 //!   解码或显示偶尔慢一下不能被当成通道断了（第 5a 步长时间运行得出的约束）；
 //! - 读标准输入：光标、远程这块屏的显示变化、会话进程退出；
+//! - 显示链路检查：隔一会儿读一次窗口所在屏的显示属性，结论变了写日志；
+//! - 无损方块解压（`view_lossless`）；
 //! - 主线程：窗口事件、解码、转 RGB、提交、键鼠。
 
 use crate::ddpro::{
@@ -144,7 +146,7 @@ struct Panel {
     last_bytes: u64,
     /// 实际解出的画面：色度是否 4:4:4、位深
     format: Option<(bool, u32)>,
-    /// 实际解出的画面尺寸
+    /// 实际解出的画面尺寸。也是查实际解码格式的时机：第一帧和尺寸变了之后（被控端重建编码器）查一次
     frame: Option<(u32, u32)>,
     /// 上次报的「是否缩放」（变了才写日志）
     scaled: Option<bool>,
@@ -459,8 +461,6 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
     let mut scanout = (0u64, 0u64);
     let mut panel = Panel::new();
     let mut ready = false;
-    // 查过实际解码格式的画面尺寸：第一帧和尺寸变了之后（被控端重建编码器）查一次
-    let mut format_checked: Option<(u32, u32)> = None;
     // 谈成的位深（老版本被控端的答复里可能没有，按 8bit），HDR 时被控端普通内容的白（P1 第 4 项）
     let want_bits = start.format.bit_depth.max(8);
     let hdr_white = start.format.hdr.then_some(start.format.sdr_white_nits);
@@ -525,7 +525,8 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
                         );
                         size = (width, height);
                         shown.clear();
-                        // 旧的转换器先放掉（窗口还登记着它们的画面，下面重新登记），再按新尺寸建
+                        // 着色器先放掉（窗口还登记着它的画面，下面重新登记），再按新尺寸建；视频处理单元的旧转换器
+                        // 等新的建好、赋值时才放，中间短暂多占一套输出画面
                         let on = shader.take().is_some();
                         (conv, shader) = attach(&mut win, &dev, on)?;
                         shader = hdr_shader(shader.take(), hdr_white);
@@ -669,14 +670,7 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
             // 不转换、不交给合成器（静止时专业窗口和合成器每秒白画 60 帧）。哪块一动，那一帧照常画
             let latest = match latest {
                 Some((frame, _)) if one_to_one && shader.is_some() && lossless.settled() => {
-                    if let Err(e) = dec.wait(&frame) {
-                        throttled_log!(
-                            PEER_LOG_INTERVAL,
-                            warn,
-                            "ddpro: pro view decode error while waiting for the GPU, asking for a keyframe: {e}"
-                        );
-                        resync.store(true, Ordering::Release);
-                    }
+                    wait_decoded(&dec, &frame, &resync);
                     idle_frames += 1;
                     None
                 }
@@ -686,7 +680,7 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
                 // 门槛按结果定（P0 设计决定 3）：实际解出来的不是谈好的 4:4:4、谈好的位深就大声失败，不静默降级
                 // 不叫 size：下面「1:1 才用着色器」要和外层的窗口尺寸比
                 let frame_size = (frame.width(), frame.height());
-                if format_checked != Some(frame_size) {
+                if panel.frame != Some(frame_size) {
                     let f = frame.format();
                     if !(f.chroma_444 && f.bit_depth == want_bits) {
                         bail!(
@@ -696,7 +690,6 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
                             f.chroma_444
                         );
                     }
-                    format_checked = Some(frame_size);
                     panel.format = Some((f.chroma_444, f.bit_depth));
                     panel.frame = Some(frame_size);
                     // 画面尺寸变了，解码器重建了画面池，编号会被新画面复用：着色器按编号缓存的导入作废
@@ -704,15 +697,7 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
                         s.forget_sources();
                     }
                 }
-                // 显卡驱动的单帧解码错误常常在这一步才报出来（iHD：等表面时报解码错误）：和上面一样丢这一帧、
-                // 要关键帧，不当成专业窗口的致命错误
-                if let Err(e) = dec.wait(&frame) {
-                    throttled_log!(
-                        PEER_LOG_INTERVAL,
-                        warn,
-                        "ddpro: pro view decode error while waiting for the GPU, asking for a keyframe: {e}"
-                    );
-                    resync.store(true, Ordering::Release);
+                if !wait_decoded(&dec, &frame, &resync) {
                     continue;
                 }
                 let decoded = now_ns();
@@ -874,13 +859,6 @@ fn screen_rank(start: &ViewStart, local_screens: usize) -> Option<usize> {
     order.iter().position(|&i| i == me)
 }
 
-/// 按窗口当前尺寸建输出画面和转换器，把输出画面登记给窗口（换掉原来登记的）。按顺序试（P1 第 7 项）：
-/// 1. 着色器用 GBM 按合成器能用的分块排布分配输出画面，视频处理单元导入同一组（要缩放时用它）——着色器画得快
-///    （1.75 对 4.1 毫秒），合成器能直接送显示（瘦客户机实测 Y 分块约 100%，视频处理单元自己建的线性画面 0%）；
-/// 2. 视频处理单元自己建输出画面（线性），着色器画在上面；
-/// 3. 只用视频处理单元。
-///
-/// `shader` 为假（之前着色器出过错）时直接走第 3 种。
 /// HDR 会话（P1 第 4 项）：着色器按 BT.2020 + PQ 还原（`hdr_white` 是被控端普通内容的白，尼特）。设不上就不用着色器——
 /// 视频处理单元那条路做不了 HDR，之后会大声失败而不是显示错的颜色
 fn hdr_shader(shader: Option<GlConverter>, hdr_white: Option<u32>) -> Option<GlConverter> {
@@ -897,6 +875,30 @@ fn hdr_shader(shader: Option<GlConverter>, hdr_white: Option<u32>) -> Option<GlC
     }
 }
 
+/// 显卡驱动的单帧解码错误常常在等解码完这一步才报出来（iHD：等表面时报解码错误）：丢这一帧、要关键帧，
+/// 不当成专业窗口的致命错误。返回这一帧是否解好了
+fn wait_decoded(dec: &Decoder, frame: &ddpro::dec::Frame, resync: &AtomicBool) -> bool {
+    match dec.wait(frame) {
+        Ok(()) => true,
+        Err(e) => {
+            throttled_log!(
+                PEER_LOG_INTERVAL,
+                warn,
+                "ddpro: pro view decode error while waiting for the GPU, asking for a keyframe: {e}"
+            );
+            resync.store(true, Ordering::Release);
+            false
+        }
+    }
+}
+
+/// 按窗口当前尺寸建输出画面和转换器，把输出画面登记给窗口（换掉原来登记的）。按顺序试（P1 第 7 项）：
+/// 1. 着色器用 GBM 按合成器能用的分块排布分配输出画面，视频处理单元导入同一组（要缩放时用它）——着色器画得快
+///    （1.75 对 4.1 毫秒），合成器能直接送显示（瘦客户机实测 Y 分块约 100%，视频处理单元自己建的线性画面 0%）；
+/// 2. 视频处理单元自己建输出画面（线性），着色器画在上面；
+/// 3. 只用视频处理单元。
+///
+/// `shader` 为假（之前着色器出过错）时直接走第 3 种。
 fn attach(win: &mut Window, dev: &Device, shader: bool) -> ResultType<(Converter, Option<GlConverter>)> {
     let (w, h) = win.size();
     if shader {
