@@ -270,7 +270,7 @@ fn run(ps: ProService) -> ResultType<()> {
         }
     };
     match result {
-        // 连接退订（关闭或切走）而结束，RustDesk 已经处理好订阅
+        // 连接关闭、退订了专业服务而结束（切屏时 RustDesk 只退它自己的视频服务），RustDesk 已经处理好订阅
         Ok((End::Unsubscribed, _)) | Ok((End::SourceChanged(_), _)) => {
             log::info!("ddpro: pro video on display {display} ended")
         }
@@ -387,7 +387,7 @@ fn back_to_general(display: usize, session: &Session) -> Back {
 
 /// 专业画面为什么结束本轮
 enum End {
-    /// 连接退订了专业服务（关闭或切走）
+    /// 连接退订了专业服务（连接关闭）
     Unsubscribed,
     /// 主控端关了专业窗口，要回通用画面
     ControllerClosed,
@@ -433,6 +433,7 @@ fn stream(ps: &ProService, channel: Channel, bit_depth: u32, hdr: bool) -> Resul
         },
     )
     .map_err(|e| anyhow!("{e}"))?;
+    let rebuilt = matches!(channel, Channel::Open(_));
     let mut sender = match channel {
         // 重建后接着等的只等剩下的时间：主控端过了截止时间就不再来了
         Channel::Waiting(listener, deadline) => listener
@@ -444,12 +445,18 @@ fn stream(ps: &ProService, channel: Channel, bit_depth: u32, hdr: bool) -> Resul
     if lossless.is_some() {
         sender.pace_tiles(LOSSLESS_KBPS, FPS);
     }
-    log::info!(
+    let line = format!(
         "ddpro: pro video on display {display} started: {w}x{h} 4:4:4 {bit_depth}bit{} {FPS} fps {BITRATE_KBPS} kbps, lossless {} -> {}",
         if hdr { " HDR" } else { "" },
         if lossless.is_some() { "on" } else { "off" },
         sender.peer()
     );
+    // 采集被反复收回时每轮重建都走到这里：重建的和「重新开始采集和编码」那行一样节流；新开通道的照常每块屏都写
+    if rebuilt {
+        throttled_log!(REBUILD_LOG_INTERVAL, info, "{line}");
+    } else {
+        log::info!("{line}");
+    }
 
     let interval = Duration::from_secs_f64(1.0 / FPS as f64);
     let first = Instant::now();
