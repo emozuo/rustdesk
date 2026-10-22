@@ -126,7 +126,7 @@ mod linux {
             if conv.is_none() {
                 let f = frame.format();
                 println!("first frame: {w}x{h}, surface format {} (4:4:4: {}, {} bit)", f.name, f.chroma_444, f.bit_depth);
-                // 着色器也认 10bit（Y410），专业协议目前只谈 8bit
+                // 着色器也认 10bit（Y410）：专业协议在 HDR 时谈 10bit（P1 第 4 项）
                 if !f.chroma_444 || !(f.bit_depth == 8 || (o.gl && f.bit_depth == 10)) {
                     return Err("the decoded surface is not 4:4:4 8bit".into());
                 }
