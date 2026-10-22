@@ -539,7 +539,14 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
                         ball.set_screen(size);
                     }
                     Event::Resized { .. } => {}
-                    Event::PointerLeave => ball.pointer_leave(),
+                    Event::PointerLeave => {
+                        ball.pointer_leave();
+                        for up_msg in input.handle(Event::PointerLeave) {
+                            if send_up(up, up_msg).is_err() {
+                                session_gone.store(true, Ordering::Release);
+                            }
+                        }
+                    }
                     // 只在用户允许 / 拒绝、窗口得失键盘焦点时来，不会刷屏
                     Event::ShortcutsInhibited(on) => log::info!(
                         "ddpro: pro view system shortcuts {}",
@@ -1245,6 +1252,9 @@ struct Input {
     locked: u32,
     /// 按着的键（evdev），焦点离开时替用户抬起
     held: HashSet<u32>,
+    /// 发给远程、还没抬起的鼠标键（RustDesk 的按键位）。按着键时 Wayland 不换指针焦点，按着键还收到「指针离开」
+    /// 说明抓取被打断了（弹出系统对话框、进概览），那次松开不会来：离开时替用户抬起，不然远程的键一直按着
+    buttons: HashSet<i32>,
     pos: (i32, i32),
     /// 多屏（P1 第 8 项）：指针出了窗口时坐标不夹在这块屏以内。按着键拖出窗口时合成器照旧把指针事件发给这个窗口
     /// （坐标超出窗口，2026-10-21 瘦客户机实测），照同样的比例延伸到远程相邻的屏，远程那边拖着的窗口才能跟到别的屏上
@@ -1261,6 +1271,7 @@ impl Input {
             depressed: 0,
             locked: 0,
             held: HashSet::new(),
+            buttons: HashSet::new(),
             pos: (start.remote_x, start.remote_y),
             spill,
         };
@@ -1381,8 +1392,18 @@ impl Input {
                     _ => return vec![],
                 };
                 self.pos = self.remote_pos(x, y);
-                let t = if down { MOUSE_TYPE_DOWN } else { MOUSE_TYPE_UP };
+                let t = if down {
+                    self.buttons.insert(b);
+                    MOUSE_TYPE_DOWN
+                } else {
+                    self.buttons.remove(&b);
+                    MOUSE_TYPE_UP
+                };
                 vec![self.mouse(t | (b << 3), self.pos)]
+            }
+            Event::PointerLeave => {
+                let buttons: Vec<i32> = self.buttons.drain().collect();
+                buttons.into_iter().map(|b| self.mouse(MOUSE_TYPE_UP | (b << 3), self.pos)).collect()
             }
             // Wayland 往下 / 往右为正，Flutter 窗口发的是反号（往下滚 -1）
             Event::Wheel { dx, dy } => vec![self.mouse(MOUSE_TYPE_WHEEL, (-dx, -dy))],
