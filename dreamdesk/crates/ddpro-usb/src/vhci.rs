@@ -77,11 +77,11 @@ fn bundled_installer(dir: &std::path::Path) -> Result<(PathBuf, String), String>
             Some((e.path(), ver))
         })
         .collect();
-    match found.as_slice() {
-        [one] => Ok(one.clone()),
-        [] => Err(format!("no USBip-<version>-x64.exe in {}", dir.display())),
-        _ => Err(format!("more than one USB/IP installer in {}", dir.display())),
-    }
+    // 程序内升级是合并复制、不删旧文件，目录里可能还留着上一版的安装程序：取版本最高的（只认这一个的话驱动永远升不上去）
+    found
+        .into_iter()
+        .max_by_key(|(_, ver)| ver.split('.').map(|p| p.parse::<u32>().unwrap_or(0)).collect::<Vec<_>>())
+        .ok_or_else(|| format!("no USBip-<version>-x64.exe in {}", dir.display()))
 }
 
 fn reg_value(key: &str, name: &str) -> Option<String> {
