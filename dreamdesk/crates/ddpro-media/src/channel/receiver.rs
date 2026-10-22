@@ -243,11 +243,22 @@ impl Receiver {
     /// 等下一个事件。通道断了（3 秒没画面）返回 [`Error::PeerGone`]。
     pub fn recv(&mut self) -> Result<Event, Error> {
         loop {
+            if let Some(e) = self.recv_timeout(Duration::from_secs(3600))? {
+                return Ok(e);
+            }
+        }
+    }
+
+    /// 同 [`Receiver::recv`]，但等了 `timeout`（按收包超时取整，空闲时约 100 毫秒一档）还没有事件就返回 `Ok(None)`：
+    /// 调用方借此定期看自己的退出标志——远程静止时每秒才来一帧保活，只靠事件醒来的话关窗要晚近 1 秒
+    pub fn recv_timeout(&mut self, timeout: Duration) -> Result<Option<Event>, Error> {
+        let deadline = Instant::now() + timeout;
+        loop {
             if let Some(e) = self.pending.pop_front() {
                 if let Event::Loss { .. } = e {
                     self.send_control(CTRL_KEYFRAME, &[])?;
                 }
-                return Ok(e);
+                return Ok(Some(e));
             }
             // 只按心跳自己计时：补发请求再密也不能顶掉心跳，心跳同时是授时探测
             if self.last_keepalive.elapsed() >= KEEPALIVE_INTERVAL {
@@ -257,6 +268,9 @@ impl Receiver {
             }
             if self.last_media.elapsed() >= PEER_TIMEOUT {
                 return Err(Error::PeerGone);
+            }
+            if Instant::now() >= deadline {
+                return Ok(None);
             }
             self.poll_once()?;
         }

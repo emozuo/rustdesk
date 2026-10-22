@@ -51,6 +51,8 @@ const XRGB8888: u32 = 0x3432_5258;
 const TILED: [u64; 2] = [0x0100_0000_0000_0002, 0x0100_0000_0000_0001];
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const REPORT: Duration = Duration::from_secs(5);
+/// 收包线程没有事件时多久回来看一次退出 / 重新同步标志：远程静止时每秒才来一帧，只靠事件醒来的话关窗、要关键帧都要晚近 1 秒
+const RECV_POLL: Duration = Duration::from_millis(100);
 /// 悬浮球网络状态块多久更新一次（和 RustDesk 通用画面那条链路推质量面板数据的间隔一样）
 const PANEL: Duration = Duration::from_secs(1);
 /// 显示链路多久查一次（用户开关夜灯、改分辨率后几秒内日志就跟上）
@@ -999,13 +1001,14 @@ fn receive(
             }
             break "closing".to_owned();
         }
-        match r.recv() {
-            Ok(MediaEvent::Frame {
+        match r.recv_timeout(RECV_POLL) {
+            Ok(None) => {}
+            Ok(Some(MediaEvent::Frame {
                 data,
                 timestamp,
                 times,
                 changed,
-            }) => {
+            })) => {
                 // 收包时刻在收包线程自己的时间轴上，换成本机单调时钟交给主线程
                 let shift = now_ns() - r.now_us() * 1000;
                 let times = times.and_then(|t| {
@@ -1029,12 +1032,12 @@ fn receive(
                 // 缓冲满（写不进）说明主线程已经有一个没读的叫醒，不用再写
                 (&wake).write(&[1]).ok();
             }
-            Ok(MediaEvent::Loss { packets }) => throttled_log!(
+            Ok(Some(MediaEvent::Loss { packets })) => throttled_log!(
                 PEER_LOG_INTERVAL,
                 info,
                 "ddpro: pro view lost {packets} packet(s), keyframe requested"
             ),
-            Ok(MediaEvent::Tile { timestamp, index, data }) => tiles.submit(timestamp, index, data),
+            Ok(Some(MediaEvent::Tile { timestamp, index, data })) => tiles.submit(timestamp, index, data),
             Err(e) => break e.to_string(),
         }
         counters.bytes.store(r.stats.bytes, Ordering::Relaxed);
