@@ -100,13 +100,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
             s.send_frame(au, ts, Some(stamp_now())).map_err(|e| e.to_string())?;
             // 帧之间按预算插发方块，发不下的留到下一帧
-            while tiles_kbps > 0 {
-                let tile = fake_tile(tiles_sent);
-                if s.tile_room() < tile.len() {
-                    break;
+            if tiles_kbps > 0 {
+                loop {
+                    let tile = fake_tile(tiles_sent);
+                    if s.tile_room() < tile.len() {
+                        break;
+                    }
+                    s.send_tile(ts, (tiles_sent % 240) as u16, &tile).map_err(|e| e.to_string())?;
+                    tiles_sent += 1;
                 }
-                s.send_tile(ts, (tiles_sent % 240) as u16, &tile).map_err(|e| e.to_string())?;
-                tiles_sent += 1;
             }
             if !s.peer_alive() {
                 return Err("controller keepalive lost".into());

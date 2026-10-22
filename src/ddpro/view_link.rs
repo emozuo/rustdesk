@@ -410,7 +410,7 @@ pub fn released<T: InvokeUiSession>(session: &Session<T>, display: i32) {
 /// 单窗口时不动，照旧由被控端订回。
 fn want_general<T: InvokeUiSession>(session: &Session<T>, display: i32) {
     let wanted = links().lock().unwrap().get(&key(session)).is_some_and(|l| {
-        l.multi() && l.shown(display) && l.views.get(&display).is_none_or(|v| v.down.is_none())
+        l.multi() && l.shown(display) && l.views.get(&display).map_or(true, |v| v.down.is_none())
     });
     if wanted {
         log::info!("ddpro: asking for the general video of remote display {display} again");
@@ -855,7 +855,7 @@ pub fn start<T: InvokeUiSession>(
             // 已经照常显示）就不管；等的时候连接断了，把通用窗口露出来
             if is_main && !window_has_view {
                 while !session_over.is_closed() {
-                    let settled = links().lock().unwrap().get(&k).is_none_or(|l| {
+                    let settled = links().lock().unwrap().get(&k).map_or(true, |l| {
                         l.views.get(&l.index).is_some_and(|v| v.down.is_some() || v.notice.is_some())
                     });
                     if settled {
@@ -925,7 +925,7 @@ pub fn on_rustdesk_message<T: InvokeUiSession>(msg: &Message, session: &Session<
     let downs: Vec<_> = link
         .views
         .iter()
-        .filter(|(d, _)| switch.is_none_or(|s| s.display == **d))
+        .filter(|(d, _)| switch.map_or(true, |s| s.display == **d))
         .filter_map(|(_, v)| v.down.as_ref().map(|(_, down)| down))
         .collect();
     if downs.is_empty() {

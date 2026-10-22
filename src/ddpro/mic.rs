@@ -152,7 +152,7 @@ fn take_turn(conn_id: i32) -> Option<MutexGuard<'static, Option<(i32, Instant)>>
     match *o {
         Some((id, last)) if id != conn_id && now.duration_since(last) < OWNER_IDLE => None,
         _ => {
-            if o.is_none_or(|(id, _)| id != conn_id) {
+            if o.map_or(true, |(id, _)| id != conn_id) {
                 log::info!("ddpro: mic: connection {conn_id} now feeds the virtual microphone");
             }
             *o = Some((conn_id, now));
