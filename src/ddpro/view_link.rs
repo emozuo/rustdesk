@@ -16,8 +16,8 @@ use base::message_proto::{
     message, misc, KeyboardMode, Message, Misc, PeerInfo, Resolution, SupportedResolutions, SwitchDisplay,
 };
 use ddpro::{
-    reject, stopped, view_action, view_down, view_ended::Kind, view_up, DisplayCaps, FormatCaps,
-    MediaChannel, Reject, Stopped, ViewDown, ViewEnded, ViewPoint, ViewStart, ViewStats, ViewUp,
+    reject, stopped, view_action, view_down, view_ended::Kind, view_up, Chroma, DisplayCaps, FormatCaps,
+    MediaChannel, Reject, Stopped, VideoFormat, ViewDown, ViewEnded, ViewPoint, ViewStart, ViewStats, ViewUp,
 };
 use hbb_common::{log, protobuf::Message as _, throttled_log, tokio::sync::mpsc::UnboundedSender};
 use std::{
@@ -537,7 +537,15 @@ pub fn decode_caps() -> FormatCaps {
         match probe {
             Ok(c) if c.hevc_444_8bit && c.video_proc => {
                 log::info!("ddpro: this machine can decode HEVC 4:4:4 8bit in hardware ({c:?})");
-                super::client::format_444_8bit()
+                FormatCaps {
+                    checked: true,
+                    formats: vec![VideoFormat {
+                        chroma: Chroma::CHROMA_444.into(),
+                        bit_depth: 8,
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }
             }
             Ok(c) => {
                 log::warn!("ddpro: no pro mode: the GPU lacks HEVC 4:4:4 decode or video processing ({c:?})");
