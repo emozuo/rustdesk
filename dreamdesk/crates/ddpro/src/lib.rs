@@ -220,14 +220,22 @@ pub fn answer_hello(hello: &Hello, encode: impl FnOnce() -> FormatCaps) -> Answe
 /// 被控端此刻能编的格式。`probe` 是用要编的那块屏的采集器所在显卡探测的结果（每次请求时现查：
 /// 编码会话占用是实时状态）。探测不成功也算「已探测、能编的为空」，不当作「未探测」；
 /// 第二个值是做不到的原因，给日志用。
-pub fn encoder_caps(probe: Result<enc::Caps, enc::Error>) -> (FormatCaps, Option<String>) {
+/// `hdr`：那块屏此刻开着 HDR。10bit 只在这时报（P0 设计决定 5：普通桌面用 8bit），格式偏好里 10bit 在前，
+/// 主控端也能解 10bit 时就选它
+pub fn encoder_caps(probe: Result<enc::Caps, enc::Error>, hdr: bool) -> (FormatCaps, Option<String>) {
     let mut caps = FormatCaps {
         checked: true,
         ..Default::default()
     };
     match probe {
-        // 编码器目前只实现了 8bit；10bit 等 P1 做 HDR 时再报
         Ok(c) if c.yuv444_8bit => {
+            if hdr && c.yuv444_10bit {
+                caps.formats.push(VideoFormat {
+                    chroma: Chroma::CHROMA_444.into(),
+                    bit_depth: 10,
+                    ..Default::default()
+                });
+            }
             caps.formats.push(VideoFormat {
                 chroma: Chroma::CHROMA_444.into(),
                 bit_depth: 8,
@@ -246,7 +254,11 @@ pub fn describe_format(f: &VideoFormat) -> String {
         Ok(Chroma::CHROMA_420) => "4:2:0",
         _ => "unknown chroma",
     };
-    format!("{chroma} {}bit", f.bit_depth)
+    if f.hdr {
+        format!("{chroma} {}bit HDR (SDR white {} nits)", f.bit_depth, f.sdr_white_nits)
+    } else {
+        format!("{chroma} {}bit", f.bit_depth)
+    }
 }
 
 pub fn describe_caps(caps: &FormatCaps) -> String {

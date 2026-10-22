@@ -69,6 +69,8 @@ pub struct Capturer {
     rotate: Rotate,
     frame_state: FrameState,
     hdr: Option<hdr::HdrToSdr>,
+    // DreamDesk pro HDR sessions: texture frames in scRGB are handed over untouched.
+    hdr_passthrough: bool,
 }
 
 impl Capturer {
@@ -188,6 +190,7 @@ impl Capturer {
             rotate,
             frame_state: FrameState::Idle,
             hdr: None,
+            hdr_passthrough: false,
         })
     }
 
@@ -437,6 +440,13 @@ impl Capturer {
         self.output_texture = texture;
     }
 
+    /// DreamDesk pro HDR sessions encode the scRGB (R16G16B16A16_FLOAT) desktop themselves, so texture
+    /// frames skip the HDR -> SDR pass. Rotated outputs keep it: the rotation blit expects BGRA.
+    #[cfg(feature = "vram")]
+    pub fn set_hdr_passthrough(&mut self, on: bool) {
+        self.hdr_passthrough = on;
+    }
+
     unsafe fn load_frame(&mut self, timeout: UINT) -> io::Result<(*const u8, i32)> {
         if self.duplication.0.is_null() {
             return Err(io::ErrorKind::AddrNotAvailable.into());
@@ -615,7 +625,12 @@ impl Capturer {
 
             let mut frame_desc: D3D11_TEXTURE2D_DESC = mem::zeroed();
             (*self.texture.0).GetDesc(&mut frame_desc);
-            if frame_desc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT {
+            let passthrough = self.hdr_passthrough
+                && matches!(
+                    self.display.rotation(),
+                    DXGI_MODE_ROTATION_IDENTITY | DXGI_MODE_ROTATION_UNSPECIFIED
+                );
+            if frame_desc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT && !passthrough {
                 let converted = self.tonemap(self.texture.0, &frame_desc)?;
                 (*converted).AddRef();
                 self.texture = ComPtr(converted);

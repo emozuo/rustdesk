@@ -129,7 +129,7 @@ pub fn on_message<T: InvokeUiSession>(data: &[u8], _sender: &UnboundedSender<Dat
                 ddpro::describe_format(&accept.format)
             );
             #[cfg(all(feature = "flutter", target_os = "linux"))]
-            super::view_link::start(&accept.media, _sender.clone(), _session, accept.display_index as i32);
+            super::view_link::start(&accept.media, &accept.format, _sender.clone(), _session, accept.display_index as i32);
             #[cfg(not(all(feature = "flutter", target_os = "linux")))]
             log::error!("ddpro: this build has no pro view; the peer should not have accepted");
         }

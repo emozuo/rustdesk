@@ -5,6 +5,8 @@
 //!
 //! `--gl`：用着色器转 RGB（专业窗口 1:1 时走的路径），参考帧上再用视频处理单元转一遍逐像素比，读回的着色器结果存
 //! DIR/shader<帧号>.rgb（可拿去和软件解码按公式算的结果逐像素核对）。
+//! `--hdr N`（和 `--gl` 一起）：HDR 码流，着色器按 BT.2020 + PQ 还原、普通内容的白是 N 尼特（P1 第 4 项；被控端验证工具
+//! `capture_encode hdr` 出的码流，读回的结果用 `capture_encode hdrrgb` 核对）。
 //!
 //! - 开显卡，报驱动和 HEVC 4:4:4 / 视频处理能力；
 //! - 逐帧硬解（等显卡解完）→ 转 RGB（等显卡转完），记两段耗时；
@@ -44,6 +46,8 @@ mod linux {
         gl: bool,
         /// 输出画面用 Intel 的 Y / X 分块排布（专业窗口在合成器能用时就这样建）
         tiled: bool,
+        /// HDR 码流（P1 第 4 项）：着色器按 BT.2020 + PQ 还原，值是被控端普通内容的白（尼特）；要和 `--gl` 一起用
+        hdr: Option<u32>,
     }
 
     fn opts() -> Result<Opts, Box<dyn std::error::Error>> {
@@ -59,6 +63,7 @@ mod linux {
             out: None,
             gl: false,
             tiled: false,
+            hdr: None,
         };
         let mut it = args[1..].iter();
         while let Some(k) = it.next() {
@@ -78,6 +83,7 @@ mod linux {
                 "--ref" => o.reference = Some(v.clone()),
                 "--ref-frame" => o.ref_frame = v.parse()?,
                 "--out" => o.out = Some(PathBuf::from(v)),
+                "--hdr" => o.hdr = Some(v.parse()?),
                 _ => return Err(format!("unknown option {k}").into()),
             }
         }
@@ -136,6 +142,11 @@ mod linux {
                 };
                 if let Some(g) = &g {
                     println!("shader conversion on {}", g.renderer());
+                }
+                let mut g = g;
+                if let (Some(g), Some(white)) = (g.as_mut(), o.hdr) {
+                    g.set_hdr(Some(white))?;
+                    println!("shader conversion: HDR (BT.2020 + PQ), SDR white {white} nits");
                 }
                 // 只给了 --tiled 没给 --gl：输出画面照样是 GBM 分块的，但只用视频处理单元转
                 gl = if o.gl { g } else { None };

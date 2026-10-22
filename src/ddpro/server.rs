@@ -215,7 +215,15 @@ fn answer(hello: &Hello, ctx: &ConnCtx) -> dd_pro::Union {
     let mut reply = answer.reply;
     if let dd_pro::Union::Accept(accept) = &mut reply {
         if accept.format.is_some() {
-            match open_channel(display, ctx) {
+            // 谈成 10bit（只在屏开着 HDR 时谈得到）：现查 HDR，告诉主控端普通内容的白多亮。这期间 HDR 刚好被关了，
+            // 就是 10bit 普通画面（两头都按 BT.709 处理）
+            if accept.format.bit_depth == 10 {
+                if let Some(white) = hdr_white(display) {
+                    accept.format.mut_or_insert_default().hdr = true;
+                    accept.format.mut_or_insert_default().sdr_white_nits = white;
+                }
+            }
+            match open_channel(display, ctx, accept.format.bit_depth, accept.format.hdr) {
                 Ok(media) => {
                     accept.media = Some(media).into();
                     #[cfg(windows)]
@@ -284,19 +292,30 @@ fn encode_caps(display: usize) -> FormatCaps {
             "pro video needs Windows and a build with the vram feature".to_owned(),
         ))
     };
-    let (caps, why) = ddpro::encoder_caps(probe);
+    let (caps, why) = ddpro::encoder_caps(probe, hdr_white(display).is_some());
     if let Some(why) = why {
         throttled_log!(PEER_LOG_INTERVAL, warn, "ddpro: pro encoding unavailable here: {why}");
     }
     caps
 }
 
+/// 这块屏开着 HDR 时普通内容的白有多少尼特（P1 第 4 项）
+fn hdr_white(display: usize) -> Option<u32> {
+    #[cfg(all(windows, feature = "vram"))]
+    return super::video::hdr_white(display);
+    #[cfg(not(all(windows, feature = "vram")))]
+    {
+        let _ = display;
+        None
+    }
+}
+
 #[cfg(all(windows, feature = "vram"))]
-fn open_channel(display: usize, ctx: &ConnCtx) -> hbb_common::ResultType<ddpro::MediaChannel> {
-    super::video::start(display, ctx.conn.id(), ctx.conn.clone(), ctx.server.clone(), ctx.local_ip)
+fn open_channel(display: usize, ctx: &ConnCtx, bit_depth: u32, hdr: bool) -> hbb_common::ResultType<ddpro::MediaChannel> {
+    super::video::start(display, ctx.conn.id(), ctx.conn.clone(), ctx.server.clone(), ctx.local_ip, bit_depth, hdr)
 }
 
 #[cfg(not(all(windows, feature = "vram")))]
-fn open_channel(_display: usize, _ctx: &ConnCtx) -> hbb_common::ResultType<ddpro::MediaChannel> {
+fn open_channel(_display: usize, _ctx: &ConnCtx, _bit_depth: u32, _hdr: bool) -> hbb_common::ResultType<ddpro::MediaChannel> {
     hbb_common::bail!("pro video needs Windows and a build with the vram feature")
 }

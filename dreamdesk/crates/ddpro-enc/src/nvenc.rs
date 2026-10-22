@@ -210,6 +210,8 @@ pub struct Config {
     pub tile: u32,
     /// 编 4:4:4 10bit（Main 4:4:4 10）。D3D11 下 NVENC 不收这种输入，要经 CUDA（第 4 项）
     pub ten_bit: bool,
+    /// 源画面是 HDR 桌面的 scRGB（FP16），按 BT.2020 + PQ 编（要 `ten_bit`）；码流里的颜色说明随之写 BT.2020 / PQ
+    pub hdr: bool,
 }
 
 /// 编出的一帧。
@@ -256,7 +258,7 @@ impl Encoder {
                 cfg.width, cfg.height, caps.max_width, caps.max_height
             )));
         }
-        let conv = Converter::new(&d3d, cfg.width, cfg.height, cfg.dither, cfg.tile, cfg.ten_bit)?;
+        let conv = Converter::new(&d3d, cfg.width, cfg.height, cfg.dither, cfg.tile, cfg.ten_bit, cfg.hdr)?;
         let (session, cuda) = if cfg.ten_bit {
             let cuda = TextureCopy::new(&d3d, conv.output(), cfg.width as usize * 2, cfg.height as usize * 3)?;
             drop(dx);
@@ -333,15 +335,21 @@ impl Encoder {
         hevc.set_pixelBitDepthMinus8(if cfg.ten_bit { 2 } else { 0 });
         hevc.set_repeatSPSPPS(1);
         hevc.idrPeriod = INFINITE_GOP;
-        // 码流里写明颜色规则：BT.709、全范围，和颜色转换着色器一致
+        // 码流里写明颜色规则，和颜色转换着色器一致：普通桌面 BT.709，HDR 桌面 BT.2020 + PQ；都是全范围
         let vui = &mut hevc.hevcVUIParameters;
         vui.videoSignalTypePresentFlag = 1;
         vui.videoFormat = _NV_ENC_VUI_VIDEO_FORMAT::NV_ENC_VUI_VIDEO_FORMAT_UNSPECIFIED;
         vui.videoFullRangeFlag = 1;
         vui.colourDescriptionPresentFlag = 1;
-        vui.colourPrimaries = _NV_ENC_VUI_COLOR_PRIMARIES::NV_ENC_VUI_COLOR_PRIMARIES_BT709;
-        vui.transferCharacteristics = _NV_ENC_VUI_TRANSFER_CHARACTERISTIC::NV_ENC_VUI_TRANSFER_CHARACTERISTIC_BT709;
-        vui.colourMatrix = _NV_ENC_VUI_MATRIX_COEFFS::NV_ENC_VUI_MATRIX_COEFFS_BT709;
+        if cfg.hdr {
+            vui.colourPrimaries = _NV_ENC_VUI_COLOR_PRIMARIES::NV_ENC_VUI_COLOR_PRIMARIES_BT2020;
+            vui.transferCharacteristics = _NV_ENC_VUI_TRANSFER_CHARACTERISTIC::NV_ENC_VUI_TRANSFER_CHARACTERISTIC_SMPTE2084;
+            vui.colourMatrix = _NV_ENC_VUI_MATRIX_COEFFS::NV_ENC_VUI_MATRIX_COEFFS_BT2020_NCL;
+        } else {
+            vui.colourPrimaries = _NV_ENC_VUI_COLOR_PRIMARIES::NV_ENC_VUI_COLOR_PRIMARIES_BT709;
+            vui.transferCharacteristics = _NV_ENC_VUI_TRANSFER_CHARACTERISTIC::NV_ENC_VUI_TRANSFER_CHARACTERISTIC_BT709;
+            vui.colourMatrix = _NV_ENC_VUI_MATRIX_COEFFS::NV_ENC_VUI_MATRIX_COEFFS_BT709;
+        }
 
         let mut ip: NV_ENC_INITIALIZE_PARAMS = mem::zeroed();
         ip.version = INIT_PARAMS_VER;

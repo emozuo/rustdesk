@@ -116,6 +116,11 @@ enum Chroma {
 message VideoFormat {
   Chroma chroma = 1;
   uint32 bit_depth = 2;
+  // 被控端答复里（Accept）：画面是 HDR（BT.2020 + PQ，只有 10bit 会是），以及那块屏上普通内容的白有多少尼特——
+  // 主控端把它还原成白、只压比它亮的高光。能力表里不用这两项：被控端只在屏开着 HDR 时报 10bit，
+  // 主控端报 10bit 就表示能显示 HDR 画面（老版本两头都不报 10bit，新旧混搭照旧 8bit）
+  bool hdr = 3;
+  uint32 sdr_white_nits = 4;
 }
 
 // 还没有探测的能力报 checked = false，而不是猜一个值，免得「没查」被当成「支持」。
@@ -221,6 +226,8 @@ message ViewStart {
   bool all_displays = 11;
   // 悬浮球菜单的麦克风开着（本会话里用户打开了语音通话，换屏开新的专业窗口时照旧）
   bool mic = 12;
+  // 谈成的画面格式（被控端答复里的）：位深、是不是 HDR、普通内容的白多亮（P1 第 4 项）
+  VideoFormat format = 13;
 }
 
 message ViewPoint {

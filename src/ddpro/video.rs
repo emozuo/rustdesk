@@ -77,6 +77,10 @@ struct Session {
     server: ServerPtrWeak,
     /// 谈成时开好的专业画面通道，服务线程开始时取走
     channel: Mutex<Option<Channel>>,
+    /// 谈成的位深：8，或 10（P1 第 4 项，只在屏开着 HDR 时谈得到）
+    bit_depth: u32,
+    /// HDR 会话：采集器交出 scRGB 原样、按 BT.2020 + PQ 编（谈成后桌面关了 HDR 就按 10bit 普通画面编）
+    hdr: bool,
 }
 
 enum Channel {
@@ -110,6 +114,12 @@ lazy_static::lazy_static! {
 
 fn general_name(display: usize) -> String {
     video_service::get_service_name(VideoSource::Monitor, display)
+}
+
+/// 这块屏此刻开着 HDR 时，普通内容的白有多少尼特（P1 第 4 项）；没开（或没这块屏）返回 None
+pub fn hdr_white(display: usize) -> Option<u32> {
+    let d = Display::all().ok()?.into_iter().nth(display)?;
+    ddpro::enc::hdr_sdr_white_nits(&d.name())
 }
 
 /// 用这块屏的采集器所在的显卡探测编码能力：编码器之后就建在同一个设备上。
@@ -157,12 +167,15 @@ impl std::error::Error for Busy {}
 /// 谈成后开通道、切订阅，返回给主控端的通道信息。
 /// 「这块屏有没有被别的连接占着」的检查和登记、切订阅在同一段服务器锁里做，两台主控端并发请求时只有一个成；
 /// 锁的先后固定为服务器锁在外、[`SESSIONS`] 在内。
+/// `bit_depth` / `hdr` 是谈成的格式。
 pub fn start(
     display: usize,
     conn_id: i32,
     conn: ConnInner,
     server: ServerPtrWeak,
     local_ip: IpAddr,
+    bit_depth: u32,
+    hdr: bool,
 ) -> ResultType<MediaChannel> {
     // 直连端口监听的是 IPv6 双栈，IPv4 主控端连进来时这一侧的地址是 ::ffff:a.b.c.d；
     // 拿它开 UDP 端口 Windows 报 10049（地址无效），还原成 IPv4（2026-10-13 在 209.32 上实撞）
@@ -174,6 +187,8 @@ pub fn start(
         conn: conn.clone(),
         server: server.clone(),
         channel: Mutex::new(Some(Channel::Waiting(listener, Instant::now() + CHANNEL_TIMEOUT))),
+        bit_depth,
+        hdr,
     });
 
     let server = server.upgrade().ok_or_else(|| anyhow!("server is gone"))?;
@@ -234,7 +249,7 @@ fn run(ps: ProService) -> ResultType<()> {
     let mut backoff = REBUILD_BACKOFF_MIN;
     let result = loop {
         let round = Instant::now();
-        match stream(&ps, channel) {
+        match stream(&ps, channel, session.bit_depth, session.hdr) {
             Ok((End::SourceChanged(why), ch)) if ps.ok() => {
                 throttled_log!(
                     REBUILD_LOG_INTERVAL,
@@ -380,14 +395,14 @@ enum End {
     SourceChanged(String),
 }
 
-fn stream(ps: &ProService, channel: Channel) -> ResultType<(End, Channel)> {
+fn stream(ps: &ProService, channel: Channel, bit_depth: u32, hdr: bool) -> ResultType<(End, Channel)> {
     let display = ps.display;
     // 服务线程不在当前桌面（比如被控端停在锁屏界面时开始专业会话）时采集器建不起来：
     // 和画面传输中途一样，切到当前桌面后重建。主控端已经不等了的就不再重建，按故障退回通用画面
     if desktop_changed() && channel.usable() {
         return Ok((End::SourceChanged("desktop changed".into()), channel));
     }
-    let (mut cap, geometry, first_frame) = match start_capture(display) {
+    let (mut cap, geometry, first_frame) = match start_capture(display, hdr) {
         Ok(v) => v,
         Err(e) if desktop_changed() && channel.usable() => {
             return Ok((End::SourceChanged(format!("desktop changed ({e})")), channel))
@@ -397,9 +412,10 @@ fn stream(ps: &ProService, channel: Channel) -> ResultType<(End, Channel)> {
     let dev = cap.device();
     let (w, h) = ddpro::enc::texture_size(first_frame).map_err(|e| anyhow!("{e}"))?;
     let mut src = Some(first_frame);
+    // 静止无损补发的是源画面的 8bit 原始像素：HDR 的源是 scRGB，不补
     let mut lossless = match std::env::var_os(DIAG_NO_LOSSLESS) {
-        None => Some(Lossless::new(w, h, LOSSLESS_KBPS, FPS)?),
-        Some(_) => None,
+        None if !hdr => Some(Lossless::new(w, h, LOSSLESS_KBPS, FPS)?),
+        _ => None,
     };
     let mut enc = Encoder::new(
         dev.device,
@@ -412,7 +428,8 @@ fn stream(ps: &ProService, channel: Channel) -> ResultType<(End, Channel)> {
             // 8bit 桌面转 8bit YUV 只需四舍五入（Sunshine 同样不抖动），实测抖动反而误差更大、码流更大
             dither: false,
             tile: if lossless.is_some() { TILE } else { 0 },
-            ten_bit: false,
+            ten_bit: bit_depth == 10,
+            hdr,
         },
     )
     .map_err(|e| anyhow!("{e}"))?;
@@ -428,7 +445,8 @@ fn stream(ps: &ProService, channel: Channel) -> ResultType<(End, Channel)> {
         sender.pace_tiles(LOSSLESS_KBPS, FPS);
     }
     log::info!(
-        "ddpro: pro video on display {display} started: {w}x{h} 4:4:4 8bit {FPS} fps {BITRATE_KBPS} kbps, lossless {} -> {}",
+        "ddpro: pro video on display {display} started: {w}x{h} 4:4:4 {bit_depth}bit{} {FPS} fps {BITRATE_KBPS} kbps, lossless {} -> {}",
+        if hdr { " HDR" } else { "" },
         if lossless.is_some() { "on" } else { "off" },
         sender.peer()
     );
@@ -610,10 +628,12 @@ fn display_changed(ps: &ProService, g: &Geometry) -> bool {
 /// 循环才放开这块屏，这期间新建的采集器取不到画面（scrap 报 AddrNotAvailable，2026-10-13 在 209.32 上
 /// 实撞）。所以「建采集器 + 取第一帧」整体重试：取不到就丢掉采集器重建，和 RustDesk 通用画面服务遇到
 /// 采集错误时重建采集器的做法一致。
-fn start_capture(display: usize) -> ResultType<(Capturer, Geometry, *mut std::ffi::c_void)> {
+/// `hdr`：HDR 会话，采集器把 scRGB 画面原样交出（不压成 8bit）
+fn start_capture(display: usize, hdr: bool) -> ResultType<(Capturer, Geometry, *mut std::ffi::c_void)> {
     let deadline = Instant::now() + STARTUP_TIMEOUT;
     loop {
         let attempt = capturer(display).and_then(|(mut c, g)| {
+            c.set_hdr_passthrough(hdr);
             let t0 = Instant::now();
             loop {
                 if let Some(t) = next_texture(&mut c, Duration::from_millis(100))

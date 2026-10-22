@@ -18,7 +18,20 @@
 //!       最终画质、有没有回退（闪）、静止段最大单帧。解码：
 //!       ffmpeg -i DIR\out.h265 -vf "scale=in_range=pc:in_color_matrix=bt709:out_range=pc:flags=accurate_rnd+full_chroma_int+bitexact,format=rgb24" -f rawvideo - | capture_encode curve DIR
 //!
-//! probe / run / synth 必须在有人登录的桌面会话里跑：远程管理通道那种后台会话采集不到屏幕（synth 只借采集器拿 N 卡的设备）。
+//!   capture_encode hdr --out DIR [--seconds 2] [--sdr-white 240] [--bitrate 30000] [--preset 4]
+//!       P1 第 4 项 HDR：工具自己生成一张 HDR 桌面那样的 scRGB（FP16）测试图——上半部分是 CG 测试图按「SDR 白 = N 尼特」放进去
+//!       （普通内容在 HDR 桌面上的样子），下半部分是 0–1000 尼特的灰阶和高光色块（含 BT.709 装不下的颜色、超过 10000 尼特的白）——
+//!       静止编 N 秒（BT.2020 + PQ、4:4:4 10bit）。出 DIR\out.h265、DIR\expected.yuv（CPU 按着色器公式算的期望值，
+//!       yuv444p10le 一帧）、DIR\hdr.txt（宽 高）
+//!   capture_encode hdrcheck DIR < 解码出的 yuv444p10le 帧流
+//!       第一帧和最后一帧逐像素和期望值比（10 位级差），分区汇总。解码：
+//!       ffmpeg -i DIR\out.h265 -f rawvideo -pix_fmt yuv444p10le - | capture_encode hdrcheck DIR
+//!   capture_encode hdrrgb DIR SHADER.rgb
+//!       主控端着色器（瘦客户机 `vaapi_check out.h265 --gl --hdr N`）读回的 RGB 和期望值比：期望值是 DIR\expected.yuv 按主控端
+//!       着色器的公式（ddpro-dec gl.rs，PQ 还原、除以普通内容的白、BT.2020→BT.709、高光保色相截到白、sRGB）算的；
+//!       另外上半部分（普通内容）直接和原来的 8bit CG 测试图比——HDR 桌面上的普通内容应当显示得和普通桌面一样
+//!
+//! probe / run / synth / hdr 必须在有人登录的桌面会话里跑：远程管理通道那种后台会话采集不到屏幕（synth 只借采集器拿 N 卡的设备）。
 //! compare / curve 不碰显卡，哪里都能跑。
 
 #[cfg(not(windows))]
@@ -36,7 +49,10 @@ fn main() {
         Some("compare") => win::compare(&args[1..]),
         Some("synth") => win::synth(&args[1..]),
         Some("curve") => win::curve(&args[1..]),
-        _ => Err("usage: capture_encode probe | run --out DIR [...] | compare REF.bgra DEC.rgb W H | synth --out DIR [...] | curve DIR".into()),
+        Some("hdr") => win::hdr(&args[1..]),
+        Some("hdrcheck") => win::hdr_check(&args[1..]),
+        Some("hdrrgb") => win::hdr_rgb(&args[1..]),
+        _ => Err("usage: capture_encode probe | run --out DIR [...] | compare REF.bgra DEC.rgb W H | synth --out DIR [...] | curve DIR | hdr --out DIR [...] | hdrcheck DIR".into()),
     };
     if let Err(e) = result {
         eprintln!("error: {e}");
@@ -151,6 +167,7 @@ mod win {
             dither: o.dither,
             tile: 0,
             ten_bit: false,
+            hdr: false,
         };
         println!("{cfg:?}");
         let mut enc = Encoder::new(cap.device().device, cfg)?;
@@ -459,7 +476,7 @@ mod win {
             dev.CreateTexture2D(&desc, None, Some(&mut tex))?;
             (tex.ok_or("CreateTexture2D returned nothing")?, dev.GetImmediateContext()?)
         };
-        let cfg = Config { width: w, height: h, fps, bitrate_kbps: bitrate, preset, dither, tile: 0, ten_bit };
+        let cfg = Config { width: w, height: h, fps, bitrate_kbps: bitrate, preset, dither, tile: 0, ten_bit, hdr: false };
         println!("{cfg:?}; move {} frames at {speed} px/frame, then still {} frames", s.move_frames, s.still_frames);
         let mut enc = Encoder::new(device, cfg)?;
         let mut stream = fs::File::create(out.join("out.h265"))?;
@@ -630,6 +647,315 @@ mod win {
         });
         print!("{report}");
         fs::write(dir.join("summary.txt"), report)?;
+        Ok(())
+    }
+
+    /// HDR 测试图（scRGB，每像素 RGBA 四个 f32，已经过 FP16 往返，和显卡拿到的一样）：上半是 CG 测试图（sRGB → 线性 × SDR 白），
+    /// 下半前一段是 0–1000 尼特的灰阶，后一段是一排高光色块。
+    fn hdr_pattern(w: usize, h: usize, sdr_white_nits: f32) -> Vec<[f32; 4]> {
+        let base = test_pattern(w, h);
+        let srgb = |c: u8| {
+            let c = c as f32 / 255.0;
+            if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+        };
+        // scRGB 1.0 = 80 尼特
+        let patches: [[f32; 3]; 8] = [
+            [400.0, 0.0, 0.0],
+            [0.0, 400.0, 0.0],
+            [0.0, 0.0, 400.0],
+            [600.0, 600.0, 600.0],
+            [1000.0, 1000.0, 1000.0],
+            // BT.709 装不下、BT.2020 装得下的绿（scRGB 用负的红表示）
+            [-40.0, 300.0, 0.0],
+            // 超过 PQ 上限（10000 尼特），截成满
+            [12000.0, 12000.0, 12000.0],
+            [0.0, 0.0, 0.0],
+        ];
+        let mut out = vec![[0f32; 4]; w * h];
+        for y in 0..h {
+            for x in 0..w {
+                let rgb = if y < h / 2 {
+                    let p = (y * w + x) * 4;
+                    let k = sdr_white_nits / 80.0;
+                    [srgb(base[p + 2]) * k, srgb(base[p + 1]) * k, srgb(base[p]) * k]
+                } else if y < h * 3 / 4 {
+                    let v = 1000.0 * x as f32 / (w - 1) as f32 / 80.0;
+                    [v, v, v]
+                } else {
+                    let c = patches[x * patches.len() / w];
+                    [c[0] / 80.0, c[1] / 80.0, c[2] / 80.0]
+                };
+                out[y * w + x] = [f16_round(rgb[0]), f16_round(rgb[1]), f16_round(rgb[2]), 1.0];
+            }
+        }
+        out
+    }
+
+    /// 按 shaders/scrgb_to_pq444_10.hlsl 的公式算一个像素的 10 位 Y / U / V
+    fn pq_yuv(px: [f32; 4]) -> [u16; 3] {
+        const M: [[f32; 3]; 3] = [[0.6274040, 0.3292820, 0.0433136], [0.0690970, 0.9195400, 0.0113612], [0.0163916, 0.0880132, 0.8955950]];
+        let lin = [px[0] * 80.0, px[1] * 80.0, px[2] * 80.0];
+        let pq = |n: f32| {
+            let y = (n.max(0.0) / 10000.0).clamp(0.0, 1.0).powf(0.1593017578125);
+            ((0.8359375 + 18.8515625 * y) / (1.0 + 18.6875 * y)).powf(78.84375)
+        };
+        let rgb: Vec<f32> = M.iter().map(|r| pq(r[0] * lin[0] + r[1] * lin[1] + r[2] * lin[2])).collect();
+        let y = 0.2627 * rgb[0] + 0.6780 * rgb[1] + 0.0593 * rgb[2];
+        let cb = (rgb[2] - y) / 1.8814;
+        let cr = (rgb[0] - y) / 1.4746;
+        let q = |v: f32| (v + 0.5).floor().clamp(0.0, 1023.0) as u16;
+        [q(y * 1023.0), q(cb * 1023.0 + 512.0), q(cr * 1023.0 + 512.0)]
+    }
+
+    /// f32 → 半精度的位（就近舍入）；只覆盖测试图用到的范围（正常数、零、负数）
+    fn f16_bits(v: f32) -> u16 {
+        let x = v.to_bits();
+        let sign = ((x >> 16) & 0x8000) as u16;
+        let exp = ((x >> 23) & 0xff) as i32 - 127 + 15;
+        let mant = x & 0x7f_ffff;
+        if exp <= 0 {
+            if exp < -10 {
+                return sign;
+            }
+            let m = (mant | 0x80_0000) >> (14 - exp);
+            return sign | ((m + 1) >> 1) as u16;
+        }
+        if exp >= 31 {
+            return sign | 0x7c00;
+        }
+        let h = ((exp as u32) << 10 | mant >> 13) + ((mant >> 12) & 1);
+        sign | h as u16
+    }
+
+    fn f16_value(h: u16) -> f32 {
+        let sign = if h & 0x8000 != 0 { -1.0 } else { 1.0 };
+        let exp = ((h >> 10) & 0x1f) as i32;
+        let mant = (h & 0x3ff) as f32;
+        sign * match exp {
+            0 => mant * 2f32.powi(-24),
+            31 => f32::INFINITY,
+            e => (1.0 + mant / 1024.0) * 2f32.powi(e - 15),
+        }
+    }
+
+    fn f16_round(v: f32) -> f32 {
+        f16_value(f16_bits(v))
+    }
+
+    pub fn hdr(args: &[String]) -> Res {
+        use windows::{
+            core::Interface,
+            Win32::Graphics::{Direct3D11::*, Dxgi::Common::*},
+        };
+        let (mut out, mut seconds, mut sdr_white, mut bitrate, mut preset) = (PathBuf::new(), 2u32, 240f32, 30_000u32, 4u8);
+        let mut it = args.iter();
+        while let Some(k) = it.next() {
+            let v = it.next().ok_or_else(|| format!("{k} needs a value"))?;
+            match k.as_str() {
+                "--out" => out = PathBuf::from(v),
+                "--seconds" => seconds = v.parse()?,
+                "--sdr-white" => sdr_white = v.parse()?,
+                "--bitrate" => bitrate = v.parse()?,
+                "--preset" => preset = v.parse()?,
+                _ => return Err(format!("unknown option {k}").into()),
+            }
+        }
+        if out.as_os_str().is_empty() {
+            return Err("--out DIR is required".into());
+        }
+        fs::create_dir_all(&out)?;
+        let (cap, w, h) = nvidia_capturer()?;
+        let (wu, hu) = (w as usize, h as usize);
+        let px = hdr_pattern(wu, hu, sdr_white);
+        let mut expected = vec![0u8; wu * hu * 6];
+        for (i, &p) in px.iter().enumerate() {
+            for (plane, v) in pq_yuv(p).into_iter().enumerate() {
+                let o = (plane * wu * hu + i) * 2;
+                expected[o..o + 2].copy_from_slice(&v.to_le_bytes());
+            }
+        }
+        fs::write(out.join("expected.yuv"), &expected)?;
+        fs::write(out.join("hdr.txt"), format!("{w} {h} {sdr_white}\n"))?;
+        let halves: Vec<u16> = px.iter().flat_map(|p| p.iter().map(|&c| f16_bits(c))).collect();
+
+        let device = cap.device().device;
+        let (tex, ctx) = unsafe {
+            let dev = ID3D11Device::from_raw_borrowed(&device).ok_or("null capture device")?;
+            let desc = D3D11_TEXTURE2D_DESC {
+                Width: w,
+                Height: h,
+                MipLevels: 1,
+                ArraySize: 1,
+                Format: DXGI_FORMAT_R16G16B16A16_FLOAT,
+                SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+                Usage: D3D11_USAGE_DEFAULT,
+                BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
+                CPUAccessFlags: 0,
+                MiscFlags: 0,
+            };
+            let mut tex = None;
+            dev.CreateTexture2D(&desc, None, Some(&mut tex))?;
+            (tex.ok_or("CreateTexture2D returned nothing")?, dev.GetImmediateContext()?)
+        };
+        let cfg = Config { width: w, height: h, fps: 60, bitrate_kbps: bitrate, preset, dither: false, tile: 0, ten_bit: true, hdr: true };
+        println!("{cfg:?}; SDR white {sdr_white} nits, still {seconds} s");
+        let mut enc = Encoder::new(device, cfg)?;
+        let mut stream = fs::File::create(out.join("out.h265"))?;
+        unsafe { ctx.UpdateSubresource(&tex, 0, None, halves.as_ptr() as _, w * 8, 0) };
+        let mut ms = Vec::new();
+        for i in 0..seconds * 60 {
+            let t0 = Instant::now();
+            let f = enc.encode((i == 0).then(|| tex.as_raw()), false)?;
+            ms.push(t0.elapsed().as_secs_f64() * 1000.0);
+            stream.write_all(&f.data)?;
+        }
+        ms.sort_by(|a, b| a.total_cmp(b));
+        println!("done: {} ({} frames, encode p50 {:.2} ms)", out.display(), ms.len(), ms[ms.len() / 2]);
+        Ok(())
+    }
+
+    /// 主控端着色器（gl.rs 的 HDR 分支）对一个 10 位 Y / U / V 的结果（8bit RGB）
+    fn client_hdr_rgb(yuv: [u16; 3], sdr_white: f64) -> [u8; 3] {
+        const M: [[f64; 3]; 3] = [[1.660491, -0.587641, -0.072850], [-0.124550, 1.132900, -0.008349], [-0.018151, -0.100579, 1.118730]];
+        let y = yuv[0] as f64 / 1023.0;
+        let cb = (yuv[1] as f64 - 512.0) / 1023.0;
+        let cr = (yuv[2] as f64 - 512.0) / 1023.0;
+        let r2 = y + 1.4746 * cr;
+        let b2 = y + 1.8814 * cb;
+        let e = [r2, (y - 0.2627 * r2 - 0.0593 * b2) / 0.6780, b2].map(|v| v.clamp(0.0, 1.0));
+        let nits = e.map(|v| {
+            let q = v.powf(1.0 / 78.84375);
+            10000.0 * ((q - 0.8359375).max(0.0) / (18.8515625 - 18.6875 * q)).powf(1.0 / 0.1593017578125)
+        });
+        let rel = nits.map(|n| n / sdr_white);
+        let mut lin = M.map(|r| (r[0] * rel[0] + r[1] * rel[1] + r[2] * rel[2]).max(0.0));
+        let m = lin.iter().cloned().fold(0.0, f64::max);
+        if m > 1.0 {
+            lin = lin.map(|v| v / m);
+        }
+        lin.map(|v| {
+            let s = if v <= 0.0031308 { v * 12.92 } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 };
+            (s.clamp(0.0, 1.0) * 255.0 + 0.5).floor() as u8
+        })
+    }
+
+    pub fn hdr_rgb(args: &[String]) -> Res {
+        let usage = "usage: hdrrgb DIR SHADER.rgb [DECODED.yuv]";
+        let dir = PathBuf::from(args.first().ok_or(usage)?);
+        let shader = fs::read(args.get(1).ok_or(usage)?)?;
+        let meta = fs::read_to_string(dir.join("hdr.txt"))?;
+        let v: Vec<f64> = meta.split_whitespace().filter_map(|s| s.parse().ok()).collect();
+        let (w, h, white) = (v[0] as usize, v[1] as usize, v.get(2).copied().unwrap_or(240.0));
+        // 给了解码出的同一帧（yuv444p10le，HEVC 解码逐位确定，软件解的和瘦客户机硬解的一样）就按它算公式：只剩着色器本身的误差；
+        // 不给就按编码前的期望值算：再加上编码损失
+        let expected = match args.get(2) {
+            Some(p) => fs::read(p)?,
+            None => fs::read(dir.join("expected.yuv"))?,
+        };
+        if shader.len() != w * h * 3 {
+            return Err(format!("{} bytes of RGB, expected {}x{}x3", shader.len(), w, h).into());
+        }
+        let sample = |plane: usize, i: usize| {
+            let o = (plane * w * h + i) * 2;
+            u16::from_le_bytes([expected[o], expected[o + 1]])
+        };
+        let original = test_pattern(w, h);
+        let regions: [(&str, std::ops::Range<usize>); 3] =
+            [("CG at SDR white", 0..h / 2), ("0-1000 nit ramp", h / 2..h * 3 / 4), ("highlight patches", h * 3 / 4..h)];
+        let mut report = format!("{w}x{h}, SDR white {white} nits\n");
+        let stat = |rows: std::ops::Range<usize>, want: &dyn Fn(usize) -> [u8; 3]| {
+            let (mut max, mut sum, mut diff, mut n) = (0u8, 0u64, 0u64, 0u64);
+            for y in rows {
+                for x in 0..w {
+                    let i = y * w + x;
+                    let e = want(i);
+                    let d = (0..3).map(|c| shader[i * 3 + c].abs_diff(e[c])).max().unwrap_or(0);
+                    max = max.max(d);
+                    sum += d as u64;
+                    diff += (d > 1) as u64;
+                    n += 1;
+                }
+            }
+            format!("max {max}, mean {:.3}, off by more than 1: {:.3}%", sum as f64 / n as f64, diff as f64 * 100.0 / n as f64)
+        };
+        for (name, rows) in &regions {
+            let want = |i: usize| client_hdr_rgb([sample(0, i), sample(1, i), sample(2, i)], white);
+            report += &format!("shader vs formula, {name:18}: {}\n", stat(rows.clone(), &want));
+        }
+        let orig = |i: usize| [original[i * 4 + 2], original[i * 4 + 1], original[i * 4]];
+        report += &format!("shader vs the 8-bit original, CG at SDR white: {}\n", stat(0..h / 2, &orig));
+        // 转换链本身的下限（不编码）：编码前的期望值按公式还原，和原图比
+        let pre = fs::read(dir.join("expected.yuv"))?;
+        let pre_sample = |plane: usize, i: usize| {
+            let o = (plane * w * h + i) * 2;
+            u16::from_le_bytes([pre[o], pre[o + 1]])
+        };
+        let (mut max, mut sum, mut over, mut n) = (0u8, 0u64, 0u64, 0u64);
+        for i in 0..w * h / 2 {
+            let got = client_hdr_rgb([pre_sample(0, i), pre_sample(1, i), pre_sample(2, i)], white);
+            let d = (0..3).map(|c| got[c].abs_diff(orig(i)[c])).max().unwrap_or(0);
+            max = max.max(d);
+            sum += d as u64;
+            over += (d > 1) as u64;
+            n += 1;
+        }
+        report += &format!(
+            "no encoding (formula on the pre-encode values) vs the 8-bit original, CG at SDR white: max {max}, mean {:.3}, off by more than 1: {:.3}%\n",
+            sum as f64 / n as f64,
+            over as f64 * 100.0 / n as f64
+        );
+        print!("{report}");
+        fs::write(dir.join("hdrrgb.txt"), report)?;
+        Ok(())
+    }
+
+    pub fn hdr_check(args: &[String]) -> Res {
+        use std::io::Read;
+        let dir = PathBuf::from(args.first().ok_or("usage: hdrcheck DIR < decoded yuv444p10le")?);
+        let wh = fs::read_to_string(dir.join("hdr.txt"))?;
+        let mut it = wh.split_whitespace().map(|s| s.parse::<usize>());
+        let (w, h) = (it.next().ok_or("bad hdr.txt")??, it.next().ok_or("bad hdr.txt")??);
+        let expected = fs::read(dir.join("expected.yuv"))?;
+        let frame_bytes = w * h * 6;
+        let mut stdin = std::io::stdin().lock();
+        let mut buf = vec![0u8; frame_bytes];
+        let (mut first, mut last, mut n) = (None, None, 0);
+        while stdin.read_exact(&mut buf).is_ok() {
+            if first.is_none() {
+                first = Some(buf.clone());
+            }
+            last = Some(buf.clone());
+            n += 1;
+        }
+        let sample = |b: &[u8], i: usize| u16::from_le_bytes([b[i * 2], b[i * 2 + 1]]) as i32;
+        let regions: [(&str, std::ops::Range<usize>); 3] =
+            [("CG at SDR white", 0..h / 2), ("0-1000 nit ramp", h / 2..h * 3 / 4), ("highlight patches", h * 3 / 4..h)];
+        let mut report = format!("{n} frames decoded, {w}x{h}\n");
+        for (name, frame) in [("first", first), ("last", last)] {
+            let Some(f) = frame else { continue };
+            for (rname, rows) in &regions {
+                let mut line = format!("{name:5} {rname:18}:");
+                for (pi, pname) in ["Y", "U", "V"].iter().enumerate() {
+                    let (mut max, mut sum, mut sq, mut cnt) = (0i32, 0f64, 0f64, 0f64);
+                    for y in rows.clone() {
+                        for x in 0..w {
+                            let i = pi * w * h + y * w + x;
+                            let d = (sample(&f, i) - sample(&expected, i)).abs();
+                            max = max.max(d);
+                            sum += d as f64;
+                            sq += (d * d) as f64;
+                            cnt += 1.0;
+                        }
+                    }
+                    let psnr = if sq == 0.0 { f64::INFINITY } else { 10.0 * (1023.0f64.powi(2) / (sq / cnt)).log10() };
+                    line += &format!("  {pname} max {max} mean {:.3} PSNR {psnr:.2}", sum / cnt);
+                }
+                report += &line;
+                report += "\n";
+            }
+        }
+        print!("{report}");
+        fs::write(dir.join("hdrcheck.txt"), report)?;
         Ok(())
     }
 }

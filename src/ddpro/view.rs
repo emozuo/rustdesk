@@ -461,6 +461,10 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
     let mut ready = false;
     // 查过实际解码格式的画面尺寸：第一帧和尺寸变了之后（被控端重建编码器）查一次
     let mut format_checked: Option<(u32, u32)> = None;
+    // 谈成的位深（老版本被控端的答复里可能没有，按 8bit），HDR 时被控端普通内容的白（P1 第 4 项）
+    let want_bits = start.format.bit_depth.max(8);
+    let hdr_white = start.format.hdr.then_some(start.format.sdr_white_nits);
+    shader = hdr_shader(shader, hdr_white);
     let lossless_dump = std::env::var_os(DIAG_LOSSLESS_DUMP).map(|p| {
         let mut p = p;
         p.push(format!(".{}", start.display_index));
@@ -524,6 +528,7 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
                         // 旧的转换器先放掉（窗口还登记着它们的画面，下面重新登记），再按新尺寸建
                         let on = shader.take().is_some();
                         (conv, shader) = attach(&mut win, &dev, on)?;
+                        shader = hdr_shader(shader.take(), hdr_white);
                         // 无损纹理随旧转换器没了：要关键帧，被控端整屏重新补
                         lossless.reset();
                         resync.store(true, Ordering::Release);
@@ -678,13 +683,18 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
                 other => other,
             };
             if let Some((frame, times)) = latest {
-                // 门槛按结果定（P0 设计决定 3）：实际解出来的不是谈好的 4:4:4 8bit 就大声失败，不静默降级
+                // 门槛按结果定（P0 设计决定 3）：实际解出来的不是谈好的 4:4:4、谈好的位深就大声失败，不静默降级
                 // 不叫 size：下面「1:1 才用着色器」要和外层的窗口尺寸比
                 let frame_size = (frame.width(), frame.height());
                 if format_checked != Some(frame_size) {
                     let f = frame.format();
-                    if !(f.chroma_444 && f.bit_depth == 8) {
-                        bail!("the decoded video is {} ({}bit, 4:4:4 {}), not the agreed 4:4:4 8bit", f.name, f.bit_depth, f.chroma_444);
+                    if !(f.chroma_444 && f.bit_depth == want_bits) {
+                        bail!(
+                            "the decoded video is {} ({}bit, 4:4:4 {}), not the agreed 4:4:4 {want_bits}bit",
+                            f.name,
+                            f.bit_depth,
+                            f.chroma_444
+                        );
                     }
                     format_checked = Some(frame_size);
                     panel.format = Some((f.chroma_444, f.bit_depth));
@@ -743,6 +753,16 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
                     was_full = full;
                 }
                 if !by_shader {
+                    // 视频处理单元只按 BT.709 转，做不了 PQ 还原：HDR 画面要缩放（被控端分辨率和本机屏不一样）时大声失败，不显示成发白的颜色
+                    if hdr_white.is_some() {
+                        bail!(
+                            "HDR video is shown only 1:1 ({}x{} video on a {}x{} screen): set the remote resolution to match this screen",
+                            frame.width(),
+                            frame.height(),
+                            size.0,
+                            size.1
+                        );
+                    }
                     conv.convert(&frame, slot, RgbStandard::Bt709)
                         .map_err(|e| anyhow!("{e}"))?;
                     conv.wait(slot).map_err(|e| anyhow!("{e}"))?;
@@ -861,6 +881,22 @@ fn screen_rank(start: &ViewStart, local_screens: usize) -> Option<usize> {
 /// 3. 只用视频处理单元。
 ///
 /// `shader` 为假（之前着色器出过错）时直接走第 3 种。
+/// HDR 会话（P1 第 4 项）：着色器按 BT.2020 + PQ 还原（`hdr_white` 是被控端普通内容的白，尼特）。设不上就不用着色器——
+/// 视频处理单元那条路做不了 HDR，之后会大声失败而不是显示错的颜色
+fn hdr_shader(shader: Option<GlConverter>, hdr_white: Option<u32>) -> Option<GlConverter> {
+    let mut s = shader?;
+    if hdr_white.is_none() {
+        return Some(s);
+    }
+    match s.set_hdr(hdr_white) {
+        Ok(()) => Some(s),
+        Err(e) => {
+            log::warn!("ddpro: pro view cannot set up HDR conversion in the shader: {e}");
+            None
+        }
+    }
+}
+
 fn attach(win: &mut Window, dev: &Device, shader: bool) -> ResultType<(Converter, Option<GlConverter>)> {
     let (w, h) = win.size();
     if shader {

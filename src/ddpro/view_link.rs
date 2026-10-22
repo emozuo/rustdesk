@@ -479,6 +479,12 @@ pub fn on_window_start<T: InvokeUiSession>(session: &Session<T>, window: uuid::U
     Some(display)
 }
 
+/// 本机能不能把 HDR 画面按 HDR 显示出来。GNOME 46（Ubuntu 24.04）没有 HDR 输出，专业窗口也还没有 HDR 直通：
+/// 都具备时在这里报真，[`decode_caps`] 就会报 10bit，被控端开着 HDR 时谈成 HDR
+fn hdr_output() -> bool {
+    false
+}
+
 /// 本机能不能硬解 4:4:4 并在显卡上转 RGB（只探测一次）。
 pub fn decode_caps() -> FormatCaps {
     static CAPS: OnceLock<FormatCaps> = OnceLock::new();
@@ -487,13 +493,20 @@ pub fn decode_caps() -> FormatCaps {
         match probe {
             Ok(c) if c.hevc_444_8bit && c.video_proc => {
                 log::info!("ddpro: this machine can decode HEVC 4:4:4 8bit in hardware ({c:?})");
+                // 报 10bit 就表示能显示 HDR 画面（被控端只在屏开着 HDR 时才会选它，P1 第 4 项）。着色器的 PQ 还原已经做好、
+                // 验证过，但本机没有 HDR 输出时不报：只能截高光显示，而 PQ 10bit 装普通内容不如 8bit sRGB 准（实测普通内容
+                // 10% 的像素差超过 1 级），被控端照旧转成 8bit 普通画面更好
+                let depths: &[u32] = if c.hevc_444_10bit && hdr_output() { &[10, 8] } else { &[8] };
                 FormatCaps {
                     checked: true,
-                    formats: vec![VideoFormat {
-                        chroma: Chroma::CHROMA_444.into(),
-                        bit_depth: 8,
-                        ..Default::default()
-                    }],
+                    formats: depths
+                        .iter()
+                        .map(|&bit_depth| VideoFormat {
+                            chroma: Chroma::CHROMA_444.into(),
+                            bit_depth,
+                            ..Default::default()
+                        })
+                        .collect(),
                     ..Default::default()
                 }
             }
@@ -537,8 +550,10 @@ pub fn display_caps() -> DisplayCaps {
 }
 
 /// 被控端同意后为远程屏 `display_index` 拉起专业窗口。`rustdesk` 是 RustDesk 消息循环的发送端，它关了说明会话已结束。
+/// `format` 是谈成的画面格式（位深、HDR）。
 pub fn start<T: InvokeUiSession>(
     media: &MediaChannel,
+    format: &VideoFormat,
     rustdesk: UnboundedSender<Data>,
     session: &Session<T>,
     display_index: i32,
@@ -616,6 +631,7 @@ pub fn start<T: InvokeUiSession>(
         display_index,
         show_status,
         mic,
+        format: Some(format.clone()).into(),
         display_origins: origins
             .into_iter()
             .map(|(_, x, y)| ViewPoint {

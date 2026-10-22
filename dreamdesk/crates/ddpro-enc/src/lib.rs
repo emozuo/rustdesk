@@ -7,10 +7,14 @@ mod convert;
 #[cfg(windows)]
 mod cuda;
 #[cfg(windows)]
+mod display;
+#[cfg(windows)]
 mod nvenc;
 #[cfg(windows)]
 mod nvenc_sys;
 
+#[cfg(windows)]
+pub use display::hdr_sdr_white_nits;
 #[cfg(windows)]
 pub use nvenc::{probe, Config, EncodedFrame, Encoder};
 

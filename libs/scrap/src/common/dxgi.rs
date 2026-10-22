@@ -31,6 +31,12 @@ impl Capturer {
         self.inner.cancel_gdi()
     }
 
+    /// See [`dxgi::Capturer::set_hdr_passthrough`].
+    #[cfg(feature = "vram")]
+    pub fn set_hdr_passthrough(&mut self, on: bool) {
+        self.inner.set_hdr_passthrough(on)
+    }
+
     pub fn width(&self) -> usize {
         self.width
     }

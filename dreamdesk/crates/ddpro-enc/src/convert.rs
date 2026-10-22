@@ -12,14 +12,16 @@ use windows::core::Interface;
 use windows::Win32::Graphics::{
     Direct3D11::*,
     Dxgi::Common::{
-        DXGI_FORMAT, DXGI_FORMAT_AYUV, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R16_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM,
-        DXGI_FORMAT_UNKNOWN, DXGI_SAMPLE_DESC,
+        DXGI_FORMAT, DXGI_FORMAT_AYUV, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R16_UNORM,
+        DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_UNKNOWN, DXGI_SAMPLE_DESC,
     },
 };
 
 static SHADER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/rgb_to_yuv444.cso"));
 /// 10bit：三个平面叠在一张 R16 纹理里（shaders/rgb_to_yuv444_10.hlsl，第 4 项）
 static SHADER_10: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/rgb_to_yuv444_10.cso"));
+/// HDR：scRGB（FP16）→ BT.2020 + PQ 的 10bit 三平面（shaders/scrgb_to_pq444_10.hlsl）
+static SHADER_PQ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/scrgb_to_pq444_10.cso"));
 static DIFF_SHADER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/tile_diff.cso"));
 const GROUP: u32 = 16;
 
@@ -45,6 +47,8 @@ pub(crate) struct Converter {
     cur: usize,
     /// 已经载入过画面（有上一帧可比）
     loaded: bool,
+    /// 源画面的格式：8bit 桌面 BGRA，HDR 桌面 scRGB（FP16）
+    source_format: DXGI_FORMAT,
     output: ID3D11Texture2D,
     output_uav: ID3D11UnorderedAccessView,
     diff: Option<Diff>,
@@ -56,19 +60,37 @@ pub(crate) struct Converter {
 
 impl Converter {
     /// `tile` 是按方块比两帧用的方块边长，0 = 不比。`ten_bit` 时输出 10bit 三平面（给 CUDA 拷走），否则打包的 8bit AYUV。
-    pub fn new(device: &ID3D11Device, width: u32, height: u32, dither: bool, tile: u32, ten_bit: bool) -> Result<Self, Error> {
+    /// `hdr` 时源画面是 scRGB（HDR 桌面），按 BT.2020 + PQ 转（要 `ten_bit`）。
+    pub fn new(
+        device: &ID3D11Device,
+        width: u32,
+        height: u32,
+        dither: bool,
+        tile: u32,
+        ten_bit: bool,
+        hdr: bool,
+    ) -> Result<Self, Error> {
+        if hdr && !ten_bit {
+            return Err(Error::Config("HDR needs 10-bit".to_owned()));
+        }
         unsafe {
             let ctx = device.GetImmediateContext()?;
 
+            let shader = match (ten_bit, hdr) {
+                (true, true) => SHADER_PQ,
+                (true, false) => SHADER_10,
+                _ => SHADER,
+            };
             let mut cs = None;
-            device.CreateComputeShader(if ten_bit { SHADER_10 } else { SHADER }, None, Some(&mut cs))?;
+            device.CreateComputeShader(shader, None, Some(&mut cs))?;
+            let source_format = if hdr { DXGI_FORMAT_R16G16B16A16_FLOAT } else { DXGI_FORMAT_B8G8R8A8_UNORM };
 
             let params: [u32; 4] = [width, height, dither as u32, 0];
             // 抖动运行中能切（主控端「设置抖动」），参数缓冲要可更新
             let buf = constant_buffer(device, &params)?;
 
             let source = |_| -> Result<(ID3D11Texture2D, ID3D11ShaderResourceView), Error> {
-                let t = texture(device, width, height, DXGI_FORMAT_B8G8R8A8_UNORM, D3D11_BIND_SHADER_RESOURCE.0 as u32)?;
+                let t = texture(device, width, height, source_format, D3D11_BIND_SHADER_RESOURCE.0 as u32)?;
                 let mut srv = None;
                 device.CreateShaderResourceView(&t, None, Some(&mut srv))?;
                 Ok((t, srv.ok_or_else(|| Error::Config("CreateShaderResourceView returned nothing".to_owned()))?))
@@ -110,6 +132,7 @@ impl Converter {
                 source_srvs: [v0, v1],
                 cur: 0,
                 loaded: false,
+                source_format,
                 output,
                 output_uav: output_uav.ok_or_else(|| Error::Config("CreateUnorderedAccessView returned nothing".to_owned()))?,
                 diff,
@@ -125,13 +148,22 @@ impl Converter {
         self.output.as_raw()
     }
 
+    /// 读回原始像素按 BGRA 一像素 4 字节：HDR（scRGB）源不支持（HDR 会话不开静止无损）
+    fn need_bgra(&self) -> Result<(), Error> {
+        if self.source_format == DXGI_FORMAT_B8G8R8A8_UNORM {
+            Ok(())
+        } else {
+            Err(Error::Unsupported("reading back source pixels needs an 8-bit desktop".to_owned()))
+        }
+    }
+
     /// 输出纹理（10bit 时交给 CUDA 每帧拷走）
     pub fn output(&self) -> &ID3D11Texture2D {
         &self.output
     }
 
     /// 载入一帧采集到的桌面纹理。尺寸或格式不对就报错：分辨率变了要重建编码器，
-    /// HDR 等非 8bit 桌面在 P0 不支持，不悄悄转换。
+    /// 桌面在 HDR 和普通之间切换了要按新状态重开会话，不悄悄转换。
     /// 按方块比（建时给了方块边长）时返回这一帧哪些方块变了（每位一块、低位在前）；第一帧没得比，算全变了。
     pub fn load_source(&mut self, src: *mut c_void) -> Result<Option<Vec<u8>>, Error> {
         unsafe {
@@ -145,8 +177,11 @@ impl Converter {
                     d.Width, d.Height, self.width, self.height
                 )));
             }
-            if d.Format != DXGI_FORMAT_B8G8R8A8_UNORM {
-                return Err(Error::Unsupported(format!("desktop format {:?} is not 8-bit BGRA", d.Format)));
+            if d.Format != self.source_format {
+                return Err(Error::Unsupported(format!(
+                    "desktop format {:?} is not the session's {:?} (HDR was switched on or off)",
+                    d.Format, self.source_format
+                )));
             }
             let next = 1 - self.cur;
             self.ctx.CopyResource(&self.sources[next], src);
@@ -182,6 +217,7 @@ impl Converter {
     /// 从当前这一帧读回几块原始像素：`rects` 是 (x, y, 宽, 高)，返回每块的 BGRA（逐行紧排）。
     /// 一次映射读完：先把各块拷进暂存纹理同样的位置，再映射一次。
     pub fn read_tiles(&mut self, rects: &[(u32, u32, u32, u32)]) -> Result<Vec<Vec<u8>>, Error> {
+        self.need_bgra()?;
         unsafe {
             if self.readback.is_none() {
                 let mut desc = D3D11_TEXTURE2D_DESC::default();
@@ -220,6 +256,7 @@ impl Converter {
     }
 
     pub fn read_source_bgra(&self) -> Result<Vec<u8>, Error> {
+        self.need_bgra()?;
         unsafe {
             let mut desc = D3D11_TEXTURE2D_DESC::default();
             self.sources[self.cur].GetDesc(&mut desc);

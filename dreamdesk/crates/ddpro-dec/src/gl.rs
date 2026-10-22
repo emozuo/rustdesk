@@ -53,6 +53,11 @@ void main() {
 /// 公式和被控端颜色转换着色器（ddpro-enc 的 rgb_to_yuv444.hlsl）互逆：BT.709、全范围。
 /// 最后显式四舍五入到 8 位再交出去——交给显卡自己从浮点写成 8 位时，实测 0.33% 的像素差 1 级。
 /// 静止无损（`tile` > 0）：掩码里置了的方块直接取无损纹理里的原始像素，不用视频
+///
+/// HDR（`hdr` = 1，P1 第 4 项）：和被控端 scrgb_to_pq444_10.hlsl 互逆——BT.2020 非恒定亮度矩阵还原 R'G'B'、PQ 还原成尼特，
+/// 再除以被控端「普通内容的白」（`sdr_white`，尼特）→ 1.0 就是普通内容的白；BT.2020 转 BT.709 原色；比白亮的高光按最大的那个
+/// 通道整体缩回 1.0（保色相，不像按通道截那样偏色）；sRGB 编码。普通内容因此和被控端没开 HDR 时一样，高光截到白——
+/// 显示器没有 HDR 输出，没地方放比白还亮的东西，宁可截高光也不把普通内容的白压灰（专业模式先保普通内容的颜色）
 const FRAGMENT: &str = "#version 300 es
 precision highp float;
 uniform highp sampler2D yuv;
@@ -60,7 +65,10 @@ uniform highp sampler2D lossless;
 uniform highp sampler2D mask;
 uniform int ten;
 uniform int tile;
+uniform int hdr;
+uniform float sdr_white;
 out vec4 o;
+const mat3 BT2020_TO_709 = mat3(1.660491, -0.124550, -0.018151, -0.587641, 1.132900, -0.100579, -0.072850, -0.008349, 1.118730);
 void main() {
     ivec2 p = ivec2(gl_FragCoord.xy);
     if (tile > 0 && texelFetch(mask, p / tile, 0).r > 0.5) {
@@ -75,6 +83,21 @@ void main() {
     float v = s.r;
     float cb = (u * peak - half_) / peak;
     float cr = (v * peak - half_) / peak;
+    if (hdr == 1) {
+        float r2 = y + 1.4746 * cr;
+        float b2 = y + 1.8814 * cb;
+        vec3 e = clamp(vec3(r2, (y - 0.2627 * r2 - 0.0593 * b2) / 0.6780, b2), 0.0, 1.0);
+        vec3 q = pow(e, vec3(1.0 / 78.84375));
+        vec3 nits = 10000.0 * pow(max(q - 0.8359375, 0.0) / (18.8515625 - 18.6875 * q), vec3(1.0 / 0.1593017578125));
+        vec3 lin = max(BT2020_TO_709 * (nits / sdr_white), 0.0);
+        float m = max(max(lin.r, lin.g), lin.b);
+        if (m > 1.0) {
+            lin /= m;
+        }
+        vec3 srgb = mix(1.055 * pow(lin, vec3(1.0 / 2.4)) - 0.055, lin * 12.92, lessThanEqual(lin, vec3(0.0031308)));
+        o = vec4(floor(clamp(srgb, 0.0, 1.0) * 255.0 + 0.5) / 255.0, 1.0);
+        return;
+    }
     float r = y + 1.5748 * cr;
     float b = y + 1.8556 * cb;
     float g = (y - 0.2126 * r - 0.0722 * b) / 0.7152;
@@ -339,6 +362,23 @@ impl GlConverter {
     }
 
     /// 显卡名（日志用）
+    /// HDR 画面（P1 第 4 项）：`Some(被控端普通内容的白，尼特)` 时按 BT.2020 + PQ 还原、高光截到白；`None` 是普通画面（默认）。
+    /// 着色器参数是程序的状态，设一次一直有效
+    pub fn set_hdr(&mut self, sdr_white_nits: Option<u32>) -> Result<()> {
+        self.egl
+            .make_current(self.display, None, None, Some(self.context))
+            .map_err(err("make the context current"))?;
+        let gl = &self.gl;
+        unsafe {
+            gl.use_program(Some(self.program));
+            let hdr = gl.get_uniform_location(self.program, "hdr");
+            gl.uniform_1_i32(hdr.as_ref(), sdr_white_nits.is_some() as i32);
+            let white = gl.get_uniform_location(self.program, "sdr_white");
+            gl.uniform_1_f32(white.as_ref(), sdr_white_nits.unwrap_or(80).max(1) as f32);
+        }
+        Ok(())
+    }
+
     pub fn renderer(&self) -> &str {
         &self.renderer
     }
