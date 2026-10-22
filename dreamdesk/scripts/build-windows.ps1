@@ -19,12 +19,20 @@ $AppName = 'dreamdesk-pro'
 
 $Repo = (Resolve-Path "$PSScriptRoot\..\.." -ErrorAction Stop).Path
 Set-Location $Repo -ErrorAction Stop
+if (-not (Select-String -Path src\ddpro\brand.rs -SimpleMatch "pub const APP_NAME: &str = `"$AppName`";" -Quiet)) {
+  throw "AppName=$AppName does not match APP_NAME in src\ddpro\brand.rs"
+}
 
 function Invoke-Checked([string] $What, [scriptblock] $Block) {
   Write-Host "########## $What ##########"
-  # 2>&1 后取原始文本：stderr 原样显示，不被 PowerShell 包成 NativeCommandError（空行也不会变成 RemoteException）
+  # 命令根本不存在时 PowerShell 只记一条错误、不动退出码，留着上一条命令的 0 就会被当成成功：先放一个哨兵值
+  $global:LASTEXITCODE = -1
+  # 2>&1 后取原始文本：外部程序的 stderr 原样显示，不被 PowerShell 包成 NativeCommandError（空行也不会变成 RemoteException）；
+  # PowerShell 自己的错误（找不到命令等）照常显示错误信息
   & $Block 2>&1 | ForEach-Object {
-    if ($_ -is [System.Management.Automation.ErrorRecord]) { "$($_.TargetObject)" } else { "$_" }
+    if ($_ -is [System.Management.Automation.ErrorRecord]) {
+      if ($_.Exception -is [System.Management.Automation.RemoteException]) { "$($_.TargetObject)" } else { "$_" }
+    } else { "$_" }
   }
   if ($LASTEXITCODE -ne 0) { throw "$What failed (exit $LASTEXITCODE)" }
 }
@@ -177,6 +185,9 @@ Write-Host "version $Version"
 $Payload = Get-OfficialPayload
 $UsbipInstaller = Get-UsbipInstaller
 
+# flutter pub get 会改写这个被跟踪的文件：打完用改前的原字节还原（不用 git checkout，那样会丢掉本地未提交的改动）
+$PubLock = Join-Path $Repo 'flutter\pubspec.lock'
+$PubLockBytes = [IO.File]::ReadAllBytes($PubLock)
 try {
   # pub get 必须在 codegen 之前：codegen 的 ffigen 要读 pub get 生成的 package_config.json
   Invoke-Checked 'flutter pub get' { Push-Location flutter; flutter pub get; Pop-Location }
@@ -193,6 +204,11 @@ try {
   $Exe = Join-Path $Release "$AppName.exe"
   Remove-Item $Exe -ErrorAction SilentlyContinue
   Move-Item (Join-Path $Release 'rustdesk.exe') $Exe -ErrorAction Stop
+
+  # 自检：产物里不许再有带 rustdesk 字样的可执行文件（librustdesk.dll 是被加载的库，不是进程，不在此列）。
+  # 放在打安装包之前：查出问题时不能已经把上一个好的安装包覆盖掉
+  $Left = Get-ChildItem $Release -Recurse -Filter '*.exe' | Where-Object { $_.Name -match 'rustdesk' }
+  if ($Left) { throw "rustdesk-named executables left in the bundle: $($Left.FullName -join ', ')" }
 
   # 安装包解压后先运行内嵌的程序，所以内嵌的必须已经是改过名的那个
   $Manifest = Join-Path $Repo 'res\manifest.xml'
@@ -215,13 +231,8 @@ try {
   $Installer = Join-Path $Repo "$AppName-$Version-install.exe"
   Copy-Item (Join-Path $Repo 'target\release\rustdesk-portable-packer.exe') $Installer -Force -ErrorAction Stop
 
-  # 自检：产物里不许再有带 rustdesk 字样的可执行文件（librustdesk.dll 是被加载的库，不是进程，不在此列）
-  $Left = Get-ChildItem $Release -Recurse -Filter '*.exe' | Where-Object { $_.Name -match 'rustdesk' }
-  if ($Left) { throw "rustdesk-named executables left in the bundle: $($Left.FullName -join ', ')" }
-
   Write-Host "########## output ##########"
   Get-Item $Exe, $Installer | Select-Object Name, @{n = 'MB'; e = { [math]::Round($_.Length / 1MB, 1) } } | Format-Table -AutoSize
 } finally {
-  # flutter pub get 会改写这个被跟踪的文件，还原，免得混进提交
-  git checkout -- flutter/pubspec.lock 2>$null
+  [IO.File]::WriteAllBytes($PubLock, $PubLockBytes)
 }

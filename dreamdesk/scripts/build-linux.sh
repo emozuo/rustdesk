@@ -104,7 +104,8 @@ Description: DreamDesk remote desktop (pro mode), based on RustDesk.
 
 EOF
 (cd "$D" && find usr -type f -exec md5sum {} + >DEBIAN/md5sums)
-OUT=$APP-$VERSION.deb
+# 先打在临时目录、自检过了才挪到仓库根：查出问题时不能已经把上一个好的包覆盖掉
+OUT=$T/$APP-$VERSION.deb
 dpkg-deb --root-owner-group -b "$D" "$OUT" >/dev/null
 
 echo "## 自检"
@@ -118,4 +119,5 @@ if grep -rn -i rustdesk "$D"/DEBIAN/{postinst,prerm,preinst,postrm} \
     echo "上面这些安装文件里还有 rustdesk" >&2
     exit 1
 fi
-echo "OK: $OUT"
+mv "$OUT" .
+echo "OK: $(basename "$OUT")"
