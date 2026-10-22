@@ -199,11 +199,14 @@ fn unspecified_like(peer: &SocketAddr) -> SocketAddr {
 /// 读超时，或可以当作「这次没收到」的错误。对方端口关了时，往那边发包会招来 ICMP「端口不可达」，
 /// Windows 把它变成下一次接收的 10054（连接被重置）；这类回执也可能凭空出现，不能当成致命错误——
 /// 通道断没断只看 [`PEER_TIMEOUT`] 内有没有收到包。
+/// 比收包缓冲大的包 Windows 报 10040（WSAEMSGSIZE）、包已丢掉（Linux 是截断后照常返回）：合法的包没这么大，
+/// 是网上别的东西发来的，同样当没收到——否则同网段谁发一个大包就能打断通道。
 fn is_timeout(e: &io::Error) -> bool {
+    const WSAEMSGSIZE: i32 = 10040;
     matches!(
         e.kind(),
         ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::ConnectionReset | ErrorKind::ConnectionRefused
-    )
+    ) || (cfg!(windows) && e.raw_os_error() == Some(WSAEMSGSIZE))
 }
 
 fn micros(d: Duration) -> i64 {
