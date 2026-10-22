@@ -3,7 +3,7 @@
 //! 编码器只在创建它的线程上用，并且和采集共用同一个 D3D11 设备：NVENC 和采集共用设备时跨线程
 //! 调用容易在驱动里互锁，所以从结构上排除（`Encoder` 不是 `Send`）。
 
-use crate::{convert::Converter, nvenc_sys::*, Caps, Error};
+use crate::{convert::Converter, cuda::TextureCopy, nvenc_sys::*, Caps, Error};
 use std::{ffi::c_void, mem, ptr};
 use windows::{
     core::{Interface, PCSTR},
@@ -108,6 +108,15 @@ fn status(s: NVENCSTATUS, call: &'static str, detail: Option<String>) -> Result<
     }
 }
 
+/// 送给 NVENC 的画面排布：8bit 打包的 AYUV（D3D11 纹理），10bit 三平面（CUDA 缓冲区）
+fn buffer_format(cfg: &Config) -> NV_ENC_BUFFER_FORMAT {
+    if cfg.ten_bit {
+        _NV_ENC_BUFFER_FORMAT::NV_ENC_BUFFER_FORMAT_YUV444_10BIT
+    } else {
+        _NV_ENC_BUFFER_FORMAT::NV_ENC_BUFFER_FORMAT_AYUV
+    }
+}
+
 /// 一个打开的编码会话；Drop 时关闭。
 struct Session {
     api: Api,
@@ -115,12 +124,13 @@ struct Session {
 }
 
 impl Session {
-    fn open(device: *mut c_void) -> Result<Self, Error> {
+    /// `device` 是 D3D11 设备（DIRECTX）或 CUDA 上下文（CUDA，4:4:4 10bit 用）
+    fn open(device: *mut c_void, device_type: NV_ENC_DEVICE_TYPE) -> Result<Self, Error> {
         let api = Api::load()?;
         unsafe {
             let mut p: NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS = mem::zeroed();
             p.version = OPEN_SESSION_VER;
-            p.deviceType = _NV_ENC_DEVICE_TYPE::NV_ENC_DEVICE_TYPE_DIRECTX;
+            p.deviceType = device_type;
             p.device = device;
             p.apiVersion = NVENCAPI_VERSION;
             let mut enc = ptr::null_mut();
@@ -182,7 +192,7 @@ impl Drop for Session {
 
 /// 在给定的 D3D11 设备上查询 HEVC 编码能力。
 pub fn probe(device: *mut c_void) -> Result<Caps, Error> {
-    Session::open(device)?.caps()
+    Session::open(device, _NV_ENC_DEVICE_TYPE::NV_ENC_DEVICE_TYPE_DIRECTX)?.caps()
 }
 
 /// 编码参数。
@@ -198,6 +208,8 @@ pub struct Config {
     pub dither: bool,
     /// 静止无损用的方块边长：每帧和上一帧按方块比，0 = 不比。
     pub tile: u32,
+    /// 编 4:4:4 10bit（Main 4:4:4 10）。D3D11 下 NVENC 不收这种输入，要经 CUDA（第 4 项）
+    pub ten_bit: bool,
 }
 
 /// 编出的一帧。
@@ -208,7 +220,7 @@ pub struct EncodedFrame {
     pub avg_qp: u32,
 }
 
-/// HEVC 4:4:4 8bit 编码器。只能在创建它的线程上使用。
+/// HEVC 4:4:4 8bit / 10bit 编码器。只能在创建它的线程上使用。
 pub struct Encoder {
     session: Session,
     conv: Converter,
@@ -216,6 +228,8 @@ pub struct Encoder {
     bitstream: NV_ENC_OUTPUT_PTR,
     cfg: Config,
     frame_idx: u64,
+    /// 10bit：颜色转换的输出每帧经它拷进 CUDA 缓冲区。放最后：字段按声明顺序释放，NVENC 会话要先于 CUDA 上下文关
+    cuda: Option<TextureCopy>,
 }
 
 impl Encoder {
@@ -227,11 +241,14 @@ impl Encoder {
         let d3d = unsafe { ID3D11Device::from_raw_borrowed(&device) }
             .cloned()
             .ok_or_else(|| Error::Config("null D3D11 device".to_owned()))?;
-        let session = Session::open(device)?;
-        let caps = session.caps()?;
-        // 不支持就大声失败，不悄悄退回 4:2:0
+        let dx = Session::open(device, _NV_ENC_DEVICE_TYPE::NV_ENC_DEVICE_TYPE_DIRECTX)?;
+        let caps = dx.caps()?;
+        // 不支持就大声失败，不悄悄退回 4:2:0 或 8bit
         if !caps.yuv444_8bit {
             return Err(Error::Unsupported("this GPU cannot encode HEVC 4:4:4".to_owned()));
+        }
+        if cfg.ten_bit && !caps.yuv444_10bit {
+            return Err(Error::Unsupported("this GPU cannot encode HEVC 4:4:4 10-bit".to_owned()));
         }
         if cfg.width > caps.max_width || cfg.height > caps.max_height {
             return Err(Error::Unsupported(format!(
@@ -239,8 +256,14 @@ impl Encoder {
                 cfg.width, cfg.height, caps.max_width, caps.max_height
             )));
         }
-        unsafe { Self::initialize(&session, &cfg)? };
-        let conv = Converter::new(&d3d, cfg.width, cfg.height, cfg.dither, cfg.tile)?;
+        let conv = Converter::new(&d3d, cfg.width, cfg.height, cfg.dither, cfg.tile, cfg.ten_bit)?;
+        let (session, cuda) = if cfg.ten_bit {
+            let cuda = TextureCopy::new(&d3d, conv.output(), cfg.width as usize * 2, cfg.height as usize * 3)?;
+            drop(dx);
+            (Session::open(cuda.context(), _NV_ENC_DEVICE_TYPE::NV_ENC_DEVICE_TYPE_CUDA)?, Some(cuda))
+        } else {
+            (dx, None)
+        };
 
         let mut enc = Self {
             session,
@@ -249,15 +272,26 @@ impl Encoder {
             bitstream: ptr::null_mut(),
             cfg,
             frame_idx: 0,
+            cuda,
         };
         unsafe {
+            Self::initialize(&enc.session, &enc.cfg)?;
             let mut r: NV_ENC_REGISTER_RESOURCE = mem::zeroed();
             r.version = REGISTER_RESOURCE_VER;
-            r.resourceType = _NV_ENC_INPUT_RESOURCE_TYPE::NV_ENC_INPUT_RESOURCE_TYPE_DIRECTX;
             r.width = enc.cfg.width;
             r.height = enc.cfg.height;
-            r.resourceToRegister = enc.conv.output_ptr();
-            r.bufferFormat = _NV_ENC_BUFFER_FORMAT::NV_ENC_BUFFER_FORMAT_AYUV;
+            match &enc.cuda {
+                Some(cuda) => {
+                    r.resourceType = _NV_ENC_INPUT_RESOURCE_TYPE::NV_ENC_INPUT_RESOURCE_TYPE_CUDADEVICEPTR;
+                    r.resourceToRegister = cuda.buffer() as *mut c_void;
+                    r.pitch = cuda.pitch() as u32;
+                }
+                None => {
+                    r.resourceType = _NV_ENC_INPUT_RESOURCE_TYPE::NV_ENC_INPUT_RESOURCE_TYPE_DIRECTX;
+                    r.resourceToRegister = enc.conv.output_ptr();
+                }
+            }
+            r.bufferFormat = buffer_format(&enc.cfg);
             r.bufferUsage = _NV_ENC_BUFFER_USAGE::NV_ENC_INPUT_IMAGE;
             let s = nv!(enc.session.api, nvEncRegisterResource)(enc.session.enc, &mut r);
             enc.session.check(s, "nvEncRegisterResource")?;
@@ -296,7 +330,7 @@ impl Encoder {
 
         let hevc = &mut c.encodeCodecConfig.hevcConfig;
         hevc.set_chromaFormatIDC(3);
-        hevc.set_pixelBitDepthMinus8(0);
+        hevc.set_pixelBitDepthMinus8(if cfg.ten_bit { 2 } else { 0 });
         hevc.set_repeatSPSPPS(1);
         hevc.idrPeriod = INFINITE_GOP;
         // 码流里写明颜色规则：BT.709、全范围，和颜色转换着色器一致
@@ -324,7 +358,7 @@ impl Encoder {
         ip.maxEncodeWidth = cfg.width;
         ip.maxEncodeHeight = cfg.height;
         ip.tuningInfo = tuning;
-        ip.bufferFormat = _NV_ENC_BUFFER_FORMAT::NV_ENC_BUFFER_FORMAT_AYUV;
+        ip.bufferFormat = buffer_format(cfg);
         let s = nv!(session.api, nvEncInitializeEncoder)(session.enc, &mut ip);
         session.check(s, "nvEncInitializeEncoder")
     }
@@ -352,6 +386,9 @@ impl Encoder {
     /// 编最近一次载入的画面（没载入新画面就重编上一帧）。第一帧总是关键帧。
     pub fn encode_loaded(&mut self, force_idr: bool) -> Result<EncodedFrame, Error> {
         self.conv.convert();
+        if let Some(cuda) = &mut self.cuda {
+            cuda.copy()?;
+        }
         let is_idr = force_idr || self.frame_idx == 0;
         unsafe {
             let mut m: NV_ENC_MAP_INPUT_RESOURCE = mem::zeroed();

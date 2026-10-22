@@ -5,6 +5,8 @@
 #[cfg(windows)]
 mod convert;
 #[cfg(windows)]
+mod cuda;
+#[cfg(windows)]
 mod nvenc;
 #[cfg(windows)]
 mod nvenc_sys;
@@ -49,6 +51,12 @@ pub enum Error {
         status: i32,
         detail: String,
     },
+    /// CUDA 调用失败（4:4:4 10bit 编码把画面拷给 NVENC 用）。
+    Cuda {
+        call: &'static str,
+        status: i32,
+        detail: String,
+    },
     #[cfg(windows)]
     D3d(windows::core::Error),
 }
@@ -59,6 +67,7 @@ impl std::fmt::Display for Error {
             Error::Unsupported(s) => write!(f, "unsupported: {s}"),
             Error::Config(s) => write!(f, "{s}"),
             Error::Nvenc { call, status, detail } => write!(f, "{call} failed ({status}): {detail}"),
+            Error::Cuda { call, status, detail } => write!(f, "{call} failed ({status}): {detail}"),
             #[cfg(windows)]
             Error::D3d(e) => write!(f, "D3D11: {e}"),
         }

@@ -12,12 +12,14 @@ use windows::core::Interface;
 use windows::Win32::Graphics::{
     Direct3D11::*,
     Dxgi::Common::{
-        DXGI_FORMAT, DXGI_FORMAT_AYUV, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_UNKNOWN,
-        DXGI_SAMPLE_DESC,
+        DXGI_FORMAT, DXGI_FORMAT_AYUV, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R16_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM,
+        DXGI_FORMAT_UNKNOWN, DXGI_SAMPLE_DESC,
     },
 };
 
 static SHADER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/rgb_to_yuv444.cso"));
+/// 10bit：三个平面叠在一张 R16 纹理里（shaders/rgb_to_yuv444_10.hlsl，第 4 项）
+static SHADER_10: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/rgb_to_yuv444_10.cso"));
 static DIFF_SHADER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/tile_diff.cso"));
 const GROUP: u32 = 16;
 
@@ -53,13 +55,13 @@ pub(crate) struct Converter {
 }
 
 impl Converter {
-    /// `tile` 是按方块比两帧用的方块边长，0 = 不比。
-    pub fn new(device: &ID3D11Device, width: u32, height: u32, dither: bool, tile: u32) -> Result<Self, Error> {
+    /// `tile` 是按方块比两帧用的方块边长，0 = 不比。`ten_bit` 时输出 10bit 三平面（给 CUDA 拷走），否则打包的 8bit AYUV。
+    pub fn new(device: &ID3D11Device, width: u32, height: u32, dither: bool, tile: u32, ten_bit: bool) -> Result<Self, Error> {
         unsafe {
             let ctx = device.GetImmediateContext()?;
 
             let mut cs = None;
-            device.CreateComputeShader(SHADER, None, Some(&mut cs))?;
+            device.CreateComputeShader(if ten_bit { SHADER_10 } else { SHADER }, None, Some(&mut cs))?;
 
             let params: [u32; 4] = [width, height, dither as u32, 0];
             // 抖动运行中能切（主控端「设置抖动」），参数缓冲要可更新
@@ -74,16 +76,21 @@ impl Converter {
             let (s0, v0) = source(0)?;
             let (s1, v1) = source(1)?;
 
-            // 打包的 AYUV；着色器通过 R8G8B8A8_UNORM 视图写它（D3D11 允许的 AYUV 视图格式）
-            let output = texture(
-                device,
-                width,
-                height,
-                DXGI_FORMAT_AYUV,
-                (D3D11_BIND_UNORDERED_ACCESS.0 | D3D11_BIND_RENDER_TARGET.0) as u32,
-            )?;
+            // 8bit：打包的 AYUV，着色器通过 R8G8B8A8_UNORM 视图写它（D3D11 允许的 AYUV 视图格式）。
+            // 10bit：R16 纹理、3 倍高，Y / U / V 上下叠放；CUDA 映射它要能共享，不用 RENDER_TARGET
+            let (out_format, out_height, uav_format, bind) = if ten_bit {
+                (DXGI_FORMAT_R16_UNORM, height * 3, DXGI_FORMAT_R16_UNORM, D3D11_BIND_UNORDERED_ACCESS.0 as u32)
+            } else {
+                (
+                    DXGI_FORMAT_AYUV,
+                    height,
+                    DXGI_FORMAT_R8G8B8A8_UNORM,
+                    (D3D11_BIND_UNORDERED_ACCESS.0 | D3D11_BIND_RENDER_TARGET.0) as u32,
+                )
+            };
+            let output = texture(device, width, out_height, out_format, bind)?;
             let uav_desc = D3D11_UNORDERED_ACCESS_VIEW_DESC {
-                Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+                Format: uav_format,
                 ViewDimension: D3D11_UAV_DIMENSION_TEXTURE2D,
                 Anonymous: D3D11_UNORDERED_ACCESS_VIEW_DESC_0 {
                     Texture2D: D3D11_TEX2D_UAV { MipSlice: 0 },
@@ -116,6 +123,11 @@ impl Converter {
     /// NVENC 注册用的输出纹理。
     pub fn output_ptr(&self) -> *mut c_void {
         self.output.as_raw()
+    }
+
+    /// 输出纹理（10bit 时交给 CUDA 每帧拷走）
+    pub fn output(&self) -> &ID3D11Texture2D {
+        &self.output
     }
 
     /// 载入一帧采集到的桌面纹理。尺寸或格式不对就报错：分辨率变了要重建编码器，

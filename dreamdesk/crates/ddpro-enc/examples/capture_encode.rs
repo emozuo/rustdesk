@@ -9,7 +9,7 @@
 //!   capture_encode compare REF.bgra DEC.rgb WIDTH HEIGHT
 //!       原始画面（BGRA）和 ffmpeg 解出的同一帧（rgb24）逐像素比，报每通道最大误差、平均误差、PSNR
 //!   capture_encode synth --out DIR [--move-seconds 2] [--still-seconds 3] [--speed 8]
-//!                        [--fps 60] [--bitrate 30000] [--preset 4] [--dither 0] [--noise 0]
+//!                        [--fps 60] [--bitrate 30000] [--preset 4] [--dither 0] [--noise 0] [--bits 8|10]
 //!       P1 静止收敛：工具自己生成 CG 类测试图（色卡、渐变、1 像素细线、彩色棋盘、彩色小字），先平移 N 秒、再完全静止
 //!       N 秒，按专业模式的方式编码（静止时不给新画面、编码器重编上一帧）。出 DIR\out.h265、DIR\frames.csv、DIR\synth.txt。
 //!       --noise A 在运动段每帧叠加 ±A 的随机噪声（剧烈运动，P1 实测用 24）；不加时纯平移，码控一直压得很低，测不出收敛
@@ -150,6 +150,7 @@ mod win {
             preset: o.preset,
             dither: o.dither,
             tile: 0,
+            ten_bit: false,
         };
         println!("{cfg:?}");
         let mut enc = Encoder::new(cap.device().device, cfg)?;
@@ -409,6 +410,7 @@ mod win {
         let (mut out, mut move_s, mut still_s, mut speed) = (PathBuf::new(), 2u32, 3u32, 8u32);
         let (mut fps, mut bitrate, mut preset, mut dither) = (60u32, 30_000u32, 4u8, false);
         let mut noise = 0u32;
+        let mut ten_bit = false;
         let mut it = args.iter();
         while let Some(k) = it.next() {
             let v = it.next().ok_or_else(|| format!("{k} needs a value"))?;
@@ -422,6 +424,7 @@ mod win {
                 "--bitrate" => bitrate = v.parse()?,
                 "--preset" => preset = v.parse()?,
                 "--dither" => dither = v != "0",
+                "--bits" => ten_bit = v == "10",
                 _ => return Err(format!("unknown option {k}").into()),
             }
         }
@@ -456,7 +459,7 @@ mod win {
             dev.CreateTexture2D(&desc, None, Some(&mut tex))?;
             (tex.ok_or("CreateTexture2D returned nothing")?, dev.GetImmediateContext()?)
         };
-        let cfg = Config { width: w, height: h, fps, bitrate_kbps: bitrate, preset, dither, tile: 0 };
+        let cfg = Config { width: w, height: h, fps, bitrate_kbps: bitrate, preset, dither, tile: 0, ten_bit };
         println!("{cfg:?}; move {} frames at {speed} px/frame, then still {} frames", s.move_frames, s.still_frames);
         let mut enc = Encoder::new(device, cfg)?;
         let mut stream = fs::File::create(out.join("out.h265"))?;

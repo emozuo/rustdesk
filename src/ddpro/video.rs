@@ -412,6 +412,7 @@ fn stream(ps: &ProService, channel: Channel) -> ResultType<(End, Channel)> {
             // 8bit 桌面转 8bit YUV 只需四舍五入（Sunshine 同样不抖动），实测抖动反而误差更大、码流更大
             dither: false,
             tile: if lossless.is_some() { TILE } else { 0 },
+            ten_bit: false,
         },
     )
     .map_err(|e| anyhow!("{e}"))?;
