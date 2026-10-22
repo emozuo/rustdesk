@@ -1530,6 +1530,16 @@ pub async fn start_pa() {
                             log::info!("pa monitor: {:?}", device);
                             // systemctl --user status pulseaudio.service
                             let mut buf: Vec<u8> = vec![0; AUDIO_DATA_SIZE_U8];
+                            // Ask for one packet (10 ms) per fragment. With the server's default fragment
+                            // size, PipeWire hands over a few hundred milliseconds at once, so the audio
+                            // reached the peer in bursts.
+                            let attr = pulse::def::BufferAttr {
+                                maxlength: u32::MAX,
+                                tlength: u32::MAX,
+                                prebuf: u32::MAX,
+                                minreq: u32::MAX,
+                                fragsize: AUDIO_DATA_SIZE_U8 as u32,
+                            };
                             match psimple::Simple::new(
                                 None,                             // Use the default server
                                 &crate::get_app_name(),           // Our application’s name
@@ -1538,7 +1548,7 @@ pub async fn start_pa() {
                                 "record",                         // Description of our stream
                                 &spec,                            // Our sample format
                                 None,                             // Use default channel map
-                                None, // Use default buffering attributes
+                                Some(&attr),
                             ) {
                                 Ok(s) => loop {
                                     // A dead pulse handle fails every read at once, so ignoring the
