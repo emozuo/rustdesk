@@ -234,7 +234,7 @@ fn run(ps: ProService) -> ResultType<()> {
     let mut backoff = REBUILD_BACKOFF_MIN;
     let result = loop {
         let round = Instant::now();
-        match stream(&ps, &session, channel) {
+        match stream(&ps, channel) {
             Ok((End::SourceChanged(why), ch)) if ps.ok() => {
                 throttled_log!(
                     REBUILD_LOG_INTERVAL,
@@ -380,7 +380,7 @@ enum End {
     SourceChanged(String),
 }
 
-fn stream(ps: &ProService, session: &Session, channel: Channel) -> ResultType<(End, Channel)> {
+fn stream(ps: &ProService, channel: Channel) -> ResultType<(End, Channel)> {
     let display = ps.display;
     // 服务线程不在当前桌面（比如被控端停在锁屏界面时开始专业会话）时采集器建不起来：
     // 和画面传输中途一样，切到当前桌面后重建。主控端已经不等了的就不再重建，按故障退回通用画面
