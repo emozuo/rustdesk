@@ -86,7 +86,6 @@ impl Converter {
             let source_format = if hdr { DXGI_FORMAT_R16G16B16A16_FLOAT } else { DXGI_FORMAT_B8G8R8A8_UNORM };
 
             let params: [u32; 4] = [width, height, dither as u32, 0];
-            // 抖动运行中能切（主控端「设置抖动」），参数缓冲要可更新
             let buf = constant_buffer(device, &params)?;
 
             let source = |_| -> Result<(ID3D11Texture2D, ID3D11ShaderResourceView), Error> {
