@@ -11,7 +11,6 @@ import '../../desktop/widgets/tabbar_widget.dart';
 import '../../models/chat_model.dart';
 import '../../models/model.dart';
 import 'chat_page.dart';
-import 'ddpro_quality.dart';
 
 class DraggableChatWindow extends StatelessWidget {
   const DraggableChatWindow(
@@ -610,7 +609,6 @@ class QualityMonitor extends StatelessWidget {
                       if (qualityMonitorModel.webrtcTransport != null)
                         _row("Transport",
                             qualityMonitorModel.webrtcTransport!),
-                      ddproQualityRows(qualityMonitorModel.parent.target, _row),
                     ],
                   ),
                 )

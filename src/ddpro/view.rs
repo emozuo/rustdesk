@@ -23,7 +23,7 @@ use ddpro::{
         now_ns, CursorImage, Event, Window,
     },
     view_action, view_down, view_ended::Kind, view_up, ViewAction, ViewDown, ViewEnded, ViewKey, ViewMouse,
-    ViewResolution, ViewStart, ViewStats, ViewUp,
+    ViewResolution, ViewStart, ViewUp,
 };
 use hbb_common::{anyhow::anyhow, bail, log, protobuf::Message as _, throttled_log, ResultType};
 use std::{
@@ -49,17 +49,16 @@ const XRGB8888: u32 = 0x3432_5258;
 const TILED: [u64; 2] = [0x0100_0000_0000_0002, 0x0100_0000_0000_0001];
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const REPORT: Duration = Duration::from_secs(5);
-/// 质量面板多久报一次实测值（和 RustDesk 通用画面那条链路推面板数据的间隔一样）
+/// 悬浮球网络状态块多久更新一次（和 RustDesk 通用画面那条链路推质量面板数据的间隔一样）
 const PANEL: Duration = Duration::from_secs(1);
-/// 显示链路多久查一次（用户开关夜灯、改分辨率后几秒内面板就跟上）
+/// 显示链路多久查一次（用户开关夜灯、改分辨率后几秒内日志就跟上）
 const DISPLAY_CHECK: Duration = Duration::from_secs(5);
 
-// 显示链路问题的代号，质量面板按它显示名字和处理办法（`flutter/lib/common/widgets/ddpro_quality.dart`）
+// 显示链路问题的代号（写进日志）
 const ISSUE_LIMITED: &str = "limited_range";
 const ISSUE_NIGHT_LIGHT: &str = "night_light";
 const ISSUE_GAMMA: &str = "gamma_curve";
 const ISSUE_TRANSFORM: &str = "color_transform";
-const ISSUE_SCALED: &str = "scaled";
 /// 没有窗口事件、也没有新画面时最多等这么久（只为定时检查会话是否还在；新画面由收包线程叫醒，不靠它）
 const IDLE_WAIT: Duration = Duration::from_millis(100);
 /// 诊断：画面每次补到整屏无损时，从着色器那侧读回刚画好的画面（RGB 逐像素、从上到下）存到这个文件，和被控端原图逐像素比。
@@ -109,7 +108,7 @@ enum FromSession {
     },
 }
 
-/// 收包线程的累计统计，给主线程报质量面板用（收包线程每收一轮照抄一遍）
+/// 收包线程的累计统计，给主线程更新悬浮球状态块用（收包线程每收一轮照抄一遍）
 #[derive(Default)]
 struct Counters {
     bytes: AtomicU64,
@@ -119,7 +118,23 @@ struct Counters {
     rtt_us: AtomicU64,
 }
 
-/// 质量面板这一秒的实测值
+/// 专业画面这一秒的实测值（悬浮球网络状态块显示）。色度、位深是从本机实际解出的画面读的，不是谈判时被控端声称的
+struct Stats {
+    /// 这一秒交给合成器上屏的帧数
+    fps: u32,
+    /// 这一秒收到的码率（千比特每秒）
+    kbps: u32,
+    /// 端到端延迟中位数：被控端拿到画面 → 本机上屏，毫秒；两端时钟还没对上、或这一秒没有可算的帧时为 -1
+    latency_ms: i32,
+    /// 还没解出第一帧时为空、位深为 0
+    chroma: &'static str,
+    bit_depth: u32,
+    /// 从专业窗口打开起累计：救不回来的丢包、缺了又补齐的包
+    lost_packets: u64,
+    recovered_packets: u64,
+}
+
+/// 攒这一秒的实测值
 struct Panel {
     since: Instant,
     frames: u32,
@@ -146,17 +161,10 @@ impl Panel {
         }
     }
 
-    /// 显示链路这一秒的结论：检查线程读到的显示属性，加上画面是否逐像素（解出的尺寸 = 窗口尺寸，屏没开缩放）。
-    fn display(&mut self, win: &Window, watch: &Mutex<DisplayWatch>) -> (bool, Vec<String>) {
+    /// 告诉显示链路检查线程窗口现在在哪块屏上；画面是否逐像素（解出的尺寸 = 窗口尺寸，屏没开缩放）变了就写日志。
+    fn display(&mut self, win: &Window, want: &Mutex<Option<String>>) {
         let out = win.output();
-        let (checked, mut issues) = {
-            let mut w = watch.lock().unwrap();
-            w.want = out.as_ref().and_then(|o| o.name.clone());
-            match &w.result {
-                Some(Ok(v)) => (true, v.iter().map(|s| s.to_string()).collect()),
-                _ => (false, Vec::new()),
-            }
-        };
+        *want.lock().unwrap() = out.as_ref().and_then(|o| o.name.clone());
         let window = win.size();
         let screen_scaled = out
             .as_ref()
@@ -170,14 +178,10 @@ impl Panel {
                 out.map(|o| (o.name, o.mode, o.logical))
             );
         }
-        if scaled {
-            issues.push(ISSUE_SCALED.to_owned());
-        }
-        (checked, issues)
     }
 
     /// 取走这一秒的值并清零
-    fn take(&mut self, counters: &Counters, (display_checked, display_issues): (bool, Vec<String>)) -> ViewStats {
+    fn take(&mut self, counters: &Counters) -> Stats {
         let secs = self.since.elapsed().as_secs_f64().max(0.001);
         self.since = Instant::now();
         let bytes = counters.bytes.load(Ordering::Relaxed);
@@ -196,36 +200,26 @@ impl Panel {
             Some((false, depth)) => ("not 4:4:4", depth),
             None => ("", 0),
         };
-        ViewStats {
+        Stats {
             fps,
             kbps,
             latency_ms,
-            chroma: chroma.to_owned(),
+            chroma,
             bit_depth,
             lost_packets: counters.lost.load(Ordering::Relaxed),
             recovered_packets: counters.recovered.load(Ordering::Relaxed),
-            display_checked,
-            display_issues,
-            ..Default::default()
         }
     }
 }
 
-/// 主线程和显示链路检查线程之间：主线程写窗口所在屏的名字，检查线程写结论
-#[derive(Default)]
-struct DisplayWatch {
-    want: Option<String>,
-    /// 查到的问题（多语言表的键）；读不了显示属性时是原因
-    result: Option<Result<Vec<&'static str>, String>>,
-}
-
-/// 显示链路检查线程：每隔一会儿读一次显示属性，结论变了写日志。伽马曲线不是原样时再问 GNOME 夜灯开没开，好写明原因。
-fn watch_display(watch: Arc<Mutex<DisplayWatch>>, quit: Arc<AtomicBool>) {
+/// 显示链路检查线程：每隔一会儿读一次显示属性（窗口所在的屏，主线程写进 `want`），结论变了写日志。
+/// 伽马曲线不是原样时再问 GNOME 夜灯开没开，好写明原因。
+fn watch_display(want: Arc<Mutex<Option<String>>>, quit: Arc<AtomicBool>) {
     // 窗口已经开出来，合成器正占着显示主控权：这时打开显卡，之后一直用这一份（见 `Cards`）
     let cards = Cards::open();
     let mut last = String::new();
     while !quit.load(Ordering::Acquire) {
-        let want = watch.lock().unwrap().want.clone();
+        let want = want.lock().unwrap().clone();
         let result = cards.as_ref().map_err(String::clone).and_then(|c| c.check(want.as_deref())).map(|outputs| {
             let mut issues = Vec::new();
             for i in outputs.iter().flat_map(|o| &o.issues) {
@@ -265,7 +259,6 @@ fn watch_display(watch: Arc<Mutex<DisplayWatch>>, quit: Arc<AtomicBool>) {
             log::info!("ddpro: pro view display output (window on {want:?}): {key} ({detail})");
             last = key;
         }
-        watch.lock().unwrap().result = Some(result.map(|(issues, _)| issues));
         let until = Instant::now() + DISPLAY_CHECK;
         while Instant::now() < until && !quit.load(Ordering::Acquire) {
             std::thread::sleep(Duration::from_millis(100));
@@ -330,7 +323,7 @@ pub fn run() {
 /// 悬浮球网络状态块的几行：帧率、码率、专业通道往返、端到端延迟、丢包与补齐、画面尺寸、实际解出的格式。
 /// 画面静止时被控端只重编上一帧、不带采集时间，端到端延迟这一秒算不出，显示「-」。
 /// `lossless` 是画面里无损方块的比例（1:1 着色器显示时才有）
-fn status_lines(v: &ViewStats, rtt_us: u64, frame: Option<(u32, u32)>, lossless: Option<u32>) -> Vec<String> {
+fn status_lines(v: &Stats, rtt_us: u64, frame: Option<(u32, u32)>, lossless: Option<u32>) -> Vec<String> {
     let mut lines = vec![
         format!("{} fps", v.fps),
         format!("{:.1} Mbps", v.kbps as f64 / 1000.0),
@@ -430,7 +423,7 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
         }
     };
     let mut size = win.size();
-    let display_watch = Arc::new(Mutex::new(DisplayWatch::default()));
+    let display_watch = Arc::new(Mutex::new(None));
     {
         let (watch, quit) = (display_watch.clone(), quit.clone());
         std::thread::Builder::new()
@@ -779,15 +772,10 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
                 lossless.counts = Default::default();
             }
             if panel.since.elapsed() >= PANEL {
-                let display = panel.display(&win, &display_watch);
-                let mut stats = panel.take(&counters, display);
-                // 悬浮球的网络状态块和 RustDesk 质量面板用同一份实测值
+                panel.display(&win, &display_watch);
+                let stats = panel.take(&counters);
                 let coverage = lossless.coverage().filter(|_| shader.is_some() && lossless.size() == Some(size));
-                stats.lossless_percent = coverage.map_or(-1, |p| p as i32);
                 ball.set_status(status_lines(&stats, counters.rtt_us.load(Ordering::Relaxed), panel.frame, coverage));
-                if send_up(up, view_up::Union::Stats(stats)).is_err() {
-                    session_gone.store(true, Ordering::Release);
-                }
             }
         })
     };

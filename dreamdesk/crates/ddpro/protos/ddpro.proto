@@ -171,11 +171,11 @@ message ViewUp {
     ViewEnded ended = 3;
     // 第一帧专业画面已经显示出来（会话进程据此撤掉提示）
     bool ready = 4;
-    // 每秒一次的实测值，给 RustDesk 的质量面板
-    ViewStats stats = 5;
     // 悬浮球菜单里选的动作（「断开连接」不在这里：专业窗口直接按用户关窗结束，见 ViewEnded）
     ViewAction action = 6;
   }
+  // 5：每秒一次的实测值，给 RustDesk 的质量面板（专业画面出来后通用窗口藏起来，面板看不到，2026-10-22 删）
+  reserved 5;
 }
 
 // 悬浮球菜单里选的动作，由会话进程调 RustDesk 已有的会话功能
@@ -197,29 +197,6 @@ message ViewAction {
 message ViewResolution {
   uint32 width = 1;
   uint32 height = 2;
-}
-
-// 专业画面这一秒的实测值。色度、位深是从本机实际解出的画面读的，不是谈判时被控端声称的
-// （编码不用报：专业窗口的解码器只解 H.265）
-message ViewStats {
-  // 这一秒交给合成器上屏的帧数
-  uint32 fps = 1;
-  // 这一秒收到的码率（千比特每秒）
-  uint32 kbps = 2;
-  // 端到端延迟中位数：被控端拿到画面 → 本机上屏，毫秒；两端时钟还没对上、或这一秒没有可算的帧时为 -1
-  int32 latency_ms = 3;
-  // 还没解出第一帧时为空、位深为 0
-  string chroma = 4;
-  uint32 bit_depth = 5;
-  // 从专业窗口打开起累计：救不回来的丢包、缺了又补齐的包
-  uint64 lost_packets = 6;
-  uint64 recovered_packets = 7;
-  // 显示链路检查：查过没有（读不了显示属性时为 false），查到的会改颜色 / 不逐像素的问题代号（空 = 没问题；
-  // limited_range、night_light、gamma_curve、color_transform、scaled，界面按代号显示名字和处理办法）
-  bool display_checked = 8;
-  repeated string display_issues = 9;
-  // 静止无损：画面里已是原始像素的方块比例（0–100）；用不上无损（缩放显示、着色器不可用、还没有画面）时为 -1
-  int32 lossless_percent = 10;
 }
 
 message ViewEnded {

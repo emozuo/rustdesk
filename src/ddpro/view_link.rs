@@ -17,7 +17,7 @@ use base::message_proto::{
 };
 use ddpro::{
     reject, stopped, view_action, view_down, view_ended::Kind, view_up, Chroma, DisplayCaps, FormatCaps,
-    MediaChannel, Reject, Stopped, VideoFormat, ViewDown, ViewEnded, ViewPoint, ViewStart, ViewStats, ViewUp,
+    MediaChannel, Reject, Stopped, VideoFormat, ViewDown, ViewEnded, ViewPoint, ViewStart, ViewUp,
 };
 use hbb_common::{log, protobuf::Message as _, throttled_log, tokio::sync::mpsc::UnboundedSender};
 use std::{
@@ -66,8 +66,6 @@ struct View {
     /// 这次专业请求（开会话、换屏各算一次）挂着的提示：只报第一个原因，后面的多半是它的连带结果；
     /// 例外是主控端因「没画面」推测的通道原因，被控端随后报来的确切原因可以替换它
     notice: Option<Notice>,
-    /// 开着的专业窗口最近一次报的实测值（质量面板用）
-    stats: Option<ViewStats>,
 }
 
 impl Link {
@@ -171,13 +169,8 @@ impl Notice {
 
 /// 专业会话期间屏幕上只有一种窗口（P1 第 2 项）：专业画面出来后隐藏通用窗口（它所在的进程照常承载会话），
 /// 专业模式出故障时显示回来，用户关掉专业画面就结束这次远程。`action` 为 `hide` / `show` / `close`。
-/// 诊断开关 `DDPRO_DIAG_KEEP_WINDOW=1` 不隐藏，两个窗口并排对比用
 /// 多屏时（P1 第 8 项）只动显示 `display` 的那个窗口；`None` 是这条连接的所有窗口（关闭、切通用模式）。
 fn push_window<T: InvokeUiSession>(session: &Session<T>, display: Option<i32>, action: &str) {
-    if action == "hide" && std::env::var("DDPRO_DIAG_KEEP_WINDOW").is_ok_and(|v| v == "1") {
-        log::info!("ddpro: general window kept (DDPRO_DIAG_KEEP_WINDOW)");
-        return;
-    }
     match display {
         Some(d) => log::info!("ddpro: general window of remote display {d}: {action}"),
         None => log::info!("ddpro: general windows: {action}"),
@@ -215,51 +208,6 @@ fn push_mode<T: InvokeUiSession>(session: &Session<T>, display: Option<i32>, lev
         "ddpro_mode",
         &[("level", level), ("text", text), ("tip", tip), ("detail", detail)],
     );
-}
-
-/// 质量面板里 RustDesk 原来没有的几项（专业画面的延迟、收到的码率、位深、丢包与补发、无损覆盖比例、显示链路检查），
-/// 推给显示这块屏的窗口、加在面板末尾；`None` 时撤掉这几行（专业窗口关了）。
-fn push_quality<T: InvokeUiSession>(session: &Session<T>, display: i32, stats: Option<&ViewStats>) {
-    let fields = stats.map(|v| {
-        [
-            ("latency_ms", v.latency_ms.to_string()),
-            ("kbps", v.kbps.to_string()),
-            ("bit_depth", v.bit_depth.to_string()),
-            ("lost", v.lost_packets.to_string()),
-            ("recovered", v.recovered_packets.to_string()),
-            ("lossless", v.lossless_percent.to_string()),
-            ("display_checked", v.display_checked.to_string()),
-            (
-                "display_issues",
-                serde_json::to_string(&v.display_issues).unwrap_or_default(),
-            ),
-        ]
-    });
-    let fields: Vec<(&str, &str)> = fields
-        .iter()
-        .flatten()
-        .map(|(k, v)| (*k, v.as_str()))
-        .collect();
-    push(session, Some(display), "ddpro_quality", &fields);
-}
-
-/// RustDesk 每秒推质量面板数据之前：专业窗口开着的屏，帧率、编码、色度换成专业画面的实测值
-/// （延迟、目标码率是 RustDesk 连接本身的，照旧）。
-pub fn quality_status<T: InvokeUiSession>(session: &Session<T>, status: &mut crate::client::QualityStatus) {
-    let links = links().lock().unwrap();
-    let Some(l) = links.get(&key(session)) else {
-        return;
-    };
-    for (display, v) in &l.views {
-        let (Some(_), Some(s)) = (&v.down, &v.stats) else {
-            continue;
-        };
-        status.fps.insert((*display).max(0) as usize, s.fps as i32);
-        status.codec_format = Some(scrap::CodecFormat::H265);
-        if !s.chroma.is_empty() {
-            status.chroma = Some(s.chroma.clone());
-        }
-    }
 }
 
 /// 对端提供专业模式、版本也对得上（之后 RustDesk 为别的屏开子窗口时，那块屏也请求专业模式）。
@@ -719,7 +667,6 @@ pub fn start<T: InvokeUiSession>(
         let mut links = links().lock().unwrap();
         let view = links.entry(k).or_default().views.entry(display_index).or_default();
         view.down = Some((pid, tx));
-        view.stats = None;
     }
 
     let session_over = rustdesk.clone();
@@ -848,22 +795,6 @@ pub fn start<T: InvokeUiSession>(
                     log::info!("ddpro: the pro view is ending: {}", e.detail);
                     ended = Some(e);
                 }
-                Some(view_up::Union::Stats(v)) => {
-                    let current = {
-                        let mut links = links().lock().unwrap();
-                        let view = links.get_mut(&k).and_then(|l| l.views.get_mut(&display_index));
-                        match view {
-                            Some(view) if view.down.as_ref().is_some_and(|(p, _)| *p == pid) => {
-                                view.stats = Some(v.clone());
-                                true
-                            }
-                            _ => false,
-                        }
-                    };
-                    if current {
-                        push_quality(&session, display_index, Some(&v));
-                    }
-                }
                 _ => {}
             }
         };
@@ -879,9 +810,6 @@ pub fn start<T: InvokeUiSession>(
                 if current {
                     v.down = None;
                 }
-                if v.down.is_none() {
-                    v.stats = None;
-                }
             }
             // 显示这块屏的窗口现在有没有开着的专业窗口：这块屏还在原来的窗口里就看它；主窗口换了屏就看主窗口的新屏
             let window_has_view = match l.views.get(&display_index) {
@@ -890,10 +818,6 @@ pub fn start<T: InvokeUiSession>(
             };
             (current, window_has_view)
         };
-        // 被控端出错、切屏时窗口是先放掉再退出的（不再是当前窗口），面板那几行也要在这里撤；换屏后新窗口已经开着的不撤
-        if !window_has_view {
-            push_quality(&session, display_index, None);
-        }
         if !current {
             // 换屏时会话进程先放掉主窗口的旧专业窗口、再给新屏发专业请求。这个空档里 RustDesk 连接断了的话新窗口不会再开，
             // 通用窗口却还藏着，断开 / 重连提示看不到（2026-10-20 审查第 4 条）。等到新窗口开起来或挂上了提示（那时通用窗口
