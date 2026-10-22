@@ -11,7 +11,7 @@
 //! 要这条连接能输入（被控端给了键鼠控制权、主控端没开「仅查看」）：挂之前查，运行中变了立刻撤下。
 
 use crate::{
-    ddpro::wire::{wrap, PEER_LOG_INTERVAL},
+    ddpro::wire::{clip, wrap, PEER_LOG_INTERVAL},
     server::{service::Subscriber, ConnInner},
 };
 use ddpro::{
@@ -38,7 +38,6 @@ const ACCEPT_TIMEOUT: Duration = Duration::from_secs(15);
 const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 /// 一条连接同时透传的设备最多这么多（每块一个端口、两个线程、一个驱动命令进程，数量由对端决定）
 const MAX_DEVICES: usize = 4;
-const DETAIL_MAX: usize = 200;
 
 struct Dev {
     device_id: u32,
@@ -81,13 +80,6 @@ fn status(device_id: u32, state: State, reason: Reason, detail: String) -> dd_pr
         detail,
         ..Default::default()
     })
-}
-
-fn clip(s: &str) -> &str {
-    match s.char_indices().nth(DETAIL_MAX) {
-        Some((i, _)) => &s[..i],
-        None => s,
-    }
 }
 
 /// 首次使用：驱动的自动重连必须关掉（见 `ddpro_usb::vhci` 开头；安装时已设，这里兜底：有人重装过驱动等），

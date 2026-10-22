@@ -8,6 +8,16 @@ use std::time::Duration;
 /// 不节流就能被刷爆日志。10 秒既压得住刷屏，又不至于把挨得近的两次正常会话合并掉。
 pub const PEER_LOG_INTERVAL: Duration = Duration::from_secs(10);
 
+/// 对端给的文字（说明、设备名等，长度由对端决定）写进日志前截到 200 个字符
+#[cfg(any(windows, target_os = "linux"))]
+pub fn clip(s: &str) -> &str {
+    const DETAIL_MAX: usize = 200;
+    match s.char_indices().nth(DETAIL_MAX) {
+        Some((i, _)) => &s[..i],
+        None => s,
+    }
+}
+
 /// 把专业协议消息装进 RustDesk 的 Message。编码失败只记日志，调用方拿到 None 就不发。
 pub fn wrap(union: ddpro::dd_pro::Union) -> Option<Message> {
     match ddpro::encode(union) {

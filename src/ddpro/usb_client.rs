@@ -10,7 +10,7 @@
 
 use crate::{
     client::Data,
-    ddpro::wire::{wrap, PEER_LOG_INTERVAL},
+    ddpro::wire::{clip, wrap, PEER_LOG_INTERVAL},
     ui_session_interface::{InvokeUiSession, Session},
 };
 use ddpro::{
@@ -33,8 +33,6 @@ use std::{
 const SCAN_INTERVAL: Duration = Duration::from_secs(2);
 /// 同时在等导入请求的流最多这么多（被控端开流的数量由对端决定）
 const MAX_WAITING: usize = 4;
-/// 对端给的说明文字写进日志前截到这么长
-const DETAIL_MAX: usize = 200;
 
 enum Inbound {
     Peer(dd_pro::Union),
@@ -88,13 +86,6 @@ fn usb_data(stream_id: u32, data: Vec<u8>) -> dd_pro::Union {
 fn send(rustdesk: &UnboundedSender<Data>, u: dd_pro::Union) {
     if let Some(m) = wrap(u) {
         rustdesk.send(Data::Message(m)).ok();
-    }
-}
-
-fn clip(s: &str) -> &str {
-    match s.char_indices().nth(DETAIL_MAX) {
-        Some((i, _)) => &s[..i],
-        None => s,
     }
 }
 
@@ -221,6 +212,11 @@ impl Worker {
                         detail: "too many streams".to_owned(),
                         ..Default::default()
                     }));
+                    return;
+                }
+                // 流号由被控端按连接递增，正常不会重复；重复就拒绝，不覆盖那条（正在透传的话内核那一端就没人收回了）
+                if self.streams.contains_key(&o.stream_id) {
+                    throttled_log!(PEER_LOG_INTERVAL, warn, "ddpro: usb: the remote side reopened stream {}", o.stream_id);
                     return;
                 }
                 self.streams.insert(
