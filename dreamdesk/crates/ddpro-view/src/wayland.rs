@@ -195,6 +195,12 @@ struct State {
     shm: Shm,
     pointer: Option<wl_pointer::WlPointer>,
     keyboard: Option<wl_keyboard::WlKeyboard>,
+    /// 长按连发的参数（每秒几次、按住多少毫秒后开始），合成器给的。合成器只发一次按下，连发要窗口自己生成：
+    /// 远程 Windows 不会替注入的按键连发，RustDesk 通用窗口转发的也是本机系统连发出的一串按下。
+    /// 每秒 0 次是合成器自己连发（wl_seat v10 的「重复」）或用户关了连发
+    repeat_info: (u32, u32),
+    /// 正在连发的键和下一次连发的时刻：只连发最后按下的那个键（和本机系统一样），松开它、失去焦点就停
+    repeating: Option<(u32, Instant)>,
     /// 鼠标进入窗口时合成器给的序号，设置指针要带上它
     pointer_serial: Option<u32>,
     cursor_surface: wl_surface::WlSurface,
@@ -320,6 +326,8 @@ impl Window {
                 shm,
                 pointer: None,
                 keyboard: None,
+                repeat_info: (0, 0),
+                repeating: None,
                 pointer_serial: None,
                 cursor_surface,
                 cursor_pool: None,
@@ -576,6 +584,11 @@ impl Window {
                         revents: 0,
                     },
                 ];
+                // 按住的键到连发时刻就醒来，不等画面
+                let timeout = match self.state.repeating {
+                    Some((_, at)) => timeout.min(at.saturating_duration_since(Instant::now())),
+                    None => timeout,
+                };
                 let ms = timeout.as_millis().min(i32::MAX as u128) as i32;
                 let n = unsafe { libc::poll(pfds.as_mut_ptr(), pfds.len() as libc::nfds_t, ms) };
                 if n > 0 && pfds[0].revents != 0 {
@@ -588,6 +601,15 @@ impl Window {
                 }
             }
             self.queue.dispatch_pending(&mut self.state).map_err(err("handle Wayland events"))?;
+        }
+        if let Some((key, at)) = self.state.repeating {
+            let now = Instant::now();
+            if now >= at {
+                // 一次只补一下：主循环被画面占着晚醒了也不一口气补一串
+                let interval = Duration::from_millis(1000 / u64::from(self.state.repeat_info.0.max(1)));
+                self.state.repeating = Some((key, now + interval));
+                self.state.events.push(Event::Key { evdev: key, down: true });
+            }
         }
         Ok(mem::take(&mut self.state.events))
     }
@@ -902,6 +924,7 @@ impl SeatHandler for State {
                     k.release();
                 }
                 self.keyboard_seat = None;
+                self.repeating = None;
                 self.uninhibit_shortcuts();
                 self.events.push(Event::KeyboardLeave);
             }
@@ -960,6 +983,11 @@ impl PointerHandler for State {
     }
 }
 
+/// 不连发的键（和 xkb 默认布局一致）：左右 Ctrl / Shift / Alt / Win 和三个锁定键（evdev 键码）
+fn is_modifier(evdev: u32) -> bool {
+    matches!(evdev, 29 | 42 | 54 | 56 | 58 | 69 | 70 | 97 | 100 | 125 | 126)
+}
+
 impl Dispatch<wl_keyboard::WlKeyboard, ()> for State {
     fn event(
         state: &mut Self,
@@ -979,18 +1007,35 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for State {
             }
             wl_keyboard::Event::Key { key, state: WEnum::Value(s), .. } => {
                 let down = match s {
-                    wl_keyboard::KeyState::Pressed => true,
-                    wl_keyboard::KeyState::Released => false,
-                    // wl_seat v10 起合成器会发「重复」：远程系统按住键自己会重复，这里不转发（当成抬起会让远程松键）
+                    wl_keyboard::KeyState::Pressed => {
+                        let (rate, delay) = state.repeat_info;
+                        if rate > 0 && !is_modifier(key) {
+                            state.repeating = Some((key, Instant::now() + Duration::from_millis(delay.into())));
+                        }
+                        true
+                    }
+                    wl_keyboard::KeyState::Released => {
+                        if state.repeating.is_some_and(|(k, _)| k == key) {
+                            state.repeating = None;
+                        }
+                        false
+                    }
+                    // 合成器自己连发（wl_seat v10）：和按下一样转发
+                    wl_keyboard::KeyState::Repeated => true,
                     _ => return,
                 };
                 state.events.push(Event::Key { evdev: key, down });
+            }
+            wl_keyboard::Event::RepeatInfo { rate, delay } => {
+                state.repeat_info = (rate.max(0) as u32, delay.max(0) as u32);
+                state.repeating = None;
             }
             wl_keyboard::Event::Modifiers { mods_depressed, mods_locked, .. } => state.events.push(Event::Modifiers {
                 depressed: mods_depressed,
                 locked: mods_locked,
             }),
             wl_keyboard::Event::Leave { .. } => {
+                state.repeating = None;
                 state.uninhibit_shortcuts();
                 state.events.push(Event::KeyboardLeave);
             }
