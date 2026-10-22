@@ -22,7 +22,7 @@ use ddpro::{
     media::{Event as MediaEvent, Ledger, Receiver, Stage},
     view::{
         display_check::{Cards, Issue},
-        now_ns, CursorImage, Event, LayerImage, Window,
+        now_ns, premultiplied_bgra, CursorImage, Event, LayerImage, Window,
     },
     view_action, view_down, view_ended::Kind, view_up, ViewAction, ViewDown, ViewEnded, ViewKey, ViewMouse,
     ViewResolution, ViewStart, ViewUp,
@@ -740,13 +740,17 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
                 if !by_shader {
                     // 视频处理单元只按 BT.709 转，做不了 PQ 还原：HDR 画面要缩放（被控端分辨率和本机屏不一样）时大声失败，不显示成发白的颜色
                     if hdr_white.is_some() {
-                        bail!(
-                            "HDR video is shown only 1:1 ({}x{} video on a {}x{} screen): set the remote resolution to match this screen",
-                            frame.width(),
-                            frame.height(),
-                            size.0,
-                            size.1
-                        );
+                        if (frame.width(), frame.height()) != size {
+                            bail!(
+                                "HDR video is shown only 1:1 ({}x{} video on a {}x{} screen): set the remote resolution to match this screen",
+                                frame.width(),
+                                frame.height(),
+                                size.0,
+                                size.1
+                            );
+                        }
+                        // 尺寸对得上、却没走着色器：着色器设不上 HDR 或出过错（原因在上面的告警里），不是分辨率的事
+                        bail!("HDR video needs the shader conversion, which failed on this computer (see the warning before)");
                     }
                     conv.convert(&frame, slot, RgbStandard::Bt709)
                         .map_err(|e| anyhow!("{e}"))?;
@@ -1194,15 +1198,8 @@ impl RemoteCursor {
         let Some(c) = &self.image else {
             return Ok(());
         };
-        // wl_shm 的 ARGB8888 在内存里按 B G R A 排，且要求预乘透明度（和系统指针同一转换）
-        let bgra = c
-            .rgba
-            .chunks_exact(4)
-            .flat_map(|p| {
-                let a = p[3] as u32;
-                [(p[2] as u32 * a / 255) as u8, (p[1] as u32 * a / 255) as u8, (p[0] as u32 * a / 255) as u8, p[3]]
-            })
-            .collect();
+        let mut bgra = vec![0u8; c.rgba.len()];
+        premultiplied_bgra(&c.rgba, &mut bgra);
         win.set_layer(
             LAYER_REMOTE_CURSOR,
             Some(&LayerImage {

@@ -134,6 +134,17 @@ pub struct CursorImage {
     pub rgba: Vec<u8>,
 }
 
+/// 光标的 RGBA（未预乘）转成 wl_shm 的 ARGB8888：内存里按 B G R A 排，且要求预乘透明度。系统指针和远程光标图层共用
+pub fn premultiplied_bgra(rgba: &[u8], bgra: &mut [u8]) {
+    for (dst, src) in bgra.chunks_exact_mut(4).zip(rgba.chunks_exact(4)) {
+        let a = src[3] as u32;
+        dst[0] = (src[2] as u32 * a / 255) as u8;
+        dst[1] = (src[1] as u32 * a / 255) as u8;
+        dst[2] = (src[0] as u32 * a / 255) as u8;
+        dst[3] = src[3];
+    }
+}
+
 /// 合成器对这个窗口说的格式支持：能用的（格式, modifier），以及其中能直接送显示硬件的。
 #[derive(Debug, Default, Clone)]
 pub struct FormatSupport {
@@ -646,14 +657,7 @@ impl State {
         let (buffer, canvas) = pool
             .create_buffer(w as i32, h as i32, (w * 4) as i32, wl_shm::Format::Argb8888)
             .map_err(err("create a cursor buffer"))?;
-        // wl_shm 的 ARGB8888 在内存里按 B G R A 排，且要求预乘透明度
-        for (dst, src) in canvas.chunks_exact_mut(4).zip(c.rgba.chunks_exact(4)) {
-            let a = src[3] as u32;
-            dst[0] = (src[2] as u32 * a / 255) as u8;
-            dst[1] = (src[1] as u32 * a / 255) as u8;
-            dst[2] = (src[0] as u32 * a / 255) as u8;
-            dst[3] = src[3];
-        }
+        premultiplied_bgra(&c.rgba, canvas);
         buffer.attach_to(&self.cursor_surface).map_err(err("attach the cursor buffer"))?;
         self.cursor_surface.damage_buffer(0, 0, w as i32, h as i32);
         self.cursor_surface.commit();

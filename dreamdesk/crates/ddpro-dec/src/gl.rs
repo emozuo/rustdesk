@@ -412,7 +412,7 @@ impl GlConverter {
         if size != (self.width, self.height) {
             return Err(Error(format!("{}x{} frame on a {}x{} output: shaders only convert 1:1", size.0, size.1, self.width, self.height)));
         }
-        // 换尺寸时新转换器先建、旧的后析构，旧的析构会把线程的当前上下文清掉：每次都切回自己的（已是当前的话驱动不做事）
+        // 每次都切回自己的上下文：别的 EGL 用户（转换器重建、驱动内部）可能把线程的当前上下文换掉，已是当前的话驱动不做事
         self.egl
             .make_current(self.display, None, None, Some(self.context))
             .map_err(err("make the context current"))?;
@@ -544,12 +544,7 @@ impl GlConverter {
 
     /// 一张 dmabuf 导入成 EGL 图像（只认单平面的打包格式，`as_fourcc` 是按什么格式理解它的内存）
     fn import(&self, e: &Exported, as_fourcc: u32) -> Result<egl::Image> {
-        let ([layer], [fd]) = (e.layers.as_slice(), e.fds.as_slice()) else {
-            return Err(Error(format!("{} layer(s) / {} object(s): expected one packed plane", e.layers.len(), e.fds.len())));
-        };
-        let [plane] = layer.planes.as_slice() else {
-            return Err(Error(format!("{} plane(s): expected one packed plane", layer.planes.len())));
-        };
+        let (fd, _, plane) = e.packed_plane()?;
         let modifier = e.modifiers.first().copied().unwrap_or(DRM_FORMAT_MOD_INVALID);
         let mut attrs = vec![
             egl::WIDTH as egl::Attrib,

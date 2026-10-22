@@ -413,12 +413,7 @@ impl Converter {
         Self::build(dev, width, height, |c| {
             let display = c.dev.display();
             for img in images {
-                let ([layer], [fd]) = (img.layers.as_slice(), img.fds.as_slice()) else {
-                    return Err(Error(format!("{} layer(s) / {} object(s): expected one packed plane", img.layers.len(), img.fds.len())));
-                };
-                let [plane] = layer.planes.as_slice() else {
-                    return Err(Error(format!("{} plane(s): expected one packed plane", layer.planes.len())));
-                };
+                let (fd, layer, plane) = img.packed_plane()?;
                 // dmabuf 的大小只能从文件末尾的位置读（fstat 报 0）
                 let size = fd
                     .try_clone()
@@ -709,6 +704,19 @@ pub struct Exported {
     pub modifiers: Vec<u64>,
     pub fds: Vec<OwnedFd>,
     pub layers: Vec<Layer>,
+}
+
+impl Exported {
+    /// 单平面打包格式（一个内存对象、一层、一个平面）的那个对象、那一层和那个平面；不是这种排布就报错
+    pub fn packed_plane(&self) -> Result<(&OwnedFd, &Layer, &Plane)> {
+        let ([layer], [fd]) = (self.layers.as_slice(), self.fds.as_slice()) else {
+            return Err(Error(format!("{} layer(s) / {} object(s): expected one packed plane", self.layers.len(), self.fds.len())));
+        };
+        let [plane] = layer.planes.as_slice() else {
+            return Err(Error(format!("{} plane(s): expected one packed plane", layer.planes.len())));
+        };
+        Ok((fd, layer, plane))
+    }
 }
 
 #[derive(Debug)]
