@@ -596,7 +596,7 @@ pub fn start<T: InvokeUiSession>(
     display_index: i32,
 ) {
     let k = key(session);
-    let (shown, is_main, display, display_count, origins, show_status) = links()
+    let (shown, is_main, display, origins, show_status) = links()
         .lock()
         .unwrap()
         .get(&k)
@@ -607,7 +607,6 @@ pub fn start<T: InvokeUiSession>(
                 l.shown(display_index),
                 display_index == l.index,
                 l.rects.get(&display_index).copied().unwrap_or_default(),
-                l.rects.len() as u32,
                 origins,
                 l.show_status,
             )
@@ -665,7 +664,6 @@ pub fn start<T: InvokeUiSession>(
         remote_width: display.2,
         remote_height: display.3,
         title: format!("{} - pro", session.get_id()),
-        display_count,
         display_index,
         show_status,
         display_origins: origins

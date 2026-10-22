@@ -63,23 +63,12 @@ struct Pacer {
 }
 
 impl Pacer {
-    fn new(kbps: u32, fps: u32) -> Self {
+    /// `factor`：补充速度是平均码率的几倍——画面用 [`PACE_FACTOR`]；无损方块用 1（按给定码率匀速补充）
+    fn new(kbps: u32, fps: u32, factor: f64) -> Self {
         let bytes_per_sec = kbps as f64 * 1000.0 / 8.0;
         let burst = bytes_per_sec / fps.max(1) as f64;
         Self {
-            rate: bytes_per_sec * PACE_FACTOR,
-            burst,
-            tokens: burst,
-            last: Instant::now(),
-        }
-    }
-
-    /// 无损方块的预算：按给定码率匀速补充（不乘倍数），桶容量一帧的量
-    fn tiles(kbps: u32, fps: u32) -> Self {
-        let bytes_per_sec = kbps as f64 * 1000.0 / 8.0;
-        let burst = bytes_per_sec / fps.max(1) as f64;
-        Self {
-            rate: bytes_per_sec,
+            rate: bytes_per_sec * factor,
             burst,
             tokens: burst,
             last: Instant::now(),
@@ -268,10 +257,15 @@ impl Sender {
         self.peer
     }
 
+    /// 被控端时间轴的零点（同 [`Listener::epoch`]）
+    pub fn epoch(&self) -> Instant {
+        self.epoch
+    }
+
     /// 打开发包节奏：`kbps` / `fps` 是编码器的平均码率和帧率；码率为 0 或不调就一口气发（自测用）。
     pub fn pace(&mut self, kbps: u32, fps: u32) {
         let on = kbps > 0;
-        self.pacer = on.then(|| Pacer::new(kbps, fps));
+        self.pacer = on.then(|| Pacer::new(kbps, fps, PACE_FACTOR));
         let packed = if on { (kbps as u64) << 32 | fps as u64 } else { 0 };
         self.rtx.pace.store(packed, Ordering::Relaxed);
     }
@@ -341,7 +335,7 @@ impl Sender {
     /// 无损方块的预算：`kbps` 平均码率（内网实测 800 Mbps 突发不丢包，见 P1 实施记录第 7 节），`fps` 画面帧率
     /// （桶容量是一帧的量）。0 = 不限。
     pub fn pace_tiles(&mut self, kbps: u32, fps: u32) {
-        self.tile_pacer = (kbps > 0).then(|| Pacer::tiles(kbps, fps));
+        self.tile_pacer = (kbps > 0).then(|| Pacer::new(kbps, fps, 1.0));
     }
 
     /// 现在不用等就能发多少字节的方块（按 [`Sender::pace_tiles`] 的预算）。调用方据此决定这一帧再发哪些方块，
@@ -494,7 +488,7 @@ impl Control {
         let mut failed = asked - wanted.len();
         let pace = self.rtx.pace.load(Ordering::Relaxed);
         if self.pacer.as_ref().map(|(p, _)| *p) != Some(pace) {
-            self.pacer = (pace != 0).then(|| (pace, Pacer::new((pace >> 32) as u32, pace as u32)));
+            self.pacer = (pace != 0).then(|| (pace, Pacer::new((pace >> 32) as u32, pace as u32, PACE_FACTOR)));
         }
         for orig in wanted {
             let sent = rtx_packet(&orig, self.keys.ssrc_rtx(), self.rtx_seq).and_then(|pkt| {

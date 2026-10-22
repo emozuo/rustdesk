@@ -4129,7 +4129,6 @@ impl Connection {
                 #[cfg(feature = "dd-pro")]
                 Some(message::Union::DdPro(data)) => {
                     let ctx = crate::ddpro::server::ConnCtx {
-                        conn_id: self.inner.id(),
                         conn: self.inner.clone(),
                         server: self.server.clone(),
                         local_ip: self.stream.local_addr().ip(),

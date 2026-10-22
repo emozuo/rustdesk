@@ -62,8 +62,6 @@ const ISSUE_TRANSFORM: &str = "color_transform";
 const ISSUE_SCALED: &str = "scaled";
 /// 没有窗口事件、也没有新画面时最多等这么久（只为定时检查会话是否还在；新画面由收包线程叫醒，不靠它）
 const IDLE_WAIT: Duration = Duration::from_millis(100);
-/// 诊断：静止且整屏无损时照样每帧上屏（默认不上屏，见主循环）
-const DIAG_ALWAYS_PRESENT: &str = "DDPRO_DIAG_ALWAYS_PRESENT";
 /// 诊断：画面每次补到整屏无损时，从着色器那侧读回刚画好的画面（RGB 逐像素、从上到下）存到这个文件，和被控端原图逐像素比。
 /// 文件名后面接 `.屏号`（多屏时每块屏一个专业窗口，各存各的）
 const DIAG_LOSSLESS_DUMP: &str = "DDPRO_DIAG_LOSSLESS_DUMP";
@@ -449,7 +447,13 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
     }
 
     let mut input = Input::new(&start, size, display_fixed);
-    let mut ball = Ball::new(size, start.display_count, start.display_index, display_fixed, start.show_status);
+    let mut ball = Ball::new(
+        size,
+        start.display_origins.len() as u32,
+        start.display_index,
+        display_fixed,
+        start.show_status,
+    );
     let mut ledger = Ledger::default();
     let mut shown: HashMap<usize, Shown> = HashMap::new();
     let mut last_report = Instant::now();
@@ -467,7 +471,6 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
     let mut was_full = false;
     // 诊断（同上开关）：最近一次带变化的画面到达的时刻，量「无损补齐后多久上屏」
     let mut last_change = Instant::now();
-    let always_present = std::env::var_os(DIAG_ALWAYS_PRESENT).is_some();
     // 这一段日志间隔里因为静止而没上屏的帧数
     let mut idle_frames = 0u64;
     // 主循环包一层：中途任何一步出错，也马上告诉被控端不要了（不让它白等 3 秒心跳超时）
@@ -652,7 +655,7 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
             // 静止且整屏已是无损像素：屏幕上的就是被控端的原图，这一帧解出来再画一遍也一字不差——只等解码完（解码出错照样要关键帧），
             // 不转换、不交给合成器（静止时专业窗口和合成器每秒白画 60 帧）。哪块一动，那一帧照常画
             let latest = match latest {
-                Some((frame, _)) if !always_present && one_to_one && shader.is_some() && lossless.settled() => {
+                Some((frame, _)) if one_to_one && shader.is_some() && lossless.settled() => {
                     if let Err(e) = dec.wait(&frame) {
                         throttled_log!(
                             PEER_LOG_INTERVAL,

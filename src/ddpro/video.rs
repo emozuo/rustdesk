@@ -10,7 +10,7 @@
 //! 一样）。专业通道跨重建保留，只按新尺寸重建采集器和编码器（P0 实施记录第 5 步「专业模式跟随画面源变化」）。
 
 use crate::{
-    ddpro::lossless::Lossless,
+    ddpro::{lossless::Lossless, server::pro_service_name},
     privacy_mode::{
         get_privacy_mode_conn_id, is_current_privacy_mode_impl, DEFAULT_PRIVACY_MODE_IMPL,
         INVALID_PRIVACY_MODE_CONN_ID, PRIVACY_MODE_IMPL_WIN_EXCLUDE_FROM_CAPTURE, PRIVACY_MODE_IMPL_WIN_MAG,
@@ -25,6 +25,7 @@ use crate::{
 use ddpro::{
     enc::{Config, Encoder},
     media::{tile::TILE, Keys, Listener, Sender, Stamp},
+    stopped::Reason,
     MediaChannel,
 };
 use hbb_common::{anyhow::anyhow, bail, log, throttled_log, ResultType};
@@ -48,13 +49,11 @@ const PRESET: u8 = 4;
 const LOSSLESS_KBPS: u32 = 400_000;
 /// 静止不编码（P1 第 9 项）：大变化之后画面内容不变了，照旧重编这么多帧再停——给用不上无损补块的主控端（缩放显示）留画质收敛。
 /// 和 RustDesk 通用模式的「静止刷新」同一思路（`video_service/static_refresh.rs`：停下后按实测预算重复编码再停），
-/// 它给 H.265 NVENC 最高画质档的预算是 30 帧；P1 第 1 项实测静止后第 30 帧 PSNR 58 dB。要大于无损的静止门槛
-/// （`lossless.rs` 的 STILL_FRAMES，6 帧）：停编期间不再给无损模块报「这帧哪些块没变」，各块的静止计数得在停编前到顶
+/// 它给 H.265 NVENC 最高画质档的预算是 30 帧；P1 第 1 项实测静止后第 30 帧 PSNR 58 dB
 const STILL_TAIL: u32 = 30;
 /// 小变化（不到八分之一屏：任务栏时钟、光标闪烁、小图标）只重编这么多帧：小块区域第一帧就编得清楚，1:1 显示时还马上被无损补齐。
 /// 按 STILL_TAIL 收尾的话时钟每秒跳一次编码器就停不下来（2026-10-21 夜 209.32 实测：两块屏任务栏每秒变 2 块，「静止」时编码器仍占 20–26%）
 const STILL_TAIL_SMALL: u32 = 8;
-const _: () = assert!(STILL_TAIL_SMALL > super::lossless::STILL_FRAMES as u32);
 const _: () = assert!(STILL_TAIL >= STILL_TAIL_SMALL);
 /// 停编期间每隔这么久还编一帧（重复画面）：主控端 3 秒收不到画面包就判通道断了；这一帧也让主控端发现停编前最后一帧丢的包、要求补发
 const STILL_KEEPALIVE: Duration = Duration::from_secs(1);
@@ -64,10 +63,6 @@ const CHANNEL_TIMEOUT: Duration = Duration::from_secs(3);
 const FIRST_FRAME_TIMEOUT: Duration = Duration::from_secs(1);
 /// 启动阶段（等通用画面服务放开这块屏）总共重试多久
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(3);
-/// 诊断：被控端把发出的码流存到这个文件（和主控端同名的开关，见 `client.rs`）
-const DIAG_DUMP: &str = "DDPRO_DIAG_DUMP";
-/// 诊断：每隔这么多秒故意弄坏一帧非关键帧中间的一个字节，验证主控端解码出错后能不能自己恢复
-const DIAG_CORRUPT: &str = "DDPRO_DIAG_CORRUPT_SECS";
 /// 诊断：不做静止无损（只发视频，对比画质、排查问题用）
 const DIAG_NO_LOSSLESS: &str = "DDPRO_DIAG_NO_LOSSLESS";
 /// 诊断：停编期间心跳帧的间隔（毫秒，默认 [`STILL_KEEPALIVE`]），量「隔多久编一帧显卡才不降频」用；0 = 不停编（和改之前一样每帧编）
@@ -81,7 +76,6 @@ const REBUILD_BACKOFF_MAX: Duration = Duration::from_secs(1);
 const REBUILD_LOG_INTERVAL: Duration = Duration::from_secs(10);
 
 struct Session {
-    conn_id: i32,
     conn: ConnInner,
     server: ServerPtrWeak,
     /// 谈成时开好的专业画面通道，服务线程开始时取走
@@ -94,7 +88,7 @@ struct Session {
 enum Channel {
     /// 端口开好了，等主控端来打招呼；过了截止时间主控端就不再连了（它也只等这么久）
     Waiting(Listener, Instant),
-    Open(Open),
+    Open(Sender),
 }
 
 impl Channel {
@@ -105,12 +99,6 @@ impl Channel {
             Channel::Open(_) => true,
         }
     }
-}
-
-struct Open {
-    sender: Sender,
-    /// RTP 时间戳的起点：重建后时间戳接着走，不回到 0
-    epoch: Instant,
 }
 
 /// 采集器建立时这块屏的情况，用来和 RustDesk 的显示列表比对有没有变化
@@ -124,10 +112,6 @@ struct Geometry {
 lazy_static::lazy_static! {
     /// 按屏登记的专业会话
     static ref SESSIONS: Mutex<HashMap<usize, Arc<Session>>> = Default::default();
-}
-
-fn service_name(display: usize) -> String {
-    format!("{}{display}", super::server::PRO_SERVICE_PREFIX)
 }
 
 fn general_name(display: usize) -> String {
@@ -158,23 +142,15 @@ fn capturer(display: usize) -> ResultType<(Capturer, Geometry)> {
     Ok((c, geometry))
 }
 
-/// 这块屏是否被别的专业会话占着（还订阅着专业服务才算；断掉的会话留下的登记不算）。
-pub fn busy_by_other_pro(display: usize, conn_id: i32, server: &ServerPtrWeak) -> bool {
-    let Some(other) = SESSIONS.lock().unwrap().get(&display).cloned() else {
-        return false;
-    };
-    if other.conn_id == conn_id {
-        return false;
-    }
-    server
-        .upgrade()
-        .is_some_and(|s| s.read().unwrap().is_subscribed(&service_name(display), other.conn_id))
+/// 这块屏登记的专业会话属于别的连接时，返回那个连接（它是否还订阅着专业服务由调用方在服务器锁里查）。
+pub fn other_session(display: usize, conn_id: i32) -> Option<i32> {
+    SESSIONS.lock().unwrap().get(&display).map(|o| o.conn.id()).filter(|&id| id != conn_id)
 }
 
 /// 主控端开 / 关抖动：只认这块屏上本连接自己的专业会话，返回是否认了。
 pub fn set_dither(display: usize, conn_id: i32, dither: bool) -> bool {
     match SESSIONS.lock().unwrap().get(&display) {
-        Some(s) if s.conn_id == conn_id => {
+        Some(s) if s.conn.id() == conn_id => {
             s.dither.store(dither, Ordering::Release);
             true
         }
@@ -212,7 +188,6 @@ pub fn start(
     let listener = Listener::bind(local_ip, keys.clone())?;
     let port = listener.local_addr()?.port();
     let session = Arc::new(Session {
-        conn_id,
         conn: conn.clone(),
         server: server.clone(),
         channel: Mutex::new(Some(Channel::Waiting(listener, Instant::now() + CHANNEL_TIMEOUT))),
@@ -221,18 +196,10 @@ pub fn start(
 
     let server = server.upgrade().ok_or_else(|| anyhow!("server is gone"))?;
     let mut s = server.write().unwrap();
-    let pro = service_name(display);
-    let other = SESSIONS.lock().unwrap().get(&display).map(|o| o.conn_id).filter(|&id| id != conn_id);
-    if other.is_some_and(|id| s.is_subscribed(&pro, id)) {
-        return Err(Busy(format!("display {display} already has a pro session")).into());
+    if let Some(why) = super::server::busy(&s, display, conn_id) {
+        return Err(Busy(why).into());
     }
-    let viewers = s.display_viewers(display, conn_id).len();
-    if viewers > 0 {
-        return Err(Busy(format!(
-            "display {display} is being viewed in general mode by {viewers} other connection(s)"
-        ))
-        .into());
-    }
+    let pro = pro_service_name(display);
     SESSIONS.lock().unwrap().insert(display, session);
     if !s.contains(&pro) {
         s.add_service(Box::new(new_service(display)));
@@ -264,7 +231,7 @@ impl DerefMut for ProService {
 
 fn new_service(display: usize) -> GenericService {
     let ps = ProService {
-        sp: GenericService::new(service_name(display), false),
+        sp: GenericService::new(pro_service_name(display), false),
         display,
     };
     GenericService::run(&ps, run);
@@ -347,14 +314,7 @@ fn run(ps: ProService) -> ResultType<()> {
 /// （不必等画面通道 3 秒没画面才发现，原因也不丢）
 /// 带上屏号：主控端切过屏的话，它据此认出这是旧屏的消息、不去动新屏的专业窗口
 fn tell_controller(session: &Session, display: usize, e: &hbb_common::anyhow::Error) {
-    use ddpro::stopped::Reason;
-    let reason = match e.downcast_ref::<ChannelError>() {
-        Some(ChannelError::Lost) => Reason::CHANNEL_LOST,
-        Some(ChannelError::NeverOpened(_)) => Reason::CHANNEL_FAILED,
-        None if e.is::<NoImage>() => Reason::NO_IMAGE,
-        None if e.is::<MagPrivacy>() => Reason::PRIVACY_MODE,
-        None => Reason::VIDEO_ERROR,
-    };
+    let reason = e.downcast_ref::<Stop>().map_or(Reason::VIDEO_ERROR, |s| s.0);
     if let Some(msg) = super::wire::wrap(ddpro::stopped(reason, e.to_string(), display as u32)) {
         session.conn.clone().send(Arc::new(msg));
     }
@@ -368,49 +328,21 @@ fn tell_released(session: &Session, display: usize) {
     }
 }
 
-/// 画面通道本身的问题（不是采集、编码出错）：告诉主控端时要分开说，它挂的提示不一样
+/// 要单独告诉主控端原因的故障（它挂的提示按原因分）；其余采集、编码出错都按 VIDEO_ERROR 报：
+/// - CHANNEL_LOST：通了之后主控端 3 秒没心跳（防火墙挡了回程、网络断了、主控端那边没了）
+/// - CHANNEL_FAILED：主控端一直没来打招呼
+/// - NO_IMAGE：建了采集器一直没有第一帧（常见于没接显示器——通用画面这时会改用 CPU 截屏，专业画面没有这条路）
+/// - PRIVACY_MODE：隐私模式开着且用的是放大镜实现（见 [`mag_privacy_mode`]）
 #[derive(Debug)]
-enum ChannelError {
-    /// 通了之后主控端 3 秒没心跳（防火墙挡了回程、网络断了、主控端那边没了）
-    Lost,
-    /// 主控端一直没来打招呼
-    NeverOpened(String),
-}
+struct Stop(Reason, String);
 
-impl std::fmt::Display for ChannelError {
+impl std::fmt::Display for Stop {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ChannelError::Lost => write!(f, "the controller stopped answering on the pro channel"),
-            ChannelError::NeverOpened(e) => write!(f, "the controller never opened the pro channel: {e}"),
-        }
+        f.write_str(&self.1)
     }
 }
 
-impl std::error::Error for ChannelError {}
-
-/// 建了采集器一直没有第一帧：这块屏拿不到画面（常见于没接显示器——通用画面这时会改用 CPU 截屏，专业画面没有这条路）
-#[derive(Debug)]
-struct NoImage(usize);
-
-impl std::fmt::Display for NoImage {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "no first frame from display {}", self.0)
-    }
-}
-
-impl std::error::Error for NoImage {}
-
-/// 隐私模式开着且用的是放大镜实现（见 [`mag_privacy_mode`]）
-#[derive(Debug)]
-struct MagPrivacy;
-
-impl std::fmt::Display for MagPrivacy {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "privacy mode uses the magnifier, which pro capture cannot see through")
-    }
-}
-
-impl std::error::Error for MagPrivacy {}
+impl std::error::Error for Stop {}
 
 enum Back {
     /// 连接已经关了
@@ -439,15 +371,15 @@ fn back_to_general(display: usize, session: &Session) -> Back {
     if !SESSIONS.lock().unwrap().get(&display).is_some_and(|s| std::ptr::eq(Arc::as_ptr(s), session)) {
         return Back::Superseded;
     }
-    let pro = service_name(display);
-    let id = session.conn_id;
+    let pro = pro_service_name(display);
+    let id = session.conn.id();
     if !s.is_subscribed(&pro, id) {
         return Back::Closed;
     }
     s.subscribe(&pro, session.conn.clone(), false);
     let elsewhere = (0..ndisplay)
         .filter(|&i| i != display)
-        .any(|i| s.is_subscribed(&general_name(i), id) || s.is_subscribed(&service_name(i), id));
+        .any(|i| s.is_subscribed(&general_name(i), id) || s.is_subscribed(&pro_service_name(i), id));
     if elsewhere {
         return Back::OtherDisplay;
     }
@@ -481,17 +413,8 @@ fn stream(ps: &ProService, session: &Session, channel: Channel) -> ResultType<(E
         Err(e) => return Err(e),
     };
     let dev = cap.device();
-    // 诊断：把发出去的码流也存一份，和主控端收到的逐字节比
-    let mut dump = std::env::var(DIAG_DUMP)
-        .ok()
-        .and_then(|p| std::fs::File::create(p).ok());
-    let corrupt_every = std::env::var(DIAG_CORRUPT)
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .map(Duration::from_secs);
-    let mut last_corrupt = Instant::now();
+    let (w, h) = ddpro::enc::texture_size(first_frame).map_err(|e| anyhow!("{e}"))?;
     let mut src = Some(first_frame);
-    let (w, h) = texture_size(src)?;
     let mut dither = session.dither.load(Ordering::Acquire);
     let mut lossless = match std::env::var_os(DIAG_NO_LOSSLESS) {
         None => Some(Lossless::new(w, h, LOSSLESS_KBPS, FPS)?),
@@ -510,15 +433,12 @@ fn stream(ps: &ProService, session: &Session, channel: Channel) -> ResultType<(E
         },
     )
     .map_err(|e| anyhow!("{e}"))?;
-    let Open { mut sender, epoch } = match channel {
+    let mut sender = match channel {
         // 重建后接着等的只等剩下的时间：主控端过了截止时间就不再来了
-        Channel::Waiting(listener, deadline) => Open {
-            sender: listener
-                .accept(deadline.saturating_duration_since(Instant::now()))
-                .map_err(|e| ChannelError::NeverOpened(e.to_string()))?,
-            epoch: Instant::now(),
-        },
-        Channel::Open(open) => open,
+        Channel::Waiting(listener, deadline) => listener
+            .accept(deadline.saturating_duration_since(Instant::now()))
+            .map_err(|e| Stop(Reason::CHANNEL_FAILED, format!("the controller never opened the pro channel: {e}")))?,
+        Channel::Open(sender) => sender,
     };
     sender.pace(BITRATE_KBPS, FPS);
     if lossless.is_some() {
@@ -533,7 +453,8 @@ fn stream(ps: &ProService, session: &Session, channel: Channel) -> ResultType<(E
 
     let interval = Duration::from_secs_f64(1.0 / FPS as f64);
     let first = Instant::now();
-    let ts_base = (first - epoch).as_micros() as u64 * 9 / 100;
+    // RTP 时间戳从通道的时间零点算：重建后接着走，不回到 0
+    let ts_base = (first - sender.epoch()).as_micros() as u64 * 9 / 100;
     let mut i: u64 = 0;
     // 分段延迟只记新采集到的画面：第一帧在通道建立前就取了（含等主控端打招呼的时间），
     // 没有新画面时编码器重复上一帧，这两种都不带时间
@@ -553,7 +474,11 @@ fn stream(ps: &ProService, session: &Session, channel: Channel) -> ResultType<(E
             break End::Unsubscribed;
         }
         if mag_privacy_mode() {
-            return Err(MagPrivacy.into());
+            return Err(Stop(
+                Reason::PRIVACY_MODE,
+                "privacy mode uses the magnifier, which pro capture cannot see through".into(),
+            )
+            .into());
         }
         if desktop_changed() {
             break End::SourceChanged("desktop changed".into());
@@ -623,34 +548,22 @@ fn stream(ps: &ProService, session: &Session, channel: Channel) -> ResultType<(E
         // 静止不编码（P1 第 9 项）：画面停了一阵就不再每帧重编同一张画面，硬件编码器空出来（多屏时给别的屏用、也给用户自己的
         // 程序用）；主控端要关键帧时照编，隔一阵编一帧当心跳。无损补块照常在每个节拍补
         let idle = !force && still > tail && last_encode.elapsed() < keepalive;
+        let mut idr = false;
         if !idle {
             let f = enc.encode_loaded(force).map_err(|e| anyhow!("{e}"))?;
             last_encode = Instant::now();
+            idr = f.is_idr;
             let stamp = captured.map(|captured| Stamp {
                 captured,
                 encoded: last_encode,
             });
-            let mut data = f.data;
-            if let Some(every) = corrupt_every {
-                if !f.is_idr && data.len() > 64 && last_corrupt.elapsed() >= every {
-                    last_corrupt = Instant::now();
-                    let k = data.len() / 2;
-                    data[k] ^= 0xff;
-                    log::warn!("ddpro: diagnostic {DIAG_CORRUPT}: corrupted byte {k} of a {}-byte frame", data.len());
-                }
-            }
-            if let Some(bitmap) = lossless.as_mut().and_then(|l| l.changed(changed, f.is_idr)) {
+            if let Some(bitmap) = lossless.as_mut().and_then(|l| l.changed(changed, idr)) {
                 sender.send_changed(ts, &bitmap).map_err(|e| anyhow!("{e}"))?;
             }
-            sender.send_frame(&data, ts, stamp).map_err(|e| anyhow!("{e}"))?;
-            if let Some(d) = dump.as_mut() {
-                if std::io::Write::write_all(d, &data).is_err() {
-                    dump = None;
-                }
-            }
+            sender.send_frame(&f.data, ts, stamp).map_err(|e| anyhow!("{e}"))?;
         }
         if let Some(l) = lossless.as_mut() {
-            l.pump(&mut enc, &mut sender, ts)?;
+            l.pump(&mut enc, &mut sender, ts, idr)?;
             // 无损方块还没补完就不算静止：主控端只在画新的一帧时把放好的方块一起画出来，停编了的话补上的方块要等下一个心跳帧
             // （最多 1 秒）才上屏。补完之后再按变化大小收尾，跟在最后一批方块后面的帧把它们画出来
             if !l.complete() {
@@ -661,7 +574,7 @@ fn stream(ps: &ProService, session: &Session, channel: Channel) -> ResultType<(E
             break End::ControllerClosed;
         }
         if !sender.peer_alive() {
-            return Err(ChannelError::Lost.into());
+            return Err(Stop(Reason::CHANNEL_LOST, "the controller stopped answering on the pro channel".into()).into());
         }
         // 落后了（关键帧按发包节奏摊开发要一百多毫秒）就跳过错过的节拍，不背靠背补出一串帧
         let due = (first.elapsed().as_nanos() / interval.as_nanos()) as u64;
@@ -682,7 +595,7 @@ fn stream(ps: &ProService, session: &Session, channel: Channel) -> ResultType<(E
             st.tile_bytes
         );
     }
-    Ok((end, Channel::Open(Open { sender, epoch })))
+    Ok((end, Channel::Open(sender)))
 }
 
 /// Windows 桌面切换了（锁屏、UAC、登录界面）：和 RustDesk 通用画面服务同一个判断
@@ -736,7 +649,7 @@ fn start_capture(display: usize) -> ResultType<(Capturer, Geometry, *mut std::ff
                     return Ok((c, g, t));
                 }
                 if t0.elapsed() > FIRST_FRAME_TIMEOUT {
-                    return Err(NoImage(display).into());
+                    return Err(Stop(Reason::NO_IMAGE, format!("no first frame from display {display}")).into());
                 }
             }
         });
@@ -759,9 +672,4 @@ fn next_texture(cap: &mut Capturer, wait: Duration) -> std::io::Result<Option<*m
         Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => Ok(None),
         Err(e) => Err(e),
     }
-}
-
-fn texture_size(src: Option<*mut std::ffi::c_void>) -> ResultType<(u32, u32)> {
-    let p = src.ok_or_else(|| anyhow!("no frame"))?;
-    ddpro::enc::texture_size(p).map_err(|e| anyhow!("{e}"))
 }

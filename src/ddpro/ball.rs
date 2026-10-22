@@ -17,9 +17,9 @@ use tiny_skia::{FillRule, LineCap, LineJoin, Paint, PathBuilder, Pixmap, Point, 
 use ttf_parser::Face;
 
 /// 叠加图层的编号
-pub const LAYER_BALL: usize = 0;
-pub const LAYER_MENU: usize = 1;
-pub const LAYER_STATUS: usize = 2;
+const LAYER_BALL: usize = 0;
+const LAYER_MENU: usize = 1;
+const LAYER_STATUS: usize = 2;
 
 const BALL: f32 = 42.0;
 const BALL_RADIUS: f32 = 13.0;

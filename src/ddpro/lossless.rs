@@ -21,7 +21,7 @@ use std::{
 };
 
 /// 一块连续这么多帧没变才补（60 帧下 0.1 秒）：还在动的不白读白压
-pub(super) const STILL_FRAMES: u8 = 6;
+const STILL_FRAMES: u8 = 6;
 /// 每帧最多读回多少块：整屏一次读回让那一帧晚出约 5 毫秒（P1 实施记录第 7 节），2560×1440 的 240 块分两帧读完
 /// （读回的这两帧画面刚停下，晚出两三毫秒看不出来；原来 40 块要 6 帧，停下到补完约 270 毫秒）
 const READS_PER_FRAME: usize = 120;
@@ -196,8 +196,6 @@ pub(super) struct Lossless {
     complete: bool,
     last_log: Option<Instant>,
     rate: Rate,
-    /// 这一帧是关键帧（带宽保护看它）
-    keyframe: bool,
 }
 
 impl Lossless {
@@ -252,14 +250,12 @@ impl Lossless {
             complete: false,
             last_log: None,
             rate: Rate::new(max_kbps, fps),
-            keyframe: false,
         })
     }
 
     /// 这一帧发出之前调：记下哪些方块变了，返回要发给主控端的位图（没有方块变就是 `None`，不用发）。
     pub(super) fn changed(&mut self, bitmap: Option<Vec<u8>>, keyframe: bool) -> Option<Vec<u8>> {
         let n = self.grid.count();
-        self.keyframe = keyframe;
         let bitmap = if keyframe {
             vec![0xff; n.div_ceil(8)]
         } else {
@@ -285,14 +281,15 @@ impl Lossless {
         Some(bitmap)
     }
 
-    /// 这一帧发出之后调：读回该补的方块交去压缩，压好的按预算发出去。`ts` 是刚发的这一帧的时间戳（读回的像素取自它）。
     /// 最近一次变化之后的方块都补发出去了
     pub(super) fn complete(&self) -> bool {
         self.complete
     }
 
-    pub(super) fn pump(&mut self, enc: &mut Encoder, sender: &mut Sender, ts: u32) -> ResultType<()> {
-        self.rate.adapt(sender, std::mem::take(&mut self.keyframe));
+    /// 每个节拍调（这一拍编没编都调）：读回该补的方块交去压缩，压好的按预算发出去。`ts` 是这一拍的时间戳（读回的像素取自它），
+    /// `keyframe`：这一拍编出的是关键帧（带宽保护看它）
+    pub(super) fn pump(&mut self, enc: &mut Encoder, sender: &mut Sender, ts: u32, keyframe: bool) -> ResultType<()> {
+        self.rate.adapt(sender, keyframe);
         self.read(enc, ts)?;
         while let Ok(r) = self.done.try_recv() {
             let d = r?;
