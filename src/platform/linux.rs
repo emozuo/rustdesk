@@ -1579,7 +1579,16 @@ pub fn get_default_pa_source() -> Option<(String, String)> {
     use pulsectl::controllers::*;
     match SourceController::create() {
         Ok(mut handler) => {
-            if let Ok(dev) = handler.get_default_device() {
+            // Not `handler.get_default_device()`: pulsectl's SourceController looks up the default
+            // *sink* name there, which is never a source, so it always failed and voice calls fell
+            // back to recording the speaker monitor instead of the microphone.
+            let default_source = handler
+                .get_server_info()
+                .ok()
+                .and_then(|info| info.default_source_name);
+            if let Some(dev) =
+                default_source.and_then(|name| handler.get_device_by_name(&name).ok())
+            {
                 return Some((
                     dev.name.unwrap_or("".to_owned()),
                     dev.description.unwrap_or("".to_owned()),
