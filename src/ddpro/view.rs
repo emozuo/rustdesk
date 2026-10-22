@@ -556,7 +556,12 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
                             Event::PointerMotion { x, y } => (ball.pointer_motion(*x, *y), None),
                             Event::PointerButton { button, down, x, y } => ball.pointer_button(*button, *down, *x, *y),
                             Event::Wheel { .. } => (ball.wheel(), None),
-                            Event::Key { evdev, down } => (ball.key(*evdev, *down), None),
+                            // 已经交给远程的键（按下时菜单还没开），它的连发和松开也给远程，不让悬浮球截走一半
+                            Event::Key { evdev, down } if !input.held.contains(evdev) => (ball.key(*evdev, *down), None),
+                            Event::KeyboardLeave => {
+                                ball.keyboard_leave();
+                                (false, None)
+                            }
                             _ => (false, None),
                         };
                         let mut ups = if mine { vec![] } else { input.handle(other) };

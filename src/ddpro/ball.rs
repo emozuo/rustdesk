@@ -472,6 +472,11 @@ impl Ball {
         self.over_ui()
     }
 
+    /// 窗口失去键盘焦点：被吞的那一下 Esc 的松开不会来了，清掉标记，不然下一次 Esc 的按下和松开都会被吞
+    pub fn keyboard_leave(&mut self) {
+        self.esc_swallowed = false;
+    }
+
     /// 键盘：菜单开着时 Esc 关菜单（按下和松开都不发给远程）
     pub fn key(&mut self, evdev: u32, down: bool) -> bool {
         if evdev != KEY_ESC {
