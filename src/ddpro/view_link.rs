@@ -820,7 +820,8 @@ pub fn start<T: InvokeUiSession>(
                         v.notice = None;
                     }
                     push_mode(&session, Some(display_index), "", None, "");
-                    push_window(&session, Some(display_index), "hide");                }
+                    push_window(&session, Some(display_index), "hide");
+                }
                 Some(view_up::Union::Ended(e)) => {
                     log::info!("ddpro: the pro view is ending: {}", e.detail);
                     ended = Some(e);

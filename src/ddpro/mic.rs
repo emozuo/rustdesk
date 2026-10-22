@@ -10,7 +10,7 @@ use hbb_common::{log, throttled_log};
 use magnum_opus::{Channels::Mono, Decoder};
 use std::{
     collections::HashSet,
-    sync::{mpsc, Mutex, OnceLock},
+    sync::{mpsc, Mutex, MutexGuard, OnceLock},
     time::{Duration, Instant},
 };
 use winapi::{
@@ -111,9 +111,11 @@ fn run(conn_id: i32, rx: mpsc::Receiver<MediaData>) {
                         continue;
                     }
                 };
-                if n == 0 || !take_turn(conn_id) {
+                if n == 0 {
                     continue;
                 }
+                // 写完才放锁：交接那一刻两个语音线程不会同时往驱动写
+                let Some(_turn) = take_turn(conn_id) else { continue };
                 if device.is_none() {
                     device = match Device::open() {
                         Ok(dev) => Some(dev),
@@ -142,18 +144,19 @@ fn run(conn_id: i32, rx: mpsc::Receiver<MediaData>) {
     log::info!("ddpro: mic: voice of connection {conn_id} stopped");
 }
 
-/// 轮到这条连接写：没人在写、它自己在写、或正在写的那个停了超过 [`OWNER_IDLE`]
-fn take_turn(conn_id: i32) -> bool {
+/// 轮到这条连接写：没人在写、它自己在写、或正在写的那个停了超过 [`OWNER_IDLE`]。
+/// 轮到时返回持着的锁，写完再放
+fn take_turn(conn_id: i32) -> Option<MutexGuard<'static, Option<(i32, Instant)>>> {
     let mut o = owner().lock().unwrap();
     let now = Instant::now();
     match *o {
-        Some((id, last)) if id != conn_id && now.duration_since(last) < OWNER_IDLE => false,
+        Some((id, last)) if id != conn_id && now.duration_since(last) < OWNER_IDLE => None,
         _ => {
             if o.is_none_or(|(id, _)| id != conn_id) {
                 log::info!("ddpro: mic: connection {conn_id} now feeds the virtual microphone");
             }
             *o = Some((conn_id, now));
-            true
+            Some(o)
         }
     }
 }
