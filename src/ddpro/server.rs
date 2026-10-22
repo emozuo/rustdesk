@@ -281,8 +281,8 @@ pub(super) fn busy(s: &crate::server::Server, display: usize, conn_id: i32) -> O
     (viewers > 0).then(|| format!("display {display} is being viewed in general mode by {viewers} other connection(s)"))
 }
 
-/// 本机此刻能编的格式（用这块屏的采集器所在的显卡探测）。做不到时把原因写日志，能力里如实报「没有」。
-fn encode_caps(display: usize) -> FormatCaps {
+/// 本机此刻能编的格式（用这块屏的采集器所在的显卡探测）。做不到时把原因写日志、也交给谈判带给对端，能力里如实报「没有」。
+fn encode_caps(display: usize) -> (FormatCaps, Option<String>) {
     #[cfg(all(windows, feature = "vram"))]
     let probe = super::video::probe(display);
     #[cfg(not(all(windows, feature = "vram")))]
@@ -293,10 +293,10 @@ fn encode_caps(display: usize) -> FormatCaps {
         ))
     };
     let (caps, why) = ddpro::encoder_caps(probe, hdr_white(display).is_some());
-    if let Some(why) = why {
+    if let Some(why) = &why {
         throttled_log!(PEER_LOG_INTERVAL, warn, "ddpro: pro encoding unavailable here: {why}");
     }
-    caps
+    (caps, why)
 }
 
 /// 这块屏开着 HDR 时普通内容的白有多少尼特（P1 第 4 项）

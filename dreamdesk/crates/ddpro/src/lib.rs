@@ -133,7 +133,8 @@ pub struct Answer {
 /// 被控端拍板：按「专业」档的要求，在本机能编的和对端能解的格式里挑一个。
 /// 任何一方的能力还没探测时，只确认协议谈通，不选格式。
 /// `encode` 是现查本机编码能力（要建采集器、开一次编码器，一两百毫秒）：只看请求内容就能定的先定，用得着才查。
-pub fn answer_hello(hello: &Hello, encode: impl FnOnce() -> FormatCaps) -> Answer {
+/// 它的第二个值是做不到的原因（[`encoder_caps`]），拒绝时带给对端——编码会话被别的软件占满这类原因，主控端用户才看得到。
+pub fn answer_hello(hello: &Hello, encode: impl FnOnce() -> (FormatCaps, Option<String>)) -> Answer {
     let answer = |reply| Answer {
         reply,
         unchecked: Vec::new(),
@@ -156,16 +157,20 @@ pub fn answer_hello(hello: &Hello, encode: impl FnOnce() -> FormatCaps) -> Answe
             .iter()
             .any(|f| f.chroma.enum_value() == Ok(chroma) && f.bit_depth == depth)
     };
-    let cannot = |side: &str, caps: &FormatCaps| {
+    let cannot = |side: &str, caps: &FormatCaps, why: Option<&str>| {
         (caps.checked && !PRO_PREFERENCE.into_iter().any(|want| supports(caps, want))).then(|| {
             answer(reject(
                 reject::Reason::NO_COMMON_FORMAT,
-                format!("the {side} cannot do 4:4:4 (has: {})", describe_caps(caps)),
+                format!(
+                    "the {side} cannot do 4:4:4 (has: {}){}",
+                    describe_caps(caps),
+                    why.map(|w| format!(": {w}")).unwrap_or_default()
+                ),
             ))
         })
     };
     // 已经探测过、明确做不到的一方先判；对端那边没探测完就只谈通协议——这两种都用不着查本机
-    if let Some(no) = cannot("decoder", &hello.decode) {
+    if let Some(no) = cannot("decoder", &hello.decode, None) {
         return no;
     }
     let peer_unchecked: Vec<&'static str> = [
@@ -182,8 +187,8 @@ pub fn answer_hello(hello: &Hello, encode: impl FnOnce() -> FormatCaps) -> Answe
         };
     }
 
-    let encode = encode();
-    if let Some(no) = cannot("encoder", &encode) {
+    let (encode, why) = encode();
+    if let Some(no) = cannot("encoder", &encode, why.as_deref()) {
         return no;
     }
     if !encode.checked {
