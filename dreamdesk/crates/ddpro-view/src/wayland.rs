@@ -589,7 +589,8 @@ impl Window {
                     Some((_, at)) => timeout.min(at.saturating_duration_since(Instant::now())),
                     None => timeout,
                 };
-                let ms = timeout.as_millis().min(i32::MAX as u128) as i32;
+                // 向上取整：不足 1 毫秒时取 0 会空转到连发时刻
+                let ms = timeout.as_micros().div_ceil(1000).min(i32::MAX as u128) as i32;
                 let n = unsafe { libc::poll(pfds.as_mut_ptr(), pfds.len() as libc::nfds_t, ms) };
                 if n > 0 && pfds[0].revents != 0 {
                     match guard.read() {
