@@ -1,7 +1,7 @@
 //! 被控端：开端口等主控端打招呼、发画面（发包节奏）、收心跳和补发请求（补发）。
 
 use super::{
-    control, is_timeout, micros, micros_u32, open, read_i64, rtp_packet, rtx_packet, seal, srtp, udp, Error, Keys,
+    control, initial_seq, is_timeout, micros, micros_u32, open, read_i64, rtp_packet, rtx_packet, seal, srtp, udp, Error, Keys,
     CTRL_BYE, CTRL_HELLO, CTRL_KEEPALIVE, CTRL_KEYFRAME, CTRL_NACK, CTRL_TIME_ECHO, HISTORY, MSG_CHANGED, MSG_TILE,
     PEER_TIMEOUT, PT_CONTROL, PT_TILE, PT_VIDEO, RTP_HEADER, RTP_PAYLOAD_MAX, SRTP_GCM_TAG, TILE_CHUNK, TILE_FIRST,
     UDP_PAYLOAD,
@@ -11,7 +11,6 @@ use crate::{
     timing::{SenderStamp, EXT_ID, EXT_OVERHEAD},
 };
 use bytes::Bytes;
-use rand::Rng;
 use rtp::packet::Packet;
 use std::{
     io,
@@ -93,6 +92,17 @@ impl Pacer {
     fn room(&mut self) -> usize {
         self.refill();
         self.tokens.max(0.0) as usize
+    }
+
+    /// 换速率：沿用 `old` 剩下的额度（欠的照样欠着），不超过新的上限。不沿用的话带宽保护降速那一刻额度清零、
+    /// 还立刻给满一整帧的量，正好在拥塞时补一次大突发
+    fn retune(old: Option<Self>, kbps: u32, fps: u32, factor: f64) -> Self {
+        let mut p = Self::new(kbps, fps, factor);
+        if let Some(mut o) = old {
+            o.refill();
+            p.tokens = o.tokens.min(p.burst);
+        }
+        p
     }
 }
 
@@ -219,8 +229,8 @@ impl Sender {
             dec,
             enc: srtp(&keys)?,
             keys: keys.clone(),
-            seq: rand::thread_rng().gen(),
-            rtx_seq: rand::thread_rng().gen(),
+            seq: initial_seq(),
+            rtx_seq: initial_seq(),
             epoch,
             last_peer_us: last_peer_us.clone(),
             keyframe: keyframe.clone(),
@@ -238,7 +248,7 @@ impl Sender {
             peer,
             enc: srtp(&keys)?,
             keys,
-            seq: rand::thread_rng().gen(),
+            seq: initial_seq(),
             epoch,
             last_peer_us,
             keyframe,
@@ -335,7 +345,8 @@ impl Sender {
     /// 无损方块的预算：`kbps` 平均码率（内网实测 800 Mbps 突发不丢包，见 P1 实施记录第 7 节），`fps` 画面帧率
     /// （桶容量是一帧的量）。0 = 不限。
     pub fn pace_tiles(&mut self, kbps: u32, fps: u32) {
-        self.tile_pacer = (kbps > 0).then(|| Pacer::new(kbps, fps, 1.0));
+        let old = self.tile_pacer.take();
+        self.tile_pacer = (kbps > 0).then(|| Pacer::retune(old, kbps, fps, 1.0));
     }
 
     /// 现在不用等就能发多少字节的方块（按 [`Sender::pace_tiles`] 的预算）。调用方据此决定这一帧再发哪些方块，

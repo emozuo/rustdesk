@@ -1,7 +1,7 @@
 //! 主控端：打招呼、发心跳（兼授时）、收画面（按序号重排、请求补发、救不回来才请求关键帧）。
 
 use super::{
-    is_timeout, micros, open, read_i64, rtp_packet, rtx_unwrap, seal, srtp, udp, unspecified_like, Error, Keys,
+    initial_seq, is_timeout, micros, open, read_i64, rtp_packet, rtx_unwrap, seal, srtp, udp, unspecified_like, Error, Keys,
     CTRL_BYE, CTRL_HELLO, CTRL_KEEPALIVE, CTRL_KEYFRAME, CTRL_NACK, CTRL_TIME_ECHO, HISTORY, KEEPALIVE_INTERVAL, MSG_CHANGED,
     MSG_TILE, PEER_TIMEOUT, PT_CONTROL, PT_RTX, PT_RTX_TILE, PT_TILE, PT_VIDEO, TILE_FIRST,
 };
@@ -126,7 +126,8 @@ pub struct Receiver {
     last_loss_event: Option<Instant>,
     pending: VecDeque<Event>,
     drop_permille: u32,
-    jitter: Option<(f64, f64)>,
+    /// 抖动统计：(上一个包的到达时刻（90 kHz 刻度）, 它的 RTP 时间戳, 当前抖动)
+    jitter: Option<(f64, u32, f64)>,
     start: Instant,
     clock: ClockSync,
     /// 正在收的这一帧：首包到达时刻、被控端带来的时间
@@ -153,7 +154,7 @@ impl Receiver {
             enc: srtp(&keys)?,
             dec: srtp(&keys)?,
             keys,
-            ctrl_seq: rand::thread_rng().gen(),
+            ctrl_seq: initial_seq(),
             last_keepalive: now,
             last_media: now,
             depack: Depacketizer::default(),
@@ -262,7 +263,8 @@ impl Receiver {
     }
 
     fn poll_once(&mut self) -> Result<(), Error> {
-        let timeout = if self.missing.is_empty() && self.frame_first.is_none() {
+        // 和下面「末尾丢包试探」的条件一致：一帧或一条方块消息收了一半时都用短超时，不然末包丢了要等下一帧才发现
+        let timeout = if self.missing.is_empty() && self.frame_first.is_none() && self.msg.is_none() {
             self.idle_timeout
         } else {
             NACK_POLL
@@ -618,14 +620,15 @@ impl Receiver {
     fn update_jitter(&mut self, ts: u32) {
         // RFC 3550：按 90 kHz 时钟比较「到达间隔」和「发送时间戳间隔」的差
         let arrival = self.start.elapsed().as_secs_f64() * 90_000.0;
-        let transit = arrival - ts as f64;
-        if let Some((prev, j)) = self.jitter {
-            let d = (transit - prev).abs();
+        if let Some((prev_arrival, prev_ts, j)) = self.jitter {
+            // 发送间隔按回绕差值算：32 位时间戳 90 kHz 约 13 小时回绕一次，直接相减那一刻会跳出几百万毫秒
+            let sent = ts.wrapping_sub(prev_ts) as i32 as f64;
+            let d = (arrival - prev_arrival - sent).abs();
             let j = j + (d - j) / 16.0;
-            self.jitter = Some((transit, j));
+            self.jitter = Some((arrival, ts, j));
             self.stats.jitter_ms = j / 90.0;
         } else {
-            self.jitter = Some((transit, 0.0));
+            self.jitter = Some((arrival, ts, 0.0));
         }
     }
 }

@@ -154,6 +154,12 @@ fn srtp(keys: &Keys) -> Result<Context, Error> {
         .map_err(|e| Error::Srtp(e.to_string()))
 }
 
+/// 各路的起始 RTP 序号：只在 0–32767 里取（WebRTC 的做法）。加密层把第一个解开的包算作第 0 轮，起点贴近 65535 而回绕前的包
+/// 全丢时，回绕后的包按第 0 轮永远解不开，这一路就废了
+fn initial_seq() -> u16 {
+    rand::thread_rng().gen_range(0..0x8000)
+}
+
 fn udp(bind: SocketAddr) -> io::Result<UdpSocket> {
     let s = Socket::new(Domain::for_address(bind), Type::DGRAM, Some(Protocol::UDP))?;
     s.set_recv_buffer_size(SOCKET_BUFFER)?;
