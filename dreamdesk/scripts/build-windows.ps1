@@ -147,10 +147,35 @@ function Add-OfficialPayload([string] $Dest, [hashtable] $Payload) {
   Remove-Item $Tmp -Recurse -Force -ErrorAction SilentlyContinue
 }
 
+# USB 透传的被控端驱动 usbip-win2（P2 第 1 项）：官方安装程序原样放进程序目录的 usbip\ 下，产品安装时 `--ddpro-usbip install`
+# 静默装上（版本从文件名来）。锁版本 + sha256，并核对微软签名链上的发布者签名有效。0.9.7.8 有蓝屏，别回退到它；
+# 锁 0.9.8.0：P2 的实验和压测都在它上面跑。要升 0.9.8.1（sha256 38cad6d4432b52d5bb9409d9ad03b72fdffc4ada4cd3a48fbeca1a2752a8518a）
+# 得把透传压测重跑一遍。
+$UsbipVer = '0.9.8.0'
+$UsbipSha = '81f426741f7ee2ed991febe24a22daca8400b6ae2f171054e3fb404897e15d39'
+
+function Get-UsbipInstaller {
+  $File = Get-Download "https://github.com/vadimgrn/usbip-win2/releases/download/v.$UsbipVer/USBip-$UsbipVer-x64.exe"
+  if ((Get-FileHash $File -Algorithm SHA256).Hash -ne $UsbipSha) {
+    Remove-Item $File -Force -ErrorAction SilentlyContinue
+    throw "$File checksum mismatch (cached copy deleted, rerun to download again)"
+  }
+  if ((Get-AuthenticodeSignature $File).Status -ne 'Valid') { throw "$File is not validly signed" }
+  $File
+}
+
+function Add-UsbipInstaller([string] $Dest, [string] $File) {
+  $Dir = Join-Path $Dest 'usbip'
+  Remove-Item $Dir -Recurse -Force -ErrorAction SilentlyContinue
+  New-Item -ItemType Directory -Force $Dir | Out-Null
+  Copy-Item $File $Dir -ErrorAction Stop
+}
+
 $Version = ((Select-String -Path Cargo.toml -Pattern '^version = "(.+)"' | Select-Object -First 1).Matches[0].Groups[1].Value)
 $BuildPyFlags += @('--dd-pro', '--dd-brand')
 Write-Host "version $Version"
 $Payload = Get-OfficialPayload
+$UsbipInstaller = Get-UsbipInstaller
 
 try {
   # pub get 必须在 codegen 之前：codegen 的 ffigen 要读 pub get 生成的 package_config.json
@@ -164,6 +189,7 @@ try {
 
   $Release = Join-Path $Repo 'flutter\build\windows\x64\runner\Release'
   Add-OfficialPayload $Release $Payload
+  Add-UsbipInstaller $Release $UsbipInstaller
   $Exe = Join-Path $Release "$AppName.exe"
   Remove-Item $Exe -ErrorAction SilentlyContinue
   Move-Item (Join-Path $Release 'rustdesk.exe') $Exe -ErrorAction Stop

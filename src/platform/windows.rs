@@ -1598,6 +1598,10 @@ fn get_after_install(
             )
         })
         .unwrap_or_default();
+    #[cfg(feature = "dd-pro")]
+    let ddpro_usbip = crate::ddpro::server::usbip_install_cmd(exe);
+    #[cfg(not(feature = "dd-pro"))]
+    let ddpro_usbip = "";
 
     format!("
     chcp 65001
@@ -1621,6 +1625,7 @@ fn get_after_install(
     netsh advfirewall firewall add rule name=\"{app_name} Service\" dir=in action=allow program=\"{exe}\" enable=yes
     {create_service}
     reg add HKEY_LOCAL_MACHINE\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System /f /v SoftwareSASGeneration /t REG_DWORD /d 1
+    {ddpro_usbip}
     ", create_service=get_create_service(&exe))
 }
 
@@ -1879,6 +1884,9 @@ fn get_uninstall(kill_self: bool, uninstall_printer: bool) -> ResultType<String>
             uninstall_cert_cmd = format!("\"{}\" --uninstall-cert", exe_path);
             if uninstall_printer {
                 uninstall_printer_cmd = format!("\"{}\" --uninstall-remote-printer", &exe_path);
+                // DreamDesk：真卸载时（覆盖安装也会先跑一遍这个脚本，那时不卸，和打印驱动同一规则）卸掉 USB 透传驱动
+                #[cfg(feature = "dd-pro")]
+                uninstall_printer_cmd.push_str(&crate::ddpro::server::usbip_uninstall_cmd(exe_path));
             }
         }
     }
@@ -3600,9 +3608,17 @@ taskkill /F /IM {app_name}.exe{filter}
 {restore_service_cmd}
 {uninstall_printer_cmd}
 {install_printer_cmd}
+{ddpro_usbip}
 {sleep}
     ",
         app_name = app_name,
+        ddpro_usbip = {
+            #[cfg(feature = "dd-pro")]
+            let cmd = crate::ddpro::server::usbip_install_cmd(&exe);
+            #[cfg(not(feature = "dd-pro"))]
+            let cmd = String::new();
+            cmd
+        },
         copy_exe = copy_exe_cmd(&src_exe, &exe, &path)?,
         rename_exe = rename_exe_cmd(&src_exe, &path)?,
         remove_meta_toml = remove_meta_toml_cmd(is_msi.unwrap_or(true), &path),

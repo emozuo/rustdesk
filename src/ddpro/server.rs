@@ -165,6 +165,35 @@ pub fn on_keyboard_permission(_conn_id: i32, _enabled: bool) {
     super::usb_server::on_keyboard_permission(_conn_id, _enabled);
 }
 
+/// `--ddpro-usbip install|uninstall`：产品安装 / 自动升级 / 卸载脚本里调（`platform/windows.rs` 的钩子），以管理员身份运行。
+/// 随包的 usbip-win2 安装程序在程序目录的 `usbip` 子目录里（打包脚本放进去）。失败只写日志：没有 USB 透传，产品其余照常
+#[cfg(windows)]
+pub fn usbip_command(cmd: &str) {
+    let result = match cmd {
+        "install" => std::env::current_exe()
+            .map_err(|e| e.to_string())
+            .and_then(|exe| ddpro::usb::vhci::install(&exe.with_file_name("usbip"))),
+        "uninstall" => ddpro::usb::vhci::uninstall().map(|()| "usbip-win2 uninstalled".to_owned()),
+        _ => Err(format!("unknown --ddpro-usbip command {cmd:?}")),
+    };
+    match result {
+        Ok(done) => log::info!("ddpro: usb: {done}"),
+        Err(e) => log::error!("ddpro: usb: --ddpro-usbip {cmd} failed: {e}; no USB passthrough on this machine"),
+    }
+}
+
+/// 产品安装、自动升级脚本里装 / 升级 USB 透传驱动的那一行（`platform/windows.rs` 的钩子）
+#[cfg(windows)]
+pub fn usbip_install_cmd(exe: &str) -> String {
+    format!("\"{exe}\" --ddpro-usbip install")
+}
+
+/// 产品卸载脚本里卸掉 USB 透传驱动的那一行（接在卸打印驱动那一行后面）
+#[cfg(windows)]
+pub fn usbip_uninstall_cmd(exe: &str) -> String {
+    format!("\n    \"{exe}\" --ddpro-usbip uninstall")
+}
+
 /// 连接关闭（`connection.rs` 的钩子）
 pub fn on_conn_closed(_conn_id: i32) {
     #[cfg(windows)]

@@ -193,6 +193,11 @@ pub fn core_main() -> Option<CoreMainAction> {
         crate::ddpro::view::run();
         return None;
     }
+    #[cfg(all(feature = "dd-pro", windows))]
+    if args.first().map(String::as_str) == Some("--ddpro-usbip") {
+        crate::ddpro::server::usbip_command(args.get(1).map_or("", String::as_str));
+        return None;
+    }
 
     #[cfg(windows)]
     if !crate::platform::is_installed()
