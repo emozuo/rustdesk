@@ -475,6 +475,10 @@ impl Ball {
             self.esc_swallowed = true;
             return true;
         }
+        // 按住不放时窗口自己补的连发按下：属于被吞的这一下，一并吞掉，否则远程收到一串按下、松开却被吞，Esc 卡在按下
+        if down && self.esc_swallowed {
+            return true;
+        }
         if !down && self.esc_swallowed {
             self.esc_swallowed = false;
             return true;
