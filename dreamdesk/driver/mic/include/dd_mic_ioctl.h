@@ -2,7 +2,7 @@
 #define DD_MIC_IOCTL_H
 
 /*
- * 虚拟麦克风驱动与 mic-bridge 之间的 IOCTL 约定，两边共用这一份。
+ * 虚拟麦克风驱动与被控端写入方（`src/ddpro/mic.rs`）之间的 IOCTL 约定，两边共用这一份。
  * 控制设备：\\.\DreamDeskMicCtl（只有 SYSTEM / 管理员能开）。
  */
 

@@ -1,5 +1,5 @@
 /*
- * \\.\DreamDeskMicCtl：mic-bridge 往环里推 PCM 的入口。
+ * \\.\DreamDeskMicCtl：被控端往环里推 PCM 的入口。
  * 单独一个非 PnP 控制设备，因为 PortCls 的音频设备对象不接自定义 IOCTL。
  *
  * 生命周期跟着启动成功的那个音频适配器走，不跟驱动走：驱动自己名下还有设备对象时

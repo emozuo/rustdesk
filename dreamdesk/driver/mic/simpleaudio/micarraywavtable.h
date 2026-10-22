@@ -18,7 +18,7 @@ Abstract:-
 //
 // Mic array range.
 //
-// 唯一格式 = mic-bridge 推进环里的格式（单声道 S16 48 kHz，96 KB/s）。
+// 唯一格式 = 被控端写进环里的格式（单声道 S16 48 kHz，96 KB/s）。
 // 引擎按这个速率取数；两边不一致，生产和消费的速率就对不上。
 #define MICARRAY_RAW_CHANNELS                   1       // Channels for raw mode
 #define MICARRAY_BITS_PER_SAMPLE_PCM            16      // Bits Per Sample

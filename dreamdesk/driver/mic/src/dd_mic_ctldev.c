@@ -54,7 +54,7 @@ static NTSTATUS DdMicCtlIrpDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
     case IOCTL_DD_MIC_WRITE_PCM: {
         ULONG inLen = ioStack->Parameters.DeviceIoControl.InputBufferLength;
         if (!buf || inLen == 0 || (inLen & 1)) return CompleteIrp(Irp, STATUS_INVALID_PARAMETER, 0);
-        /* 用户态收到的是 ERROR_NOT_READY，mic-bridge 把它当良性（没人在录）。 */
+        /* 用户态收到的是 ERROR_NOT_READY，被控端把它当良性（没人在录）。 */
         if (!DdMicRingIsActive()) return CompleteIrp(Irp, STATUS_DEVICE_NOT_READY, 0);
         return CompleteIrp(Irp, STATUS_SUCCESS, DdMicRingWrite(buf, inLen));
     }
@@ -91,7 +91,7 @@ NTSTATUS DdMicControlDeviceCreate(PDRIVER_OBJECT DriverObject, PDEVICE_OBJECT Ow
     RtlInitUnicodeString(&linkName, L"\\DosDevices\\DreamDeskMicCtl");
 
     /* 只有 SYSTEM 和管理员能开：谁能开谁就能往这台机器的麦克风里灌声音。
-     * mic-bridge 是服务在会话 0 以 SYSTEM 拉起的。 */
+     * 写入方是被控端的 --server 进程，由服务以 SYSTEM 拉起。 */
     PDEVICE_OBJECT dev = NULL;
     NTSTATUS status = IoCreateDeviceSecure(DriverObject, 0, &devName, DD_MIC_DEVICE_TYPE,
                                            FILE_DEVICE_SECURE_OPEN, FALSE,

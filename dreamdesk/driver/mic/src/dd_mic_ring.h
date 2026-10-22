@@ -15,7 +15,7 @@ extern "C" {
 #endif
 
 /* 有采集流在 RUN 才收数据；否则 WRITE_PCM 回 STATUS_DEVICE_NOT_READY，
- * 免得没人录音时 mic-bridge 把环灌满、溢出计数一直涨。 */
+ * 免得没人录音时被控端把环灌满、溢出计数一直涨。 */
 BOOLEAN DdMicRingIsActive(VOID);
 VOID    DdMicRingSetActive(_In_ BOOLEAN active);
 
@@ -34,7 +34,7 @@ VOID DdMicRingGetStats(_Out_ PDD_MIC_STATS stats);
 
 /* 麦克风端点的硬件音量（拓扑 VOLUME / MUTE 节点），读出时作用到样本上，换音量有渐变。
  * 必须是硬件音量：交给引擎做软件音量的话范围是 -96..+30 dB，滑块 100% = +30 dB，
- * 叠在 mic-bridge 的 +18 dB 上直接过载（实测）。dB 为 16.16 定点，夹到 [MIN, MAX]、按 STEP 取整。 */
+ * 叠在原项目写入前加的 +18 dB 上直接过载（实测；现在写入前不加增益）。dB 为 16.16 定点，夹到 [MIN, MAX]、按 STEP 取整。 */
 #define DD_MIC_VOLUME_MIN  (-96 * 0x10000)
 #define DD_MIC_VOLUME_MAX  0
 #define DD_MIC_VOLUME_STEP 0x8000          /* 0.5 dB */
