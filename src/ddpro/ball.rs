@@ -83,6 +83,8 @@ pub enum Action {
     ChangeResolution(u32, u32),
     /// 网络状态块开 / 关之后的状态（会话进程记下来，换屏开新窗口时照旧）
     ShowStatus(bool),
+    /// 麦克风开 / 关之后的状态（会话进程发起 / 结束语音通话，并记下来给换屏开的新窗口）
+    Mic(bool),
     GeneralMode,
     CtrlAltDel,
     LockScreen,
@@ -101,16 +103,18 @@ enum Item {
     SwitchDisplay,
     Resolution,
     Status,
+    Mic,
     General,
     CtrlAltDel,
     Lock,
     Disconnect,
 }
 
-const ITEMS: [Item; 7] = [
+const ITEMS: [Item; 8] = [
     Item::SwitchDisplay,
     Item::Resolution,
     Item::Status,
+    Item::Mic,
     Item::General,
     Item::CtrlAltDel,
     Item::Lock,
@@ -133,6 +137,7 @@ impl Item {
                 Item::Resolution => "Resolution",
                 // 状态块里就是 RustDesk 质量面板在专业模式下显示的那份实测值，叫法跟它一致
                 Item::Status => "Show quality monitor",
+                Item::Mic => "Microphone",
                 Item::General => "Switch to general mode",
                 Item::CtrlAltDel => "Insert Ctrl + Alt + Del",
                 Item::Lock => "Insert Lock",
@@ -169,6 +174,8 @@ pub struct Ball {
     /// 网络状态块用的等宽字体（没有就用菜单字体）
     mono: Option<Face<'static>>,
     show_status: bool,
+    /// 麦克风开着（语音通话进行中）
+    mic: bool,
     status_lines: Vec<String>,
     status_dirty: bool,
     /// 球完全露出时的左上角
@@ -199,7 +206,14 @@ pub struct Ball {
 }
 
 impl Ball {
-    pub fn new((w, h): (u32, u32), display_count: u32, display_index: i32, display_fixed: bool, show_status: bool) -> Self {
+    pub fn new(
+        (w, h): (u32, u32),
+        display_count: u32,
+        display_index: i32,
+        display_fixed: bool,
+        show_status: bool,
+        mic: bool,
+    ) -> Self {
         let (face, mono) = load_faces();
         if face.is_none() {
             log::warn!("ddpro: pro view menu has no font, showing no text");
@@ -210,6 +224,7 @@ impl Ball {
             face,
             mono,
             show_status,
+            mic,
             status_lines: Vec::new(),
             status_dirty: show_status,
             x: (screen.0 - RIGHT_GAP - BALL).max(0.0),
@@ -408,6 +423,10 @@ impl Ball {
                             self.show_status = !self.show_status;
                             self.status_dirty = true;
                             Action::ShowStatus(self.show_status)
+                        }
+                        Item::Mic => {
+                            self.mic = !self.mic;
+                            Action::Mic(self.mic)
                         }
                         Item::General => Action::GeneralMode,
                         Item::CtrlAltDel => Action::CtrlAltDel,
@@ -723,7 +742,7 @@ impl Ball {
                 chevron(&mut pm, x + w - 16.0, cy, C_DIM);
             }
             // 开关项：开着时右边一个对勾
-            if *item == Item::Status && self.show_status {
+            if (*item == Item::Status && self.show_status) || (*item == Item::Mic && self.mic) {
                 let mut pb = PathBuilder::new();
                 pb.move_to(x + w - 21.0, cy);
                 pb.line_to(x + w - 17.5, cy + 3.5);
@@ -883,6 +902,19 @@ fn draw_icon(pm: &mut Pixmap, item: Item, cx: f32, cy: f32, color: [u8; 4]) {
                 let bh = 3.0 + i as f32 * 3.0;
                 fill(pm, Rect::from_xywh(cx - 6.0 + i as f32 * 4.5, cy + 5.0 - bh, 2.6, bh).map(PathBuilder::from_rect), color);
             }
+        }
+        // 话筒：胶囊形头 + U 形托架 + 立杆和底座
+        Item::Mic => {
+            stroke(pm, rounded(cx - 2.6, cy - 7.0, 5.2, 9.0, 2.6), color, lw);
+            let mut pb = PathBuilder::new();
+            pb.move_to(cx - 5.0, cy - 1.0);
+            pb.quad_to(cx - 5.0, cy + 4.5, cx, cy + 4.5);
+            pb.quad_to(cx + 5.0, cy + 4.5, cx + 5.0, cy - 1.0);
+            pb.move_to(cx, cy + 4.5);
+            pb.line_to(cx, cy + 7.0);
+            pb.move_to(cx - 3.0, cy + 7.0);
+            pb.line_to(cx + 3.0, cy + 7.0);
+            stroke(pm, pb.finish(), color, lw);
         }
         // 上下两条反向箭头：在两种模式之间切换
         Item::General => {

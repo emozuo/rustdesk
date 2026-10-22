@@ -53,6 +53,8 @@ struct Link {
     offered: bool,
     /// 悬浮球的网络状态块开着：换屏开新的专业窗口时照旧
     show_status: bool,
+    /// 悬浮球的麦克风开着（这次会话发起了语音通话）：换屏开新的专业窗口时照旧
+    mic: bool,
 }
 
 /// 一块远程屏的专业窗口和挂在显示它的那个 RustDesk 窗口上的提示。
@@ -542,7 +544,7 @@ pub fn start<T: InvokeUiSession>(
     display_index: i32,
 ) {
     let k = key(session);
-    let (shown, is_main, display, origins, show_status) = links()
+    let (shown, is_main, display, origins, show_status, mic) = links()
         .lock()
         .unwrap()
         .get(&k)
@@ -555,6 +557,7 @@ pub fn start<T: InvokeUiSession>(
                 l.rects.get(&display_index).copied().unwrap_or_default(),
                 origins,
                 l.show_status,
+                l.mic,
             )
         })
         .unwrap_or_default();
@@ -612,6 +615,7 @@ pub fn start<T: InvokeUiSession>(
         title: format!("{} - pro", session.get_id()),
         display_index,
         show_status,
+        mic,
         display_origins: origins
             .into_iter()
             .map(|(_, x, y)| ViewPoint {
@@ -771,6 +775,17 @@ pub fn start<T: InvokeUiSession>(
                         log::info!("ddpro: floating menu: network status {}", if on { "shown" } else { "hidden" });
                         links().lock().unwrap().entry(k).or_default().show_status = on;
                     }
+                    // 用 RustDesk 自己的语音通话：主控端采集麦克风发过去，专业会话的被控端自动接受、送进虚拟麦克风（P2 第 2 项）。
+                    // 多屏时各窗口的开关各自显示，按「要开 / 要关」处理而不是翻转，点哪个都不会重复发起
+                    Some(view_action::Union::Mic(on)) => {
+                        log::info!("ddpro: floating menu: microphone {}", if on { "on" } else { "off" });
+                        let was = std::mem::replace(&mut links().lock().unwrap().entry(k).or_default().mic, on);
+                        if on && !was {
+                            session.request_voice_call();
+                        } else if !on && was {
+                            session.close_voice_call();
+                        }
+                    }
                     Some(view_action::Union::GeneralMode(_)) => {
                         log::info!("ddpro: floating menu: switch to general mode");
                         choose_general(&session);
@@ -789,8 +804,7 @@ pub fn start<T: InvokeUiSession>(
                         v.notice = None;
                     }
                     push_mode(&session, Some(display_index), "", None, "");
-                    push_window(&session, Some(display_index), "hide");
-                }
+                    push_window(&session, Some(display_index), "hide");                }
                 Some(view_up::Union::Ended(e)) => {
                     log::info!("ddpro: the pro view is ending: {}", e.detail);
                     ended = Some(e);

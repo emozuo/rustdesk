@@ -1,0 +1,10 @@
+*.obj
+*.sys
+*.pdb
+*.cer
+*.cat
+*.inf.preprocessed
+x64/
+Debug/
+Release/
+inf/*.bak

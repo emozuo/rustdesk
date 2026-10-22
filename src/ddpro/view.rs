@@ -352,6 +352,7 @@ fn view_action(a: Action) -> Option<ViewAction> {
         Action::CtrlAltDel => view_action::Union::CtrlAltDel(true),
         Action::LockScreen => view_action::Union::LockScreen(true),
         Action::ShowStatus(on) => view_action::Union::ShowStatus(on),
+        Action::Mic(on) => view_action::Union::Mic(on),
         Action::GeneralMode => view_action::Union::GeneralMode(true),
         Action::ChangeResolution(width, height) => view_action::Union::ChangeResolution(ViewResolution {
             width,
@@ -449,6 +450,7 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
         start.display_index,
         display_fixed,
         start.show_status,
+        start.mic,
     );
     let mut ledger = Ledger::default();
     let mut shown: HashMap<usize, Shown> = HashMap::new();

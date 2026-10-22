@@ -219,6 +219,8 @@ message ViewStart {
   repeated ViewPoint display_origins = 10;
   // 主控端打开了「将我的所有显示器用于远程会话」：本机和远程都多于一块屏时，这个窗口固定看这块屏、全屏到对应的本机屏
   bool all_displays = 11;
+  // 悬浮球菜单的麦克风开着（本会话里用户打开了语音通话，换屏开新的专业窗口时照旧）
+  bool mic = 12;
 }
 
 message ViewPoint {
@@ -255,6 +257,8 @@ message ViewAction {
     bool general_mode = 5;
     // 改远程这块屏的分辨率：会话进程调 RustDesk 工具栏「分辨率」菜单的同一个函数
     ViewResolution change_resolution = 6;
+    // 麦克风开 / 关（P2 第 2 项）：会话进程发起 / 结束 RustDesk 的语音通话，被控端把声音送进虚拟麦克风
+    bool mic = 7;
   }
 }
 

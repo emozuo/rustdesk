@@ -3988,6 +3988,11 @@ impl Connection {
                             // Drop the audio sender previously.
                             drop(std::mem::replace(&mut self.audio_sender, None));
                             self.audio_sender = Some(start_audio_thread());
+                            // DreamDesk：专业会话的语音进虚拟麦克风、不放扬声器。刚起的播放线程还没收到格式、没开设备，换掉就退出
+                            #[cfg(all(feature = "dd-pro", windows))]
+                            if let Some(sender) = crate::ddpro::mic::audio_sender(self.inner.id()) {
+                                self.audio_sender = Some(sender);
+                            }
                             self.audio_sender
                                 .as_ref()
                                 .map(|a| allow_err!(a.send(MediaData::AudioFormat(format))));
@@ -4101,6 +4106,12 @@ impl Connection {
                             NonZeroI64::new(request.req_timestamp)
                                 .unwrap_or(NonZeroI64::new(get_time()).unwrap()),
                         );
+                        // DreamDesk：专业会话的语音通话自动接受（被控端通常没人值守），不弹连接管理窗口的确认
+                        #[cfg(all(feature = "dd-pro", windows))]
+                        if crate::ddpro::mic::takes_voice_call(self.inner.id()) {
+                            self.handle_voice_call(true).await;
+                            return true;
+                        }
                         // Notify the connection manager.
                         self.send_to_cm(Data::VoiceCallIncoming);
                     } else {
@@ -4896,11 +4907,19 @@ impl Connection {
     pub async fn handle_voice_call(&mut self, accepted: bool) {
         if let Some(ts) = self.voice_call_request_timestamp.take() {
             let msg = new_voice_call_response(ts.get(), accepted);
-            if accepted {
+            // DreamDesk：语音进虚拟麦克风时不把采集源切到麦克风——被控端的默认麦克风就是虚拟麦克风，切过去会把主控端
+            // 自己的声音采回去，被控端的系统声音也听不到了
+            #[cfg(all(feature = "dd-pro", windows))]
+            let keep_input = crate::ddpro::mic::takes_voice_call(self.inner.id());
+            #[cfg(not(all(feature = "dd-pro", windows)))]
+            let keep_input = false;
+            if accepted && !keep_input {
                 crate::audio_service::set_voice_call_input_device(
                     crate::get_default_sound_input(),
                     false,
                 );
+            }
+            if accepted {
                 self.send_to_cm(Data::StartVoiceCall);
             } else {
                 self.send_to_cm(Data::CloseVoiceCall("".to_owned()));

@@ -198,6 +198,8 @@ pub fn usbip_uninstall_cmd(exe: &str) -> String {
 pub fn on_conn_closed(_conn_id: i32) {
     #[cfg(windows)]
     super::usb_server::on_conn_closed(_conn_id);
+    #[cfg(windows)]
+    super::mic::on_conn_closed(_conn_id);
 }
 
 fn answer(hello: &Hello, ctx: &ConnCtx) -> dd_pro::Union {
@@ -214,7 +216,11 @@ fn answer(hello: &Hello, ctx: &ConnCtx) -> dd_pro::Union {
     if let dd_pro::Union::Accept(accept) = &mut reply {
         if accept.format.is_some() {
             match open_channel(display, ctx) {
-                Ok(media) => accept.media = Some(media).into(),
+                Ok(media) => {
+                    accept.media = Some(media).into();
+                    #[cfg(windows)]
+                    super::mic::on_pro_session(ctx.conn.id());
+                }
                 #[cfg(all(windows, feature = "vram"))]
                 Err(e) if e.is::<super::video::Busy>() => {
                     throttled_log!(PEER_LOG_INTERVAL, warn, "ddpro: pro session refused (DISPLAY_BUSY): {e}");

@@ -1,0 +1,157 @@
+; dreamdesk_mic.inf —— DreamDesk 虚拟音频：一个扬声器 + 一个麦克风。结构照 simpleaudiosample 的 inx。
+; [Strings] 里的 KSNAME 必须和 simpleaudio\minipairs.h 的滤波器名一致，否则驱动能加载但不出端点。
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = MEDIA
+ClassGuid   = {4d36e96c-e325-11ce-bfc1-08002be10318}
+Provider    = %ProviderName%
+; 占位。stampinf 构建时改写成日期+时间，出包用 x64\<CFG>\ 下那份。**不要手改** ——
+; pnputil 只比 DriverVer，两个不同的 .sys 顶同一版本号时静默保留旧的。
+DriverVer   = 04/30/2026, 1.0.11.0
+CatalogFile = dreamdesk_mic.cat
+PnpLockdown = 1
+
+[SourceDisksNames]
+1 = %DiskName%
+
+[SourceDisksFiles]
+dreamdeskmic.sys = 1
+
+[Manufacturer]
+%ProviderName% = DreamDeskMic, NTamd64
+
+[DreamDeskMic.NTamd64]
+%DreamDeskMic.DeviceDesc% = DreamDeskMic_Install, ROOT\dreamdeskmic
+
+[DestinationDirs]
+DreamDeskMic.CopyFiles = 13
+
+[DreamDeskMic.CopyFiles]
+dreamdeskmic.sys
+
+[DreamDeskMic_Install.NT]
+Include   = ks.inf, wdmaudio.inf
+Needs     = KS.Registration, WDMAUDIO.Registration
+CopyFiles = DreamDeskMic.CopyFiles
+AddReg    = DreamDeskMic.AddReg
+
+[DreamDeskMic.AddReg]
+HKR,,AssociatedFilters,,"wdmaud,swmidi,redbook"
+HKR,,Driver,,dreamdeskmic.sys
+HKR,Drivers,SubClasses,,"wave,midi,mixer"
+HKR,Drivers\wave\wdmaud.drv,Driver,,wdmaud.drv
+HKR,Drivers\midi\wdmaud.drv,Driver,,wdmaud.drv
+HKR,Drivers\mixer\wdmaud.drv,Driver,,wdmaud.drv
+HKR,Drivers\wave\wdmaud.drv,Description,,%DreamDeskMic.DeviceDesc%
+HKR,Drivers\mixer\wdmaud.drv,Description,,%DreamDeskMic.DeviceDesc%
+
+[DreamDeskMic_Install.NT.Interfaces]
+AddInterface = %KSCATEGORY_AUDIO%,    %KSNAME_WaveDreamDeskSpeaker%,     DreamDeskSpeaker.WaveInterface
+AddInterface = %KSCATEGORY_RENDER%,   %KSNAME_WaveDreamDeskSpeaker%,     DreamDeskSpeaker.WaveInterface
+AddInterface = %KSCATEGORY_REALTIME%, %KSNAME_WaveDreamDeskSpeaker%,     DreamDeskSpeaker.WaveInterface
+AddInterface = %KSCATEGORY_AUDIO%,    %KSNAME_TopologyDreamDeskSpeaker%, DreamDeskSpeaker.TopologyInterface
+AddInterface = %KSCATEGORY_TOPOLOGY%, %KSNAME_TopologyDreamDeskSpeaker%, DreamDeskSpeaker.TopologyInterface
+AddInterface = %KSCATEGORY_AUDIO%,    %KSNAME_WaveDreamDeskMic%,     DreamDeskMic.WaveInterface
+AddInterface = %KSCATEGORY_REALTIME%, %KSNAME_WaveDreamDeskMic%,     DreamDeskMic.WaveInterface
+AddInterface = %KSCATEGORY_CAPTURE%,  %KSNAME_WaveDreamDeskMic%,     DreamDeskMic.WaveInterface
+AddInterface = %KSCATEGORY_AUDIO%,    %KSNAME_TopologyDreamDeskMic%, DreamDeskMic.TopologyInterface
+AddInterface = %KSCATEGORY_TOPOLOGY%, %KSNAME_TopologyDreamDeskMic%, DreamDeskMic.TopologyInterface
+
+[DreamDeskSpeaker.WaveInterface]
+AddReg = DreamDeskSpeaker.WaveInterface.AddReg
+
+[DreamDeskSpeaker.WaveInterface.AddReg]
+HKR,,CLSID,,%Proxy.CLSID%
+HKR,,FriendlyName,,%DreamDeskSpeaker.WaveDeviceName%
+
+[DreamDeskSpeaker.TopologyInterface]
+AddReg = DreamDeskSpeaker.TopologyInterface.AddReg
+
+[DreamDeskSpeaker.TopologyInterface.AddReg]
+HKR,,CLSID,,%Proxy.CLSID%
+HKR,,FriendlyName,,%DreamDeskSpeaker.TopologyDeviceName%
+HKR,EP\0,%PKEY_AudioEndpoint_Association%,,%KSNODETYPE_ANY%
+HKR,EP\0,%PKEY_AudioEndpoint_Supports_EventDriven_Mode%,0x00010001,0x1
+
+[DreamDeskMic.WaveInterface]
+AddReg = DreamDeskMic.WaveInterface.AddReg
+
+[DreamDeskMic.WaveInterface.AddReg]
+HKR,,CLSID,,%Proxy.CLSID%
+HKR,,FriendlyName,,%DreamDeskMic.WaveDeviceName%
+
+[DreamDeskMic.TopologyInterface]
+AddReg = DreamDeskMic.TopologyInterface.AddReg
+
+[DreamDeskMic.TopologyInterface.AddReg]
+HKR,,CLSID,,%Proxy.CLSID%
+HKR,,FriendlyName,,%DreamDeskMic.TopologyDeviceName%
+HKR,EP\0,%PKEY_AudioEndpoint_Association%,,%KSNODETYPE_ANY%
+HKR,EP\0,%PKEY_AudioEndpoint_Supports_EventDriven_Mode%,0x00010001,0x1
+; 空 CLSID 的 FX：告诉音频引擎 DEFAULT / SPEECH / COMMUNICATIONS 由设备自己处理，
+; 系统就不再插它的软件通信 APO（含 AGC）。没有 APO 真的加载 = 直通。
+; 必须和 simpleaudio\micarraywavtable.h 里声明的四个模式配套。
+HKR,FX\0,%PKEY_FX_Association%,,%KSNODETYPE_ANY%
+HKR,FX\0,%PKEY_FX_StreamEffectClsid%,,%NULL_CLSID%
+HKR,FX\0,%PKEY_FX_ModeEffectClsid%,,%NULL_CLSID%
+HKR,FX\0,%PKEY_SFX_ProcessingModes_Supported_For_Streaming%,0x00010000,%AUDIO_SIGNALPROCESSINGMODE_DEFAULT%,%AUDIO_SIGNALPROCESSINGMODE_SPEECH%,%AUDIO_SIGNALPROCESSINGMODE_COMMUNICATIONS%
+HKR,FX\0,%PKEY_MFX_ProcessingModes_Supported_For_Streaming%,0x00010000,%AUDIO_SIGNALPROCESSINGMODE_DEFAULT%,%AUDIO_SIGNALPROCESSINGMODE_SPEECH%,%AUDIO_SIGNALPROCESSINGMODE_COMMUNICATIONS%
+
+[DreamDeskMic_Install.NT.Services]
+AddService = dreamdeskmic, 0x00000002, DreamDeskMic.Service
+
+[DreamDeskMic.Service]
+DisplayName    = %DreamDeskMic.SvcDesc%
+ServiceType    = 1            ; SERVICE_KERNEL_DRIVER
+StartType      = 3            ; SERVICE_DEMAND_START
+ErrorControl   = 1            ; SERVICE_ERROR_NORMAL
+ServiceBinary  = %13%\dreamdeskmic.sys
+
+[DreamDeskMic_Install.NT.HW]
+AddReg = DreamDeskMic.HW.AddReg
+
+[DreamDeskMic.HW.AddReg]
+; FILE_DEVICE_SOUND
+HKR,,DeviceType,0x10001,0x0000001D
+; SDDL_DEVOBJ_SYS_ALL_ADM_RWX_WORLD_RWX_RES_RWX（音频设备本身，不是控制设备）
+HKR,,Security,,"D:P(A;;GA;;;SY)(A;;GRGWGX;;;BA)(A;;GRGWGX;;;WD)(A;;GRGWGX;;;RC)"
+
+[Strings]
+ProviderName                    = "DreamDesk"
+DiskName                        = "DreamDesk Virtual Audio Driver Disk"
+; 端点在声音设置里显示为「扬声器 (<DeviceDesc>)」「麦克风阵列 (<DeviceDesc>)」，
+; 所以设备名不能叫 Microphone。被控端在播放端点里按这个名字（PKEY_DeviceInterface_FriendlyName）找扬声器，
+; 改它要同步改 dd_audio_bridge_win.cpp。
+DreamDeskMic.DeviceDesc         = "DreamDesk Virtual Audio"
+DreamDeskMic.SvcDesc            = "DreamDesk Virtual Audio Driver"
+DreamDeskMic.WaveDeviceName     = "DreamDesk Microphone (Wave)"
+DreamDeskMic.TopologyDeviceName = "DreamDesk Microphone (Topology)"
+DreamDeskSpeaker.WaveDeviceName     = "DreamDesk Speaker (Wave)"
+DreamDeskSpeaker.TopologyDeviceName = "DreamDesk Speaker (Topology)"
+
+KSNAME_WaveDreamDeskMic         = "WaveDreamDeskMic"
+KSNAME_TopologyDreamDeskMic     = "TopologyDreamDeskMic"
+KSNAME_WaveDreamDeskSpeaker     = "WaveDreamDeskSpeaker"
+KSNAME_TopologyDreamDeskSpeaker = "TopologyDreamDeskSpeaker"
+
+Proxy.CLSID                     = "{17CCA71B-ECD7-11D0-B908-00A0C9223196}"
+KSCATEGORY_AUDIO                = "{6994AD04-93EF-11D0-A3CC-00A0C9223196}"
+KSCATEGORY_CAPTURE              = "{65E8773D-8F56-11D0-A3B9-00A0C9223196}"
+KSCATEGORY_RENDER               = "{65E8773E-8F56-11D0-A3B9-00A0C9223196}"
+KSCATEGORY_REALTIME             = "{EB115FFC-10C8-4964-831D-6DCB02E6F23F}"
+KSCATEGORY_TOPOLOGY             = "{DDA54A40-1E4C-11D1-A050-405705C10000}"
+KSNODETYPE_ANY                  = "{00000000-0000-0000-0000-000000000000}"
+NULL_CLSID                      = "{00000000-0000-0000-0000-000000000000}"
+
+PKEY_AudioEndpoint_Association                   = "{1DA5D803-D492-4EDD-8C23-E0C0FFEE7F0E},2"
+PKEY_AudioEndpoint_Supports_EventDriven_Mode     = "{1DA5D803-D492-4EDD-8C23-E0C0FFEE7F0E},7"
+PKEY_FX_Association                              = "{D04E05A6-594B-4fb6-A80D-01AF5EED7D1D},0"
+PKEY_FX_StreamEffectClsid                        = "{D04E05A6-594B-4fb6-A80D-01AF5EED7D1D},5"
+PKEY_FX_ModeEffectClsid                          = "{D04E05A6-594B-4fb6-A80D-01AF5EED7D1D},6"
+PKEY_SFX_ProcessingModes_Supported_For_Streaming = "{D3993A3F-99C2-4402-B5EC-A92A0367664B},5"
+PKEY_MFX_ProcessingModes_Supported_For_Streaming = "{D3993A3F-99C2-4402-B5EC-A92A0367664B},6"
+
+AUDIO_SIGNALPROCESSINGMODE_DEFAULT        = "{C18E2F7E-933D-4965-B7D1-1EEF228D2AF3}"
+AUDIO_SIGNALPROCESSINGMODE_SPEECH         = "{FC1CFC9B-B9D6-4CFA-B5E0-4BB2166878B2}"
+AUDIO_SIGNALPROCESSINGMODE_COMMUNICATIONS = "{9CF2A70B-F377-403B-BD6B-360863E0355C}"

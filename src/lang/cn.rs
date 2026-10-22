@@ -843,5 +843,6 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Enter pro mode", "进入专业模式"),
         ("api_server_connection_tip", "自定义服务器正在使用未加密的 HTTP。请联系管理员启用 HTTPS。"),
         ("api_server_empty_tip", "API 服务器留空时，自定义服务器默认使用 HTTP。请联系管理员启用 HTTPS。"),
+        ("Microphone", "麦克风"),
     ].iter().cloned().collect();
 }
