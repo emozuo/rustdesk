@@ -66,10 +66,12 @@ pub fn on_window_start<T: InvokeUiSession>(session: &Session<T>, window: uuid::U
 /// 对 `display` 发起专业请求（开会话、换屏各算新的一次）。本机能力第一次探测要打开显卡、连 Wayland，
 /// 几十到几百毫秒，放到单独的线程里做，不占 RustDesk 的消息循环；请求经会话的发送通道发出。
 fn request_pro<T: InvokeUiSession>(session: &Session<T>, display: u32) {
-    #[cfg(all(feature = "flutter", target_os = "linux"))]
-    super::view_link::clear_notice(session, display as i32);
     let session = session.clone();
     std::thread::spawn(move || {
+        // 撤提示也在这个线程里：工具栏切屏时调用方拿着会话窗口表的写锁（`flutter.rs` 的 `session_switch_display`），
+        // 撤提示要往界面推事件、读同一张表，当场做会卡死。故障只在答复之后出现，先撤后发顺序不变
+        #[cfg(all(feature = "flutter", target_os = "linux"))]
+        super::view_link::clear_notice(&session, display as i32);
         if let Some(m) = wrap(ddpro::hello(decode_caps(), display_caps(), display)) {
             session.send(Data::Message(m));
         }
