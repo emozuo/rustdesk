@@ -8,7 +8,7 @@
 //!
 //! 本模块只管布局、绘制和交互；画出来的图交给专业窗口的叠加图层（`ddpro::view::Window::set_layer`）。
 //! 画法照 RustDesk 白板功能（`src/whiteboard`）：tiny-skia 画形状，ttf-parser 取字形轮廓。
-//! 屏幕缩放不是 100% 时专业画面本来就不逐像素（质量面板会标「Scaled」），这里按物理像素画、不跟缩放。
+//! 按窗口坐标（逻辑像素）画：屏幕缩放不是 100% 时由合成器放大（会发虚），专业画面那时本来也不逐像素（质量面板会标「Scaled」）。
 
 use ddpro::view::LayerImage;
 use hbb_common::log;
@@ -24,7 +24,7 @@ const LAYER_STATUS: usize = 2;
 const BALL: f32 = 42.0;
 const BALL_RADIUS: f32 = 13.0;
 const BORDER: f32 = 4.0;
-/// 缩进时露出的宽度
+/// 缩进的球「原来露边」的宽度：缩进时整块撤掉（见 [`Ball::render`]），这个宽度只用来定鼠标靠近多少就滑出来
 const PEEK: f32 = 15.0;
 /// 默认位置离右边的距离：躲开被控端最大化窗口右上角的最小化 / 最大化 / 关闭按钮（旧实现的取值）
 const RIGHT_GAP: f32 = 220.0;
@@ -156,7 +156,8 @@ impl Item {
 enum Target {
     Ball,
     Row(usize),
-    SubRow(usize),
+    /// （哪个子菜单，第几行）：按下后悬停可能把子菜单换成别的，松开时要还是同一个子菜单的同一行才算
+    SubRow(usize, usize),
     /// 菜单开着时点在外面：关菜单，这一下不发给远程
     Outside,
 }
@@ -329,6 +330,8 @@ impl Ball {
         self.tucked = true;
         self.close_menu();
         self.dirty = true;
+        // 状态块贴在右下角，屏幕尺寸变了要按新尺寸重画
+        self.status_dirty |= self.show_status;
     }
 
     /// 鼠标移动；返回 true 表示这一下归悬浮球，不发给远程
@@ -364,8 +367,8 @@ impl Ball {
                 Target::Ball
             } else if let Some(r) = self.row_at() {
                 Target::Row(r)
-            } else if let Some(r) = self.sub_row_at() {
-                Target::SubRow(r)
+            } else if let (Some(r), Some(m)) = (self.sub_row_at(), self.sub_open) {
+                Target::SubRow(m, r)
             } else if self.menu_open {
                 Target::Outside
             } else {
@@ -414,7 +417,7 @@ impl Ball {
             Target::Row(r) if self.row_at() == Some(r) => {
                 let item = ITEMS[r];
                 if item.has_sub() {
-                    self.sub_open = if self.sub_open == Some(r) { None } else { Some(r) };
+                    // 子菜单随悬停展开（下面的 update_hover），点它不用再做什么
                     None
                 } else {
                     self.close_menu();
@@ -435,7 +438,7 @@ impl Ball {
                     })
                 }
             }
-            Target::SubRow(r) if self.sub_row_at() == Some(r) => {
+            Target::SubRow(m, r) if self.sub_open == Some(m) && self.sub_row_at() == Some(r) => {
                 let action = self.sub_entries().get(r).and_then(|e| e.action);
                 self.close_menu();
                 action
@@ -458,6 +461,10 @@ impl Ball {
             self.dirty = true;
         }
         self.swallowed.clear();
+        // 先当指针在屏外：挪到本窗口别处时紧接着有进入 / 移动把位置更新回来；真离开窗口（划到另一块屏）就不会再有，
+        // 不复位的话球一直露着、图层不撤，合成器不能直接送显示
+        self.pointer = (-1.0e4, -1.0e4);
+        self.update_hover();
     }
 
     /// 滚轮：鼠标在球 / 菜单上时不发给远程
@@ -561,7 +568,7 @@ impl Ball {
         }
     }
 
-    /// 球此刻画在哪（缩进时只露一条边）
+    /// 球此刻在哪（缩进时是「原来露边」的位置，不画，只用来判断鼠标靠近）
     fn ball_pos(&self) -> (f32, f32) {
         match (self.edge, self.tucked) {
             (Some(Edge::Top), true) => (self.x, PEEK - BALL),
