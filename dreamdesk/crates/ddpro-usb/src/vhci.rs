@@ -23,7 +23,7 @@ const PARAMETERS: &str = r"HKLM\SYSTEM\CurrentControlSet\Services\usbip2_ude\Par
 pub fn exe() -> Option<PathBuf> {
     ["ProgramW6432", "ProgramFiles"]
         .iter()
-        .filter_map(|v| std::env::var_os(v))
+        .filter_map(std::env::var_os)
         .map(|d| PathBuf::from(d).join("USBip").join("usbip.exe"))
         .find(|p| p.exists())
 }

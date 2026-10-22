@@ -6,7 +6,7 @@
 use crate::{convert::Converter, cuda::TextureCopy, nvenc_sys::*, Caps, Error};
 use std::{ffi::c_void, mem, ptr};
 use windows::{
-    core::{Interface, PCSTR},
+    core::{s, Interface},
     Win32::{
         Graphics::Direct3D11::ID3D11Device,
         System::LibraryLoader::{GetProcAddress, LoadLibraryA},
@@ -58,10 +58,10 @@ struct Api(NV_ENCODE_API_FUNCTION_LIST);
 impl Api {
     fn load() -> Result<Self, Error> {
         unsafe {
-            let lib = LoadLibraryA(PCSTR(b"nvEncodeAPI64.dll\0".as_ptr())).map_err(|_| {
+            let lib = LoadLibraryA(s!("nvEncodeAPI64.dll")).map_err(|_| {
                 Error::Unsupported("nvEncodeAPI64.dll not found (no NVIDIA driver)".to_owned())
             })?;
-            let get_max = GetProcAddress(lib, PCSTR(b"NvEncodeAPIGetMaxSupportedVersion\0".as_ptr()))
+            let get_max = GetProcAddress(lib, s!("NvEncodeAPIGetMaxSupportedVersion"))
                 .ok_or_else(|| Error::Unsupported("NvEncodeAPIGetMaxSupportedVersion missing".to_owned()))?;
             let get_max: GetMaxVersionFn = mem::transmute(get_max);
             let mut max = 0u32;
@@ -76,7 +76,7 @@ impl Api {
                     NVENCAPI_MINOR_VERSION
                 )));
             }
-            let create = GetProcAddress(lib, PCSTR(b"NvEncodeAPICreateInstance\0".as_ptr()))
+            let create = GetProcAddress(lib, s!("NvEncodeAPICreateInstance"))
                 .ok_or_else(|| Error::Unsupported("NvEncodeAPICreateInstance missing".to_owned()))?;
             let create: CreateInstanceFn = mem::transmute(create);
             let mut fns: NV_ENCODE_API_FUNCTION_LIST = mem::zeroed();
@@ -102,7 +102,7 @@ fn status(s: NVENCSTATUS, call: &'static str, detail: Option<String>) -> Result<
     } else {
         Err(Error::Nvenc {
             call,
-            status: s as i32,
+            status: s,
             detail: detail.unwrap_or_default(),
         })
     }

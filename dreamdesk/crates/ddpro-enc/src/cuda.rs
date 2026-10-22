@@ -5,7 +5,7 @@
 use crate::Error;
 use std::{ffi::c_void, mem, ptr};
 use windows::{
-    core::{Interface, PCSTR},
+    core::{s, Interface},
     Win32::{
         Graphics::{
             Direct3D11::{ID3D11Device, ID3D11Texture2D},
@@ -70,12 +70,12 @@ struct Api {
 impl Api {
     fn load() -> Result<Self, Error> {
         unsafe {
-            let lib = LoadLibraryA(PCSTR(b"nvcuda.dll\0".as_ptr()))
+            let lib = LoadLibraryA(s!("nvcuda.dll"))
                 .map_err(|_| Error::Unsupported("nvcuda.dll not found (no NVIDIA driver)".to_owned()))?;
             macro_rules! sym {
                 ($name:literal) => {
                     mem::transmute(
-                        GetProcAddress(lib, PCSTR(concat!($name, "\0").as_ptr()))
+                        GetProcAddress(lib, s!($name))
                             .ok_or_else(|| Error::Unsupported(concat!("nvcuda.dll has no ", $name).to_owned()))?,
                     )
                 };

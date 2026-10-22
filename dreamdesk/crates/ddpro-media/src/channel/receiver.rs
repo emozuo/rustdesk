@@ -187,7 +187,7 @@ impl Receiver {
             if Instant::now() >= deadline {
                 return Err(Error::Timeout("no video from the controlled side on the pro channel"));
             }
-            if last_hello.map_or(true, |t| t.elapsed() >= Duration::from_millis(100)) {
+            if last_hello.is_none_or(|t| t.elapsed() >= Duration::from_millis(100)) {
                 r.send_control(CTRL_HELLO, &[])?;
                 last_hello = Some(Instant::now());
             }
@@ -595,7 +595,7 @@ impl Receiver {
             return;
         }
         // 已经在等关键帧：残缺分片只是同一次丢包的后果，不再报；新的间隙限频再报
-        if packets > 0 && self.last_loss_event.map_or(true, |t| t.elapsed() >= LOSS_REREQUEST) {
+        if packets > 0 && self.last_loss_event.is_none_or(|t| t.elapsed() >= LOSS_REREQUEST) {
             self.emit_loss(packets);
         }
     }
@@ -609,7 +609,7 @@ impl Receiver {
     /// 等关键帧太久（请求丢了，或刚连上时错过了第一个关键帧）就再要一次。关键帧正在到达时不算：
     /// 发包节奏把大关键帧摊开发，到齐可能要上百毫秒；它要是到残了，按丢包另行请求。
     fn repeat_loss(&mut self) {
-        let due = self.last_loss_event.map_or(true, |t| t.elapsed() >= LOSS_REPEAT);
+        let due = self.last_loss_event.is_none_or(|t| t.elapsed() >= LOSS_REPEAT);
         if self.waiting_irap && due && !self.keyframe_arriving {
             self.emit_loss(0);
         }
