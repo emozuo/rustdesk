@@ -98,16 +98,24 @@ macro_rules! configure_http_client {
     }};
 }
 
+#[cfg_attr(feature = "dd-managed", allow(unused_variables))]
 pub fn create_http_client(tls_type: TlsType, danger_accept_invalid_cert: bool) -> SyncClient {
     let builder = SyncClient::builder();
+    #[cfg(feature = "dd-managed")]
+    let (builder, tls_type, danger_accept_invalid_cert) =
+        (crate::ddpro::server_tls::pin_sync(builder), TlsType::Rustls, false);
     configure_http_client!(builder, tls_type, danger_accept_invalid_cert, SyncClient)
 }
 
+#[cfg_attr(feature = "dd-managed", allow(unused_variables))]
 pub fn create_http_client_async(
     tls_type: TlsType,
     danger_accept_invalid_cert: bool,
 ) -> AsyncClient {
     let builder = AsyncClient::builder();
+    #[cfg(feature = "dd-managed")]
+    let (builder, tls_type, danger_accept_invalid_cert) =
+        (crate::ddpro::server_tls::pin_async(builder), TlsType::Rustls, false);
     configure_http_client!(builder, tls_type, danger_accept_invalid_cert, AsyncClient)
 }
 
