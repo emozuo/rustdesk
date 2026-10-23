@@ -84,6 +84,8 @@ message LoginRequest {
   string my_platform = 13;
   bytes hwid = 14;
   string avatar = 17;
+  // DreamDesk connection ticket (dreamdesk-gateway docs/协议-连接票与设备签名.md); far from upstream numbers
+  bytes dd_ticket = 1001;
 }
 
 message Terminal {

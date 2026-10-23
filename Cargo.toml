@@ -48,6 +48,9 @@ unix-file-copy-paste = [
 screencapturekit = ["cpal/screencapturekit"]
 dd-pro = ["dep:ddpro"]
 dd-brand = []
+# 受管：被控端只认服务端签发的连接票（src/ddpro/managed.rs）；-dev 另外信任开发测试钥，产品构建不开
+dd-managed = ["dd-pro"]
+dd-managed-dev = ["dd-managed"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

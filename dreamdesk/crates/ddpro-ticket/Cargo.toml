@@ -1,0 +1,12 @@
+[package]
+name = "ddpro-ticket"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# 连接票与设备签名（dreamdesk-gateway 仓库 docs/协议-连接票与设备签名.md）：被控端验票、主控端和设备给请求签名。
+# 签名、哈希、编码都用 RustDesk 已经在用的同一版本（hbb_common 的 sodiumoxide / sha2 / base64），不新增依赖
+[dependencies]
+sodiumoxide = "0.2"
+sha2 = "0.10"
+base64 = "0.22"

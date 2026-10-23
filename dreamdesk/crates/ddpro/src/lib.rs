@@ -11,6 +11,8 @@ pub use protos::ddpro::*;
 // RustDesk 只依赖门面这一个 crate，编码器和画面通道经这里拿
 pub use ddpro_enc as enc;
 pub use ddpro_media as media;
+// 连接票与设备签名（dreamdesk-gateway 的连接授权）
+pub use ddpro_ticket as ticket;
 pub use ddpro_usb as usb;
 // 主控端专业显示（硬解 + 窗口）目前只有 Linux 版
 #[cfg(target_os = "linux")]

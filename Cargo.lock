@@ -2087,6 +2087,7 @@ dependencies = [
  "ddpro-dec",
  "ddpro-enc",
  "ddpro-media",
+ "ddpro-ticket",
  "ddpro-usb",
  "ddpro-view",
  "protobuf",
@@ -2125,6 +2126,15 @@ dependencies = [
  "webrtc-srtp",
  "webrtc-util",
  "zstd",
+]
+
+[[package]]
+name = "ddpro-ticket"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "sha2",
+ "sodiumoxide",
 ]
 
 [[package]]

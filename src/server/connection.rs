@@ -749,6 +749,11 @@ impl Connection {
                 Some(data) = rx_from_cm.recv() => {
                     match data {
                         ipc::Data::Authorize => {
+                            #[cfg(feature = "dd-managed")]
+                            if dd_managed::MANAGED && !conn.authorized {
+                                log::warn!("dd-managed: accept from connection manager ignored");
+                                continue;
+                            }
                             conn.set_conn_audit_primary_auth(ConnAuditPrimaryAuth::Click);
                             conn.require_2fa.take();
                             if !conn.send_logon_response_and_keep_alive().await {
@@ -1938,6 +1943,8 @@ impl Connection {
         if self.conn_audit_two_factor != ConnAuditTwoFactor::None {
             audit["two_factor"] = json!(self.conn_audit_two_factor.as_i64());
         }
+        #[cfg(feature = "dd-managed")]
+        dd_managed::add_audit_jti(self.inner.id(), &mut audit);
         self.post_conn_audit(audit);
         #[allow(unused_mut)]
         let mut username = crate::platform::get_active_username();
@@ -3018,6 +3025,11 @@ impl Connection {
                 self.try_start_cm_ipc();
             }
 
+            #[cfg(feature = "dd-managed")]
+            if dd_managed::MANAGED {
+                return self.dd_managed_login().await;
+            }
+
             // https://github.com/rustdesk/rustdesk-server-pro/discussions/646
             // `is_logon` is used to check login with `OPTION_ALLOW_LOGON_SCREEN_PASSWORD` == "Y".
             // `is_logon_ui()` is a fallback for logon UI detection on Windows.
@@ -3151,6 +3163,12 @@ impl Connection {
                 }
             }
         } else if let Some(message::Union::SwitchSidesResponse(_s)) = msg.union {
+            #[cfg(feature = "dd-managed")]
+            if dd_managed::MANAGED {
+                log::warn!("dd-managed: switch sides refused");
+                self.send_login_error("Connection not allowed").await;
+                return false;
+            }
             #[cfg(feature = "flutter")]
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             if let Some(lr) = _s.lr.clone().take() {
@@ -6897,6 +6915,10 @@ pub struct AuthedConn {
     pub sender: mpsc::UnboundedSender<Data>,
     pub printer: bool,
 }
+
+#[cfg(feature = "dd-managed")]
+#[path = "../ddpro/managed.rs"]
+mod dd_managed;
 
 mod raii {
     // ALIVE_CONNS: all connections, including unauthorized connections
