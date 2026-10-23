@@ -592,9 +592,32 @@ pub fn on_window_start<T: InvokeUiSession>(session: &Session<T>, window: uuid::U
     Some(display)
 }
 
+/// 本进程环境里没有 WAYLAND_DISPLAY 时，查出桌面会话实际用的值交给专业显示去连（只查一次；主界面进程和专业窗口进程各在
+/// 第一次连 Wayland 之前调）。开机时 RustDesk 的服务经托盘拉起的主界面就没有这个变量（主界面走 Xwayland 照样显示），
+/// 它拉起的专业窗口也就没有。查法和 RustDesk 服务给后台进程配环境的一样：读本用户桌面会话里 xdg-desktop-portal 进程的环境
+pub fn init_wayland_display() {
+    static DONE: OnceLock<()> = OnceLock::new();
+    DONE.get_or_init(|| {
+        if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+            return;
+        }
+        let uid = hbb_common::users::get_current_uid().to_string();
+        let name = crate::platform::linux::get_envs(&uid, "xdg-desktop-portal", &["WAYLAND_DISPLAY"])
+            .remove("WAYLAND_DISPLAY")
+            .unwrap_or_default();
+        if name.is_empty() {
+            log::warn!("ddpro: WAYLAND_DISPLAY is not set and the desktop session's value cannot be found");
+            return;
+        }
+        log::info!("ddpro: WAYLAND_DISPLAY is not set in this process; the desktop session uses {name}");
+        ddpro::view::set_session_wayland_display(name);
+    });
+}
+
 /// 本机此刻能不能把 HDR 画面按 HDR 显示出来（P1 第 4 项）：桌面支持颜色管理（GNOME 48 起），而且每块屏都开着 HDR
 /// （`ddpro::view::probe_hdr`）。每次请求现查：用户在系统设置里开关 HDR 后，下次连接就按新状态谈
 fn hdr_output() -> bool {
+    init_wayland_display();
     match ddpro::view::probe_hdr() {
         Ok(()) => {
             log::info!("ddpro: this machine shows HDR (every screen is in HDR mode)");
@@ -666,6 +689,7 @@ pub fn decode_caps() -> FormatCaps {
 pub fn display_caps() -> DisplayCaps {
     static CAPS: OnceLock<DisplayCaps> = OnceLock::new();
     CAPS.get_or_init(|| {
+        init_wayland_display();
         let available = match ddpro::view::probe() {
             Ok(()) => true,
             Err(e) => {

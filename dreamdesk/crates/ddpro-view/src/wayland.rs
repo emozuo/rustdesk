@@ -88,6 +88,35 @@ fn err<E: fmt::Display>(what: &str) -> impl FnOnce(E) -> Error + '_ {
     move |e| Error(format!("{what}: {e}"))
 }
 
+/// 调用方查到的桌面会话的 WAYLAND_DISPLAY（见 [`set_session_wayland_display`]）
+static SESSION_DISPLAY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// 本进程环境里没有 WAYLAND_DISPLAY 时，调用方查到的桌面会话实际用的值（连接点名，或绝对路径）：之后连 Wayland 按它连。
+/// 开机时 RustDesk 的服务经托盘拉起的主界面就没有这个变量（主界面走 Xwayland 照样显示，RustDesk 自己不需要它），
+/// 它拉起的专业窗口也就没有（2026-10-23 瘦客户机重启后实撞：专业模式报「本机没有专业显示」）。只认第一次设的值
+pub fn set_session_wayland_display(name: String) {
+    let _ = SESSION_DISPLAY.set(name);
+}
+
+/// 连 Wayland 桌面：按环境变量；环境里没有 WAYLAND_DISPLAY 而调用方给了桌面会话的值时，按那个值连
+pub(crate) fn connect() -> std::result::Result<Connection, String> {
+    let e = match Connection::connect_to_env() {
+        Ok(c) => return Ok(c),
+        Err(e) => e,
+    };
+    let (Some(name), None) = (SESSION_DISPLAY.get(), std::env::var_os("WAYLAND_DISPLAY")) else {
+        return Err(e.to_string());
+    };
+    let path = if std::path::Path::new(name).is_absolute() {
+        std::path::PathBuf::from(name)
+    } else {
+        let dir = std::env::var_os("XDG_RUNTIME_DIR").ok_or_else(|| format!("{e} (XDG_RUNTIME_DIR is not set)"))?;
+        std::path::Path::new(&dir).join(name)
+    };
+    let stream = std::os::unix::net::UnixStream::connect(&path).map_err(|e2| format!("{}: {e2}", path.display()))?;
+    Connection::from_socket(stream).map_err(|e2| format!("{}: {e2}", path.display()))
+}
+
 /// 本机单调时钟（纳秒）。上屏回执用的也是它（合成器报的时钟号不是它时 [`Event::Presented`] 里会标出来）。
 pub fn now_ns() -> i64 {
     clock_ns(libc::CLOCK_MONOTONIC)
@@ -298,7 +327,7 @@ pub struct Window {
 impl Window {
     /// 连上 Wayland、开一个全屏无边框窗口，等合成器给出尺寸和格式支持。`app_id` 是已安装的桌面文件名（不带 .desktop）。
     pub fn open(title: &str, app_id: &str) -> Result<Self> {
-        let conn = Connection::connect_to_env().map_err(err("connect to the Wayland display"))?;
+        let conn = connect().map_err(err("connect to the Wayland display"))?;
         let (globals, queue) = registry_queue_init::<State>(&conn).map_err(err("read the Wayland globals"))?;
         let qh = queue.handle();
         let compositor = CompositorState::bind(&globals, &qh).map_err(err("bind wl_compositor"))?;
@@ -1151,7 +1180,7 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for State {
 /// 不能时返回原因（谈判时如实报给被控端）。
 pub fn probe() -> std::result::Result<(), String> {
     const XRGB8888: u32 = 0x3432_5258;
-    let conn = Connection::connect_to_env()
+    let conn = connect()
         .map_err(|e| format!("needs a Wayland desktop (cannot reach the Wayland display: {e})"))?;
     let (globals, mut queue) = registry_queue_init::<Probe>(&conn).map_err(|e| format!("read the Wayland globals: {e}"))?;
     let qh = queue.handle();

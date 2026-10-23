@@ -188,7 +188,7 @@ impl<D: HasColor + Dispatch<WpColorManagementOutputV1, ()>> Dispatch<WpColorMana
 /// 专业窗口可能落在没开的那块上，合成器把 HDR 压回普通画面不如被控端直接给 8bit 准）。不能时返回原因。
 /// 每次现查（一次连接、几次往返，几毫秒）：用户在系统设置里开关 HDR 后，下次请求专业模式就按新状态谈。
 pub fn probe_hdr() -> Result<(), String> {
-    let conn = Connection::connect_to_env().map_err(|e| format!("cannot reach the Wayland display: {e}"))?;
+    let conn = crate::wayland::connect().map_err(|e| format!("cannot reach the Wayland display: {e}"))?;
     let (globals, mut queue) = registry_queue_init::<HdrProbe>(&conn).map_err(|e| format!("read the Wayland globals: {e}"))?;
     let qh = queue.handle();
     let cm = globals

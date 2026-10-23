@@ -840,6 +840,7 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
 fn open_display(start: &ViewStart) -> ResultType<(Window, Device, Decoder, Converter, Option<GlConverter>, bool)> {
     // 桌面文件按应用名装（产品版 dreamdesk-pro.desktop，原版 rustdesk.desktop），和通用窗口同一个应用名
     let app_id = crate::get_app_name().to_lowercase();
+    super::view_link::init_wayland_display();
     let mut win = Window::open(
         if start.title.is_empty() { &app_id } else { &start.title },
         &app_id,
