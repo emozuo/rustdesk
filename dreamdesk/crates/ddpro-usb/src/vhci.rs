@@ -110,38 +110,20 @@ pub fn install(bundle_dir: &std::path::Path) -> Result<String, String> {
     // 先关自动重连：驱动在安装过程中加载时读这个值（登记还在的话；装完再设一次兜底）
     let reattach_before = ensure_no_reattach();
     let have = if exe().is_some() { reg_value(UNINSTALL_KEY, "DisplayVersion") } else { None };
-    // 升级前看：安装程序重新登记时可能把隐藏标记冲掉
-    let ours = have.is_none() || owned();
+    // 升级前看：安装程序重新登记时可能把隐藏标记冲掉。「原来没装」看登记、不看 usbip.exe：别人装在别的目录的也算别人的
+    let ours = reg_value(UNINSTALL_KEY, "DisplayVersion").is_none() || owned();
     let mut done = Vec::new();
-    if have.as_deref() != Some(want.as_str()) {
-        let o = run_with_timeout_of(
-            Command::new(&setup).args([
-                "/VERYSILENT",
-                "/SUPPRESSMSGBOXES",
-                "/NORESTART",
-                "/COMPONENTS=main,client",
-                "/TASKS=vcredist",
-                "/NOICONS",
-            ]),
-            "the USB/IP driver installer",
-            INSTALLER_TIMEOUT,
-        )?;
-        if !o.status.success() {
-            return Err(format!("the USB/IP driver installer failed ({})", o.status));
-        }
-        if exe().is_none() {
-            return Err("the USB/IP driver installer finished but usbip.exe is missing".to_owned());
-        }
-        done.push(format!("installed usbip-win2 {want} (was {})", have.as_deref().unwrap_or("none")));
+    let installed = if have.as_deref() != Some(want.as_str()) {
+        run_installer(&setup).map(|()| format!("installed usbip-win2 {want} (was {})", have.as_deref().unwrap_or("none")))
     } else {
-        done.push(format!("usbip-win2 {want} already installed"));
-    }
-    if ours {
-        run_with_timeout(
-            Command::new("reg").args(["add", UNINSTALL_KEY, "/v", "SystemComponent", "/t", "REG_DWORD", "/d", "1", "/f"]),
-            "reg add",
-        )?;
-    } else {
+        Ok(format!("usbip-win2 {want} already installed"))
+    };
+    // 归产品管的装失败了也标回去（登记已经在了的话）：不然下次就当成别人装的，产品卸载时留下来。进程被强杀、断电时
+    // 标不回去，后果只是产品卸载时留下它（已知限制）
+    let marked = if ours && reg_value(UNINSTALL_KEY, "DisplayVersion").is_some() { mark_owned() } else { Ok(()) };
+    done.push(installed?);
+    marked?;
+    if !ours {
         done.push("it was installed before this product, so it stays in Apps and is kept when the product is uninstalled".to_owned());
     }
     match ensure_no_reattach() {
@@ -152,6 +134,42 @@ pub fn install(bundle_dir: &std::path::Path) -> Result<String, String> {
         Err(e) => return Err(format!("cannot turn off the driver's automatic reattach: {e}")),
     }
     Ok(done.join("; "))
+}
+
+/// 静默跑随包的安装程序，只装驱动和命令行
+fn run_installer(setup: &std::path::Path) -> Result<(), String> {
+    let o = run_with_timeout_of(
+        Command::new(setup).args([
+            "/VERYSILENT",
+            "/SUPPRESSMSGBOXES",
+            "/NORESTART",
+            "/COMPONENTS=main,client",
+            "/TASKS=vcredist",
+            "/NOICONS",
+        ]),
+        "the USB/IP driver installer",
+        INSTALLER_TIMEOUT,
+    )?;
+    if !o.status.success() {
+        return Err(format!("the USB/IP driver installer failed ({})", o.status));
+    }
+    if exe().is_none() {
+        return Err("the USB/IP driver installer finished but usbip.exe is missing".to_owned());
+    }
+    Ok(())
+}
+
+/// 从「应用和功能」里隐藏，也就是记成归产品管（见 [`owned`]）
+fn mark_owned() -> Result<(), String> {
+    let o = run_with_timeout(
+        Command::new("reg").args(["add", UNINSTALL_KEY, "/v", "SystemComponent", "/t", "REG_DWORD", "/d", "1", "/f"]),
+        "reg add",
+    )?;
+    if o.status.success() {
+        Ok(())
+    } else {
+        Err(format!("cannot mark usbip-win2 as installed by this product (reg add failed: {})", o.status))
+    }
 }
 
 /// 卸掉产品装的 usbip-win2（产品卸载时调；它自己的卸载程序连驱动一起清）。别人原先装的不卸。返回做了什么（写日志用）
