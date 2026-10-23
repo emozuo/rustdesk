@@ -28,7 +28,7 @@ use std::{
         mpsc::{self, RecvTimeoutError},
         Mutex, OnceLock,
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 // 专业窗口交来的按键位置码（X 键码 = evdev + 8）：左右 Win、L
@@ -57,8 +57,9 @@ struct Link {
     mic: bool,
     /// 悬浮球「HDR」第一次切本机的屏之前各屏的颜色模式：RustDesk 连接断开时按它恢复（用户 2026-10-23 定）
     hdr_restore: Option<Vec<(String, u32)>>,
-    /// 悬浮球「HDR」切换中（发出请求到重新请求专业模式）：被控端切 HDR 时旧专业会话报的停止是预料之中的，不挂故障提示
-    hdr_switching: bool,
+    /// 悬浮球「HDR」切换开始的时刻（发出请求到重新请求专业模式）：这期间被控端切 HDR 时旧专业会话报的停止是预料之中的，
+    /// 不挂故障提示；再点「HDR」不理。答复丢了（比如这期间断线重连）也只管 [`HDR_SWITCH_MAX`] 这么久，不会一直挡着故障提示
+    hdr_switching: Option<Instant>,
 }
 
 /// 一块远程屏的专业窗口和挂在显示它的那个 RustDesk 窗口上的提示。
@@ -84,7 +85,15 @@ impl Link {
     fn multi(&self) -> bool {
         self.views.values().any(|v| v.window.is_some())
     }
+
+    /// 悬浮球「HDR」正在切换（还没过期）
+    fn hdr_switching(&self) -> bool {
+        self.hdr_switching.is_some_and(|t| t.elapsed() < HDR_SWITCH_MAX)
+    }
 }
+
+/// 悬浮球「HDR」切换最多算多久：被控端切屏每块约 1 秒，加本机切换和等显示稳下来的 1.5 秒，10 秒足够
+const HDR_SWITCH_MAX: Duration = Duration::from_secs(10);
 
 static LINKS: OnceLock<Mutex<HashMap<u64, Link>>> = OnceLock::new();
 
@@ -218,7 +227,11 @@ fn push_mode<T: InvokeUiSession>(session: &Session<T>, display: Option<i32>, lev
 
 /// 对端提供专业模式、版本也对得上（之后 RustDesk 为别的屏开子窗口时，那块屏也请求专业模式）。
 pub fn mark_offered<T: InvokeUiSession>(session: &Session<T>) {
-    links().lock().unwrap().entry(key(session)).or_default().offered = true;
+    let mut links = links().lock().unwrap();
+    let l = links.entry(key(session)).or_default();
+    l.offered = true;
+    // 断线重连：重连前发出的「HDR」切换的答复不会再来，各块屏照常重新请求
+    l.hdr_switching = None;
 }
 
 /// 子窗口（「将我的所有显示器」开的）看的、现在没有专业窗口的屏：断线重连后要重新请求。
@@ -315,7 +328,11 @@ fn ask_hdr<T: InvokeUiSession>(session: &Session<T>, k: u64, on: bool) {
     let mut displays: Vec<u32> = {
         let mut links = links().lock().unwrap();
         let l = links.entry(k).or_default();
-        l.hdr_switching = true;
+        if l.hdr_switching() {
+            log::info!("ddpro: hdr: still switching, ignoring the click");
+            return;
+        }
+        l.hdr_switching = Some(Instant::now());
         l.views.iter().filter(|(_, v)| v.down.is_some()).map(|(d, _)| *d as u32).collect()
     };
     displays.sort_unstable();
@@ -393,7 +410,7 @@ pub fn switch_hdr<T: InvokeUiSession>(session: &Session<T>, rustdesk: UnboundedS
 /// 悬浮球「HDR」切换结束（要重新请求专业模式了）：之后被控端再报停止就照常是故障
 pub fn end_hdr_switch<T: InvokeUiSession>(session: &Session<T>) {
     if let Some(l) = links().lock().unwrap().get_mut(&key(session)) {
-        l.hdr_switching = false;
+        l.hdr_switching = None;
     }
 }
 
@@ -482,7 +499,7 @@ pub fn peer_stopped<T: InvokeUiSession>(session: &Session<T>, s: &Stopped) {
         Ok(Reason::PRIVACY_MODE) => Notice::PrivacyMode,
         _ => Notice::PeerFailed,
     };
-    if links().lock().unwrap().get(&key(session)).is_some_and(|l| l.hdr_switching) {
+    if links().lock().unwrap().get(&key(session)).is_some_and(Link::hdr_switching) {
         log::info!("ddpro: hdr: pro video of display {display} stopped while switching HDR, a new pro session follows");
     } else {
         // 被控端说的是确切原因：主控端等 3 秒没画面先挂上的通道原因（推测）让给它

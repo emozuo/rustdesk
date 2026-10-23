@@ -131,9 +131,19 @@ fn handle(data: &[u8], ctx: &ConnCtx) -> Option<Message> {
     }
 }
 
-/// 悬浮球「HDR」（v11）：切这次会话用到的屏的系统 HDR（只有 Windows 被控端能切）
+/// 悬浮球「HDR」（v11）：切这次会话用到的屏的系统 HDR（只有 Windows 被控端能切）。要这条连接能输入
+/// （和 USB 透传一样）：只看的连接不能改被控机的系统设置
 fn set_hdr(s: &SetHdr, _ctx: &ConnCtx) -> HdrResult {
     log::info!("ddpro: hdr: the controller asks to turn HDR {} on display(s) {:?}", if s.on { "on" } else { "off" }, s.displays);
+    if !_ctx.keyboard {
+        log::warn!("ddpro: hdr: refused, this connection has no keyboard / mouse control");
+        return HdrResult {
+            on: s.on,
+            ok: false,
+            detail: "this connection has no keyboard / mouse control".to_owned(),
+            ..Default::default()
+        };
+    }
     #[cfg(windows)]
     return super::hdr_server::apply(_ctx.conn.id(), s.on, &s.displays);
     #[cfg(not(windows))]
