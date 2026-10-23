@@ -188,7 +188,7 @@ pub fn usbip_command(cmd: &str) {
         "install" => std::env::current_exe()
             .map_err(|e| e.to_string())
             .and_then(|exe| ddpro::usb::vhci::install(&exe.with_file_name("usbip"))),
-        "uninstall" => ddpro::usb::vhci::uninstall().map(|()| "usbip-win2 uninstalled".to_owned()),
+        "uninstall" => ddpro::usb::vhci::uninstall(),
         _ => Err(format!("unknown --ddpro-usbip command {cmd:?}")),
     };
     match result {
