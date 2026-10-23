@@ -2086,6 +2086,7 @@ version = "0.1.0"
 dependencies = [
  "ddpro-dec",
  "ddpro-enc",
+ "ddpro-ident",
  "ddpro-media",
  "ddpro-ticket",
  "ddpro-usb",
@@ -2111,6 +2112,13 @@ name = "ddpro-enc"
 version = "0.1.0"
 dependencies = [
  "scrap",
+ "windows 0.61.1",
+]
+
+[[package]]
+name = "ddpro-ident"
+version = "0.1.0"
+dependencies = [
  "windows 0.61.1",
 ]
 

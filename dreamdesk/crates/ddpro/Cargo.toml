@@ -8,6 +8,7 @@ publish = false
 protobuf = "3.7"
 ddpro-media = { path = "../ddpro-media" }
 ddpro-ticket = { path = "../ddpro-ticket" }
+ddpro-ident = { path = "../ddpro-ident" }
 ddpro-enc = { path = "../ddpro-enc" }
 ddpro-dec = { path = "../ddpro-dec" }
 ddpro-view = { path = "../ddpro-view" }

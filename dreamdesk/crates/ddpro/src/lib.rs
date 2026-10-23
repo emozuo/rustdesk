@@ -13,6 +13,7 @@ pub use ddpro_enc as enc;
 pub use ddpro_media as media;
 // 连接票与设备签名（dreamdesk-gateway 的连接授权）
 pub use ddpro_ticket as ticket;
+pub use ddpro_ident as ident;
 pub use ddpro_usb as usb;
 // 主控端专业显示（硬解 + 窗口）目前只有 Linux 版
 #[cfg(target_os = "linux")]

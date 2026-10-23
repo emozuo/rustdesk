@@ -391,6 +391,8 @@ pub fn core_main() -> Option<CoreMainAction> {
             return None;
         } else if args[0] == "--service" {
             log::info!("start --service");
+            #[cfg(feature = "dd-managed")]
+            crate::ddpro::clone_check::run();
             crate::start_os_service();
             return None;
         } else if args[0] == "--server" {

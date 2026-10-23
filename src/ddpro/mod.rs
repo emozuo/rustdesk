@@ -37,6 +37,9 @@ pub mod device_sig;
 // 受管模式：HTTP 客户端只信预置的 DreamDesk 根证书、不接受无效证书
 #[cfg(feature = "dd-managed")]
 pub mod server_tls;
+// 受管模式：被控端服务启动时按物理网卡地址自查克隆，是克隆就换设备号和设备密钥
+#[cfg(feature = "dd-managed")]
+pub mod clone_check;
 #[cfg(feature = "dd-pro")]
 pub mod server;
 // 专业视频要采集模块直接输出显卡纹理，这在 RustDesk 里绑在 vram 功能上（官方 Windows 版本来就开着）

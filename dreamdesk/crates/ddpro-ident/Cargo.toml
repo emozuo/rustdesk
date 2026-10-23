@@ -1,0 +1,16 @@
+[package]
+name = "ddpro-ident"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# 设备身份的本机自查：物理网卡地址集合（dreamdesk-gateway 仓库 docs/S1-方案.md 第二节「克隆三道防线」）
+[dependencies]
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_NetworkManagement_Ndis",
+    "Win32_Networking_WinSock",
+] }
