@@ -1,9 +1,18 @@
 //! 受管模式的服务器证书校验（dreamdesk-gateway 仓库 docs/S1-方案.md 第五节第 9 条）：RustDesk 的网络请求出错时会改成
 //! 「接受无效证书」重试并记住，登录口令、令牌、票、心跳下发的设置都经过它。受管构建里所有 HTTP 客户端只信任预置的
 //! DreamDesk 根证书（产品服务器的证书由它签发），不信任系统和内置的根证书，也不接受无效证书。
-//! 产品是内网专用，受管构建里没有别的 HTTPS 目的地，所以统一挂在 RustDesk 建 HTTP 客户端的两个函数里。
+//! 产品是内网专用，受管构建里没有别的 HTTPS 目的地，所以 RustDesk 建 HTTP 客户端的两个函数在受管构建里整个交给这里。
+//!
+//! 和 RustDesk 原来的建法（`hbbs_http::http_client` 的宏）一样用配置的代理；不同的是任何一步失败都不退回信系统根证书的
+//! 默认客户端：代理设不上就直连，再不行就给一个什么根证书都不信的客户端（请求全失败，不会被中间人）。
 
-/// 产品根证书（PEM）。密钥仪式后填入；根证书私钥离线保管，服务器证书到期换发不用改客户端
+use hbb_common::{
+    config::Config,
+    log,
+    proxy::{Proxy, ProxyScheme},
+};
+
+/// 产品根证书（PEM）：当前和备用两张，密钥仪式后填入；根证书私钥离线保管，服务器证书到期换发不用改客户端
 const PRODUCT_ROOTS: &[&str] = &[];
 /// 开发根证书：私钥在 dreamdesk-gateway 的开发环境里，只有 `dd-managed-dev` 构建认
 #[cfg(feature = "dd-managed-dev")]
@@ -18,25 +27,69 @@ fn roots() -> Vec<reqwest::Certificate> {
         .filter_map(|pem| match reqwest::Certificate::from_pem(pem.as_bytes()) {
             Ok(c) => Some(c),
             Err(e) => {
-                hbb_common::log::error!("dd-managed: bad built-in root certificate: {e}");
+                log::error!("dd-managed: bad built-in root certificate: {e}");
                 None
             }
         })
         .collect()
 }
 
-pub fn pin_async(mut b: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
-    b = b.tls_built_in_root_certs(false);
-    for c in roots() {
-        b = b.add_root_certificate(c);
+/// 配置的代理（和 RustDesk 原来的建法同样的换算）；没配为 `None`，配了但用不了为 `Err`
+fn configured_proxy() -> Result<Option<reqwest::Proxy>, String> {
+    let Some(conf) = Config::get_socks() else {
+        return Ok(None);
+    };
+    let proxy = Proxy::from_conf(&conf, None).map_err(|e| e.to_string())?;
+    let mut p = match &proxy.intercept {
+        ProxyScheme::Http { host, .. } => reqwest::Proxy::all(format!("http://{host}")),
+        ProxyScheme::Https { host, .. } => reqwest::Proxy::all(format!("https://{host}")),
+        ProxyScheme::Socks5 { addr, .. } => reqwest::Proxy::all(format!("socks5://{addr}")),
     }
-    b
+    .map_err(|e| e.to_string())?;
+    if let Some(auth) = proxy.intercept.maybe_auth() {
+        if !auth.username().is_empty() && !auth.password().is_empty() {
+            p = p.basic_auth(auth.username(), auth.password());
+        }
+    }
+    Ok(Some(p))
 }
 
-pub fn pin_sync(mut b: reqwest::blocking::ClientBuilder) -> reqwest::blocking::ClientBuilder {
-    b = b.tls_built_in_root_certs(false);
-    for c in roots() {
-        b = b.add_root_certificate(c);
-    }
-    b
+macro_rules! pinned_client {
+    ($Client:ty) => {{
+        let pinned = || {
+            let mut b = <$Client>::builder().no_proxy().use_rustls_tls().tls_built_in_root_certs(false);
+            for c in roots() {
+                b = b.add_root_certificate(c);
+            }
+            b
+        };
+        let first = match configured_proxy() {
+            Ok(Some(p)) => pinned().proxy(p).build().map_err(|e| e.to_string()),
+            Ok(None) => pinned().build().map_err(|e| e.to_string()),
+            Err(e) => Err(format!("proxy: {e}")),
+        };
+        match first {
+            Ok(c) => c,
+            Err(e) => {
+                log::error!("dd-managed: http client: {e}; trying without proxy");
+                pinned().build().unwrap_or_else(|e| {
+                    log::error!("dd-managed: pinned http client failed: {e}; requests will fail");
+                    <$Client>::builder()
+                        .no_proxy()
+                        .use_rustls_tls()
+                        .tls_built_in_root_certs(false)
+                        .build()
+                        .unwrap_or_default()
+                })
+            }
+        }
+    }};
+}
+
+pub fn client_async() -> reqwest::Client {
+    pinned_client!(reqwest::Client)
+}
+
+pub fn client_sync() -> reqwest::blocking::Client {
+    pinned_client!(reqwest::blocking::Client)
 }

@@ -1365,6 +1365,11 @@ fn should_use_tcp_proxy_for_api_url(url: &str, api_url: &str) -> bool {
 
 #[inline]
 fn is_tcp_proxy_api_target(url: &str) -> bool {
+    // DreamDesk managed builds: requests to the server only go over HTTPS with the pinned root
+    // certificate (src/ddpro/server_tls.rs); the hbbs TCP proxy bypasses that pinning.
+    if cfg!(feature = "dd-managed") {
+        return false;
+    }
     should_use_tcp_proxy_for_api_url(url, &ui_get_api_server())
 }
 
