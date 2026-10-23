@@ -594,24 +594,48 @@ pub fn on_window_start<T: InvokeUiSession>(session: &Session<T>, window: uuid::U
 
 /// 本进程环境里没有 WAYLAND_DISPLAY 时，查出桌面会话实际用的值交给专业显示去连（只查一次；主界面进程和专业窗口进程各在
 /// 第一次连 Wayland 之前调）。开机时 RustDesk 的服务经托盘拉起的主界面就没有这个变量（主界面走 Xwayland 照样显示），
-/// 它拉起的专业窗口也就没有。查法和 RustDesk 服务给后台进程配环境的一样：读本用户桌面会话里 xdg-desktop-portal 进程的环境
+/// 它拉起的专业窗口也就没有。从 systemd 用户环境里取（[`session_env`]）
 pub fn init_wayland_display() {
     static DONE: OnceLock<()> = OnceLock::new();
     DONE.get_or_init(|| {
         if std::env::var_os("WAYLAND_DISPLAY").is_some() {
             return;
         }
-        let uid = hbb_common::users::get_current_uid().to_string();
-        let name = crate::platform::linux::get_envs(&uid, "xdg-desktop-portal", &["WAYLAND_DISPLAY"])
-            .remove("WAYLAND_DISPLAY")
-            .unwrap_or_default();
-        if name.is_empty() {
-            log::warn!("ddpro: WAYLAND_DISPLAY is not set and the desktop session's value cannot be found");
-            return;
+        match session_env("WAYLAND_DISPLAY") {
+            Ok(name) => {
+                log::info!("ddpro: WAYLAND_DISPLAY is not set in this process; the desktop session uses {name}");
+                ddpro::view::set_session_wayland_display(name);
+            }
+            Err(e) => log::warn!("ddpro: WAYLAND_DISPLAY is not set and the desktop session's value cannot be found: {e}"),
         }
-        log::info!("ddpro: WAYLAND_DISPLAY is not set in this process; the desktop session uses {name}");
-        ddpro::view::set_session_wayland_display(name);
     });
+}
+
+/// 桌面会话登记在本用户 systemd 管理器里的环境变量 `key`（`systemctl --user show-environment` 看到的那份）。这是给不从桌面里直接启动的
+/// 程序拿会话环境的标准做法：桌面会话启动时把 WAYLAND_DISPLAY 等登记到这里，systemd 拉起的用户服务、D-Bus 按需启动的程序都从这里取。
+/// 本进程的 DBUS_SESSION_BUS_ADDRESS 往往也缺（同一个原因），就连用户总线的标准位置 `$XDG_RUNTIME_DIR/bus`
+fn session_env(key: &str) -> Result<String, String> {
+    use dbus::blocking::{stdintf::org_freedesktop_dbus::Properties, Connection};
+    let address = match std::env::var("DBUS_SESSION_BUS_ADDRESS") {
+        Ok(a) => a,
+        Err(_) => {
+            let dir = std::env::var("XDG_RUNTIME_DIR").map_err(|_| "neither DBUS_SESSION_BUS_ADDRESS nor XDG_RUNTIME_DIR is set")?;
+            format!("unix:path={dir}/bus")
+        }
+    };
+    let mut channel = dbus::channel::Channel::open_private(&address).map_err(|e| format!("connect to {address}: {e}"))?;
+    channel.register().map_err(|e| format!("register on {address}: {e}"))?;
+    let conn = Connection::from(channel);
+    let env: Vec<String> = conn
+        .with_proxy("org.freedesktop.systemd1", "/org/freedesktop/systemd1", Duration::from_secs(2))
+        .get("org.freedesktop.systemd1.Manager", "Environment")
+        .map_err(|e| format!("read the systemd user environment: {e}"))?;
+    let prefix = format!("{key}=");
+    env.iter()
+        .find_map(|v| v.strip_prefix(&prefix))
+        .filter(|v| !v.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| format!("{key} is not in the systemd user environment"))
 }
 
 /// 本机此刻能不能把 HDR 画面按 HDR 显示出来（P1 第 4 项）：桌面支持颜色管理（GNOME 48 起），而且每块屏都开着 HDR

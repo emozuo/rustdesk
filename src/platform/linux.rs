@@ -1638,7 +1638,7 @@ pub fn is_installed() -> bool {
 /// # Implementation notes
 /// - Returns values from a *single* best-matching process_pat (for consistency).
 /// - Avoids repeated scanning by parsing `environ` once per process.
-pub(crate) fn get_envs<'a>(
+fn get_envs<'a>(
     uid: &str,
     process_pat: &str,
     names: &[&'a str],
