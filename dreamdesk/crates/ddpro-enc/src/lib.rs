@@ -7,12 +7,16 @@ mod convert;
 #[cfg(windows)]
 mod cuda;
 #[cfg(windows)]
+mod cursor;
+#[cfg(windows)]
 mod display;
 #[cfg(windows)]
 mod nvenc;
 #[cfg(windows)]
 mod nvenc_sys;
 
+#[cfg(windows)]
+pub use cursor::show_system_cursor;
 #[cfg(windows)]
 pub use display::{hdr_sdr_white_nits, hdr_supported, set_hdr};
 #[cfg(windows)]

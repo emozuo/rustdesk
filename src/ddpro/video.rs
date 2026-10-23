@@ -235,6 +235,61 @@ fn new_service(display: usize) -> GenericService {
     ps.sp
 }
 
+/// 专业截屏期间藏起被控端的系统光标（P1 第 14 节，照旧 DreamDesk 的做法）：Windows 有时改用软件方式把光标画进桌面画面
+/// （拖动窗口时；有的机器主屏平时也这样），DXGI 截屏就把它截了进去，主控端在本机光标之外又看到一个慢半拍的。
+/// 第一块屏的专业截屏开始时藏、最后一块结束时放回；放大镜接口有线程归属，开关都交给同一个专用线程做。
+/// 只在专业模式藏：通用模式保持 RustDesk 原样（用户 2026-10-23 先定只做专业模式）
+struct CursorHidden;
+
+/// (正在截屏的专业会话数, 开关光标的专用线程)
+static CURSOR: Mutex<(u32, Option<std::sync::mpsc::Sender<bool>>)> = Mutex::new((0, None));
+
+impl CursorHidden {
+    fn new() -> Self {
+        let mut c = CURSOR.lock().unwrap();
+        c.0 += 1;
+        if c.0 == 1 {
+            send_cursor(&mut c.1, false);
+        }
+        Self
+    }
+}
+
+impl Drop for CursorHidden {
+    fn drop(&mut self) {
+        let mut c = CURSOR.lock().unwrap();
+        c.0 = c.0.saturating_sub(1);
+        if c.0 == 0 {
+            send_cursor(&mut c.1, true);
+        }
+    }
+}
+
+/// 交给专用线程显示（`show`）/ 隐藏系统光标；线程没起来就先起
+fn send_cursor(worker: &mut Option<std::sync::mpsc::Sender<bool>>, show: bool) {
+    if worker.is_none() {
+        let (tx, rx) = std::sync::mpsc::channel::<bool>();
+        let spawned = std::thread::Builder::new().name("ddpro-cursor".into()).spawn(move || {
+            for show in rx {
+                match ddpro::enc::show_system_cursor(show) {
+                    Ok(()) => log::info!("ddpro: system cursor {}", if show { "shown again" } else { "hidden while capturing pro video" }),
+                    Err(e) => log::warn!("ddpro: cannot {} the system cursor: {e}", if show { "show" } else { "hide" }),
+                }
+            }
+        });
+        match spawned {
+            Ok(_) => *worker = Some(tx),
+            Err(e) => {
+                log::error!("ddpro: cannot start the thread that hides the system cursor: {e}");
+                return;
+            }
+        }
+    }
+    if let Some(tx) = worker {
+        tx.send(show).ok();
+    }
+}
+
 fn run(ps: ProService) -> ResultType<()> {
     let display = ps.display;
     let Some(session) = SESSIONS.lock().unwrap().get(&display).cloned() else {
@@ -244,6 +299,8 @@ fn run(ps: ProService) -> ResultType<()> {
         // 本会话已经结束，等连接退订
         return Ok(());
     };
+    // 截屏期间藏起系统光标（本函数结束时放回），免得 Windows 画进桌面的光标被一起截进去，主控端看到两个
+    let _cursor = CursorHidden::new();
     // 画面源变了就在这里重建，通道一直留在本线程：连接退订后自然随本轮结束释放。（交给服务框架按出错重跑的话，
     // 等待期间连接退订，框架不再重跑，放回会话里的通道就没人关了。）
     let mut backoff = REBUILD_BACKOFF_MIN;
