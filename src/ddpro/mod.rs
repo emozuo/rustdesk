@@ -40,6 +40,9 @@ pub mod server_tls;
 // 受管模式：被控端服务启动时按物理网卡地址自查克隆，是克隆就换设备号和设备密钥
 #[cfg(feature = "dd-managed")]
 pub mod clone_check;
+// 受管模式：应急连接在本机记账，服务端恢复后补传
+#[cfg(feature = "dd-managed")]
+pub mod emergency_audit;
 #[cfg(feature = "dd-pro")]
 pub mod server;
 // 专业视频要采集模块直接输出显卡纹理，这在 RustDesk 里绑在 vram 功能上（官方 Windows 版本来就开着）

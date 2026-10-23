@@ -62,6 +62,20 @@ impl Connection {
             t.sub,
             lr.my_id
         );
+        if t.sub_kind == SubKind::Emergency {
+            log::warn!("dd-managed: EMERGENCY ticket {jti} ({}) used by {}", t.sub, lr.my_id);
+            crate::ddpro::emergency_audit::record(json!({
+                "jti": jti,
+                "kid": t.kid,
+                "sub": t.sub,
+                "sub_name": t.sub_name,
+                "peer_id": lr.my_id,
+                "peer_name": lr.my_name,
+                "conn_type": t.conn_type,
+                "at": hbb_common::get_time() / 1000,
+                "exp": t.exp,
+            }));
+        }
         let id = self.inner.id();
         TICKET_JTI.lock().unwrap().insert(id, jti);
         // 票由服务端在 AD 登录、授权检查之后才签发，二次验证不再单独要

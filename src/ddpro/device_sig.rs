@@ -3,7 +3,7 @@
 //! 在 RustDesk 发 HTTP 请求的公共函数里按路径挂进去，不用改各个调用点。
 
 /// 要签名的接口路径。只有被控端服务进程发这几条，它持有设备私钥；别的进程不签（取密钥对在没有时会新生成一对，不能在别的进程里取）
-const SIGNED_PATHS: &[&str] = &["/api/sysinfo", "/api/heartbeat", "/api/audit/conn"];
+const SIGNED_PATHS: &[&str] = &["/api/sysinfo", "/api/heartbeat", "/api/audit/conn", "/api/dd/emergency-audit"];
 
 /// 按请求算签名头；路径不在名单里、或地址解析不了时返回空
 pub fn headers(method: &str, url: &str, body: &[u8]) -> Vec<(String, String)> {
