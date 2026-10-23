@@ -3,7 +3,8 @@
 //!
 //! - 只取物理网卡：虚拟网卡（容器、网桥、虚拟机交换机、VPN）的地址会随重启变，或在克隆时原样复制过去，不能当身份。
 //!   判据用各平台的标准做法：Linux 看 `/sys/class/net/<网卡>/device`（有物理设备才有），
-//!   Windows 看系统网卡表的「有物理接口」标志（`ConnectorPresent`），并取出厂固化的地址（`PermanentPhysicalAddress`）。
+//!   Windows 看系统网卡表的「有物理接口」标志（`ConnectorPresent`），并取出厂固化的地址（`PermanentPhysicalAddress`）；
+//!   两边都不要「本地管理」位的地址（随机地址、虚拟网卡）。
 //! - 记录取并集（[`union`]）：某次开机只认出一部分网卡、或换掉一块网卡，都不会让记录收窄、日后误判；
 //!   克隆机的当前集合和复制过去的记录永远不相交，不受影响。
 //! - 取不到任何网卡时是「判不了」，不是「不相交」，调用方应跳过。
@@ -17,7 +18,9 @@ pub type MacSet = BTreeSet<String>;
 pub fn physical_macs() -> MacSet {
     platform::physical_macs()
         .into_iter()
-        .filter(|m| m.len() == 6 && m.iter().any(|b| *b != 0) && m[0] & 1 == 0)
+        // 去掉多播位和「本地管理」位（0x02）的：随机地址（无线网卡扫描 / 连接时的隐私地址）和多数虚拟网卡都带这一位，
+        // 每次开机可能不同，拿来判克隆会误判
+        .filter(|m| m.len() == 6 && m.iter().any(|b| *b != 0) && m[0] & 0x03 == 0)
         .map(|m| m.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(":"))
         .collect()
 }
