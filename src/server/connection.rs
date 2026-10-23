@@ -3176,6 +3176,9 @@ impl Connection {
                     .lock()
                     .unwrap()
                     .retain(|_, v| v.0.elapsed() < SWITCH_SIDES_UUID_TTL);
+                #[cfg(not(feature = "dd-pro"))]
+                let uuid_old = SWITCH_SIDES_UUID.lock().unwrap().remove(&lr.my_id);
+                #[cfg(feature = "dd-pro")]
                 let uuid_old = {
                     let mut uuids = SWITCH_SIDES_UUID.lock().unwrap();
                     uuids.remove(&lr.my_id).or_else(|| {
