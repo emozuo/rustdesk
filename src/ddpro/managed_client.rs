@@ -10,8 +10,8 @@ lazy_static::lazy_static! {
     static ref PEER_PK: Mutex<HashMap<u64, Vec<u8>>> = Default::default();
 }
 
-/// io_loop 连上之后调用（`pk` 是 `Client::start` 返回的、验证过的对端公钥）
-pub(super) fn set_peer_pk(lc: &Arc<RwLock<LoginConfigHandler>>, pk: Option<Vec<u8>>) {
+/// 连上之后调用（远程桌面在 io_loop、端口转发 / RDP 在 port_forward；`pk` 是 `Client::start` 返回的、验证过的对端公钥）
+pub(crate) fn set_peer_pk(lc: &Arc<RwLock<LoginConfigHandler>>, pk: Option<Vec<u8>>) {
     let session_id = lc.read().unwrap().session_id;
     let mut map = PEER_PK.lock().unwrap();
     match pk {
@@ -98,6 +98,10 @@ pub(super) async fn login_with_ticket(
         log::warn!("dd-managed: ticket reply for {target_id} has no valid ticket");
         return fail("");
     };
+    // 服务端签的票也核对一遍是不是发给这次连上的这台：注册服务器的钥匙被换掉、中间人把真目标的挑战值转过来时，票不交给它
+    if !for_connected_peer(lc, &ticket) {
+        return fail("");
+    }
     send_ticket_login(lc, ticket, peer).await;
     Some(true)
 }
@@ -111,17 +115,15 @@ pub(super) async fn login_with_pasted_ticket(
 ) -> bool {
     // base64 里没有空格和换行：命令行 --password 经链接传给界面时 `+` 会变成空格，复制粘贴可能带进换行
     let pasted: String = pasted.trim().chars().filter(|c| *c != '\n' && *c != '\r').map(|c| if c == ' ' { '+' } else { c }).collect();
-    let Some((ticket, t)) = crate::decode64(&pasted).ok().and_then(|b| {
-        let t = ddpro::ticket::parse_unverified(&b).ok()?;
-        (t.sub_kind == ddpro::ticket::SubKind::Emergency && t.kid.starts_with(ddpro::ticket::EMERGENCY_KID_PREFIX))
-            .then_some((b, t))
+    let Some(ticket) = crate::decode64(&pasted).ok().filter(|b| {
+        ddpro::ticket::parse_unverified(b).is_ok_and(|t| {
+            t.sub_kind == ddpro::ticket::SubKind::Emergency && t.kid.starts_with(ddpro::ticket::EMERGENCY_KID_PREFIX)
+        })
     }) else {
         return false;
     };
     // 应急票谁先用算谁的：不是发给这次连上的这台（设备号输错、被骗去连了别人的机器）就不发，当口令处理（只发散列）
-    let session_id = lc.read().unwrap().session_id;
-    if PEER_PK.lock().unwrap().get(&session_id).map(|pk| pk.as_slice()) != Some(&t.target_pk[..]) {
-        log::warn!("dd-managed: the emergency ticket is for device {}, not the one connected; not sent", t.target_id);
+    if !for_connected_peer(lc, &ticket) {
         return false;
     }
     // 应急票不绑这次连接的挑战值，明文发出去会被中间人截去先用掉（只能用一次）。不发票、当口令处理：
@@ -133,6 +135,19 @@ pub(super) async fn login_with_pasted_ticket(
     log::warn!("dd-managed: logging in with a pasted emergency ticket");
     send_ticket_login(lc, ticket, peer).await;
     true
+}
+
+/// 票里的目标公钥是不是这次连接握手时验证过的对端公钥（没验证过的连接一律不是）
+fn for_connected_peer(lc: &Arc<RwLock<LoginConfigHandler>>, ticket: &[u8]) -> bool {
+    let Ok(t) = ddpro::ticket::parse_unverified(ticket) else {
+        return false;
+    };
+    let session_id = lc.read().unwrap().session_id;
+    let ok = PEER_PK.lock().unwrap().get(&session_id).map(|pk| pk.as_slice()) == Some(&t.target_pk[..]);
+    if !ok {
+        log::warn!("dd-managed: the ticket is for device {}, not the one connected; not sent", t.target_id);
+    }
+    ok
 }
 
 async fn send_ticket_login(lc: &Arc<RwLock<LoginConfigHandler>>, ticket: Vec<u8>, peer: &mut Stream) {

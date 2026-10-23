@@ -176,6 +176,8 @@ async fn connect_and_login(
     };
     let ((mut stream, direct, _pk, _kcp, _stream_type), (feedback, rendezvous_server)) =
         Client::start(id, key, token, conn_type, interface.clone()).await?;
+    #[cfg(feature = "dd-managed")]
+    crate::client::managed_client::set_peer_pk(&interface.get_lch(), _pk.filter(|_| stream.is_secured()));
     interface.update_direct(Some(direct));
     if !stream.is_secured() && !crate::common::is_direct_ip_access(id) {
         if !confirm_insecure_connection(&interface, ui_receiver).await {
@@ -417,6 +419,8 @@ async fn connect_and_login_mux(
     };
     let ((mut stream, direct, _pk, _kcp, _stream_type), (feedback, rendezvous_server)) =
         Client::start(id, key, token, conn_type, interface.clone()).await?;
+    #[cfg(feature = "dd-managed")]
+    crate::client::managed_client::set_peer_pk(&interface.get_lch(), _pk.filter(|_| stream.is_secured()));
     interface.update_direct(Some(direct));
     if !stream.is_secured() && !crate::common::is_direct_ip_access(id) {
         if !confirm_insecure_connection(&interface, ui_receiver).await {

@@ -102,7 +102,7 @@ mod audio_playback_recovery;
 mod audio_state_tests;
 #[cfg(feature = "dd-managed")]
 #[path = "ddpro/managed_client.rs"]
-mod managed_client;
+pub(crate) mod managed_client;
 pub mod file_trait;
 pub mod helper;
 pub mod io_loop;
@@ -4644,10 +4644,6 @@ pub async fn handle_hash(
     peer: &mut Stream,
 ) -> bool {
     lc.write().unwrap().hash = hash.clone();
-    #[cfg(feature = "dd-managed")]
-    if let Some(keep) = managed_client::login_with_ticket(&lc, &hash, password_preset, interface, peer).await {
-        return keep;
-    }
     // Take care of password application order
 
     // switch_uuid
@@ -4687,6 +4683,10 @@ pub async fn handle_hash(
             allow_err!(peer.send(&msg).await);
             return false;
         }
+    }
+    #[cfg(feature = "dd-managed")]
+    if let Some(keep) = managed_client::login_with_ticket(&lc, &hash, password_preset, interface, peer).await {
+        return keep;
     }
     // last password
     let mut password = lc.read().unwrap().password.clone();
