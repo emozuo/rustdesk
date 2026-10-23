@@ -22,10 +22,17 @@ pub(super) async fn login_with_ticket(
         (lc.id.clone(), conn_type_code(lc.conn_type))
     };
     let url = crate::ui_interface::get_api_server() + "/api/dd/ticket";
+    // id / uuid 和界面登录时带的一样（服务端核对令牌是不是这台机器登录拿到的）。取设备号要经 IPC 问服务进程，
+    // 那个函数自己起运行时，这里已在异步里，放到阻塞线程上调
+    let my_id = hbb_common::tokio::task::spawn_blocking(crate::ui_interface::get_id)
+        .await
+        .unwrap_or_default();
     let body = serde_json::json!({
         "target_id": target_id,
         "challenge": hash.challenge,
         "conn_type": conn_type,
+        "id": my_id,
+        "uuid": crate::ui_interface::get_uuid(),
     });
     let header = format!("Authorization: Bearer {token}");
     let fail = |detail: &str| {
