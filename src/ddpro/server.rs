@@ -221,6 +221,8 @@ pub fn usbip_uninstall_cmd(exe: &str) -> String {
 
 /// 连接关闭（`connection.rs` 的钩子）
 pub fn on_conn_closed(_conn_id: i32) {
+    #[cfg(feature = "dd-managed")]
+    super::ticket_conns::remove(_conn_id);
     #[cfg(windows)]
     super::usb_server::on_conn_closed(_conn_id);
     #[cfg(windows)]

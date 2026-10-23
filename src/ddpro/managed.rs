@@ -31,8 +31,6 @@ const MSG_TICKET_REQUIRED: &str = "This device only accepts connections authoriz
 const MSG_TICKET_REJECTED: &str = "Connection authorization rejected";
 
 lazy_static::lazy_static! {
-    /// 凭票登录的连接 → 票编号，认证成功发连接审计时取走（审计里带 `dd_ticket_jti`，服务端据此按票收回连接）
-    static ref TICKET_JTI: Mutex<HashMap<i32, String>> = Default::default();
     static ref EMERGENCY_LOCK: Mutex<()> = Default::default();
 }
 
@@ -103,11 +101,14 @@ impl Connection {
             }
         }
         let id = self.inner.id();
-        TICKET_JTI.lock().unwrap().insert(id, jti);
+        // 连着期间一直记着（连接审计和每拍心跳都带），连接关闭时在 ddpro::server::on_conn_closed 里删
+        crate::ddpro::ticket_conns::insert(id, jti);
         // 票由服务端在 AD 登录、授权检查之后才签发，二次验证不再单独要
         self.require_2fa = None;
         let keep = self.send_logon_response_and_keep_alive().await;
-        TICKET_JTI.lock().unwrap().remove(&id);
+        if !keep || !self.authorized {
+            crate::ddpro::ticket_conns::remove(id);
+        }
         if keep {
             self.try_start_cm(lr.my_id, lr.my_name, self.authorized);
         }
@@ -145,7 +146,7 @@ impl Connection {
 
 /// 认证成功发连接审计时调用：凭票登录的连接带上票编号
 pub(super) fn add_audit_jti(conn_id: i32, audit: &mut Value) {
-    if let Some(jti) = TICKET_JTI.lock().unwrap().get(&conn_id) {
+    if let Some(jti) = crate::ddpro::ticket_conns::get(conn_id) {
         audit["dd_ticket_jti"] = json!(jti);
     }
 }

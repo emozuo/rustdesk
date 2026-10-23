@@ -240,6 +240,8 @@ async fn start_hbbs_sync_async() {
                 if !conns.is_empty() {
                     v["conns"] = json!(conns);
                 }
+                #[cfg(feature = "dd-managed")]
+                crate::ddpro::ticket_conns::add_to_heartbeat(&mut v, &conns);
                 let modified_at = LocalConfig::get_option("strategy_timestamp").parse::<i64>().unwrap_or(0);
                 v["modified_at"] = json!(modified_at);
                 let response = crate::post_request(url.clone(), v.to_string(), "").await;
