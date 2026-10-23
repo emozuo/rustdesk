@@ -22,14 +22,13 @@ pub fn get(conn_id: i32) -> Option<String> {
     TICKETS.lock().unwrap().get(&conn_id).cloned()
 }
 
-/// 心跳请求体加 `dd_tickets`：只列 `conns`（还连着的）里凭票认证的
+/// 心跳请求体加 `dd_tickets`：只列 `conns`（还连着的）里凭票认证的。没有也带空对象：带了就是完整状态，服务端据此清掉
+/// 同一连接编号上残留的旧关联（不带的是不认识这个字段的老被控端）
 pub fn add_to_heartbeat(v: &mut Value, conns: &[i32]) {
     let tickets = TICKETS.lock().unwrap();
     let m: Map<String, Value> = conns
         .iter()
         .filter_map(|c| tickets.get(c).map(|jti| (c.to_string(), json!(jti))))
         .collect();
-    if !m.is_empty() {
-        v["dd_tickets"] = Value::Object(m);
-    }
+    v["dd_tickets"] = Value::Object(m);
 }
