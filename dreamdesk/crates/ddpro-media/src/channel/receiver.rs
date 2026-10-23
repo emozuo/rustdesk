@@ -100,6 +100,9 @@ struct Gap {
     tries: u8,
     /// 上次要它时排在补发请求里的第几个（这条通道上所有请求连着数）
     order: u64,
+    /// 第一次要它时排第几个：它的补发包到了时按这个推进「到了的补发排到哪」——到的可能是回应更早那次请求的，
+    /// 按最后一次算会估大，把还在路上的整批误判成丢了再要
+    first: u64,
 }
 
 /// 主控端：打招呼、发心跳（兼授时）、收画面。
@@ -375,7 +378,7 @@ impl Receiver {
             self.stats.recovered += 1;
             // 原包晚到（乱序）不算：它和补发的先后无关
             if rtx {
-                self.rtx_done = self.rtx_done.max(g.order + 1);
+                self.rtx_done = self.rtx_done.max(g.first + 1);
                 self.rtx_at = Instant::now();
             }
         }
@@ -414,6 +417,7 @@ impl Receiver {
                         asked: now,
                         tries: 1,
                         order: self.nack_order,
+                        first: self.nack_order,
                     },
                 );
                 self.nack_order += 1;
@@ -455,6 +459,7 @@ impl Receiver {
                         asked: now,
                         tries: 1,
                         order: self.nack_order,
+                        first: self.nack_order,
                     },
                 );
                 self.nack_order += 1;
@@ -466,21 +471,27 @@ impl Receiver {
         if self.missing.is_empty() {
             return Ok(());
         }
-        let mut again = Vec::new();
-        for (&s, g) in self.missing.iter_mut() {
-            if g.tries >= NACK_TRIES {
-                continue;
-            }
-            // 排在它后面要的补发已经到了：它（或它的补发包）丢了
-            let overtaken = g.order + NACK_REORDER < self.rtx_done;
-            // 要过它之后一个补发包都没再到过：请求本身或这一串补发包丢了
-            let silent = now.duration_since(g.asked.max(self.rtx_at)) >= NACK_RETRY;
-            if overtaken || silent {
+        let mut again: Vec<u16> = self
+            .missing
+            .iter()
+            .filter(|(_, g)| {
+                // 排在它后面要的补发已经到了：它（或它的补发包）丢了
+                let overtaken = g.order + NACK_REORDER < self.rtx_done;
+                // 要过它之后一个补发包都没再到过：请求本身或这一串补发包丢了
+                let silent = now.duration_since(g.asked.max(self.rtx_at)) >= NACK_RETRY;
+                g.tries < NACK_TRIES && (overtaken || silent)
+            })
+            .map(|(&s, _)| s)
+            .collect();
+        // 按序号从旧到新要（被控端照请求的顺序补）：最老的缺包先补到，前面收齐的帧不用陪后面的等
+        let base = self.expect.unwrap_or(0);
+        again.sort_unstable_by_key(|s| s.wrapping_sub(base));
+        for s in &again {
+            if let Some(g) = self.missing.get_mut(s) {
                 g.asked = now;
                 g.tries += 1;
                 g.order = self.nack_order;
                 self.nack_order += 1;
-                again.push(s);
             }
         }
         self.send_nack(&again)?;
