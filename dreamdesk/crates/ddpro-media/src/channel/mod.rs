@@ -79,6 +79,8 @@ const HISTORY: usize = 8192;
 /// 心跳也是授时探测，所以比「判断对方还在」需要的密得多：授时只取最近 2 秒里最好的样本
 pub const KEEPALIVE_INTERVAL: Duration = Duration::from_millis(100);
 pub const PEER_TIMEOUT: Duration = Duration::from_secs(3);
+/// 收包遇到网络错误（不是超时）后隔多久再收：这类错误可能连续立刻返回，不等就会空转
+const RECV_ERROR_BACKOFF: Duration = Duration::from_millis(5);
 /// 关键帧一下子几十个包，系统默认的 UDP 缓冲（Windows 上很小）收慢一点就溢出
 const SOCKET_BUFFER: usize = 8 << 20;
 

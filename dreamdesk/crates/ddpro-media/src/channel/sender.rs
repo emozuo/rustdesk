@@ -1,7 +1,7 @@
 //! 被控端：开端口等主控端打招呼、发画面（发包节奏）、收心跳和补发请求（补发）。
 
 use super::{
-    control, initial_seq, is_timeout, micros, micros_u32, open, read_i64, rtp_packet, rtx_packet, seal, srtp, srtp_rx, udp, Error, Keys,
+    control, initial_seq, is_timeout, micros, micros_u32, open, read_i64, rtp_packet, rtx_packet, seal, srtp, srtp_rx, udp, Error, Keys, RECV_ERROR_BACKOFF,
     CTRL_BYE, CTRL_HELLO, CTRL_KEEPALIVE, CTRL_KEYFRAME, CTRL_NACK, CTRL_TIME_ECHO, HISTORY, MSG_CHANGED, MSG_TILE,
     PEER_TIMEOUT, PT_CONTROL, PT_TILE, PT_VIDEO, RTP_HEADER, RTP_PAYLOAD_MAX, SRTP_GCM_TAG, TILE_CHUNK, TILE_FIRST,
     UDP_PAYLOAD,
@@ -168,6 +168,8 @@ pub struct SendStats {
     /// 发出的无损方块和它们的字节数（不含「哪些方块变了」的消息）
     pub tiles: u64,
     pub tile_bytes: u64,
+    /// 网络出错没发出去、当作丢了的包（主控端会要补发，补不上就要关键帧）
+    pub send_failed: u64,
 }
 
 /// 收控制包的线程和发画面的线程共用的补发状态。
@@ -326,9 +328,7 @@ impl Sender {
             if !stamped {
                 self.wait_pace(data.len());
             }
-            self.sock.send_to(&data, self.peer)?;
-            self.stats.packets += 1;
-            self.stats.bytes += data.len() as u64;
+            self.send(&data);
         }
         self.stats.frames += 1;
         self.stats.retransmitted = self.rtx.sent.load(Ordering::Relaxed);
@@ -400,11 +400,22 @@ impl Sender {
                 (true, None) => {}
                 (false, _) => self.wait_pace(data.len()),
             }
-            self.sock.send_to(&data, self.peer)?;
-            self.stats.packets += 1;
-            self.stats.bytes += data.len() as u64;
+            self.send(&data);
         }
         Ok(())
+    }
+
+    /// 发一个画面 / 方块包（已经记进补发历史）。网络出错（网线松了、网卡闪断）不结束会话：当作这个包丢了，主控端会要补发、
+    /// 补不上就要关键帧；断没断统一看 [`PEER_TIMEOUT`] 内有没有收到主控端的心跳（P1 审查第 3 条，原来一出错就结束、
+    /// 还被报成「采集或编码失败」）
+    fn send(&mut self, data: &[u8]) {
+        match self.sock.send_to(data, self.peer) {
+            Ok(_) => {
+                self.stats.packets += 1;
+                self.stats.bytes += data.len() as u64;
+            }
+            Err(_) => self.stats.send_failed += 1,
+        }
     }
 
     /// 主控端是否还在（3 秒内收到过它的心跳）。
@@ -461,8 +472,12 @@ impl Control {
                 Ok((n, from)) if from == self.peer => n,
                 Ok(_) => continue,
                 Err(e) if is_timeout(&e) => continue,
-                // 套接字坏了：不再更新心跳时刻，发送端 3 秒后按「主控端不再应答」收场
-                Err(_) => return,
+                // 别的网络错误（网卡闪断、对方暂时不可达等）也不退出：退出了闪断恢复后也收不到心跳，3 秒后会话照样结束。
+                // 稍等再收，免得错误连续立刻返回时空转；真断了，心跳停在原处，发送端 3 秒后按「主控端不再应答」收场
+                Err(_) => {
+                    std::thread::sleep(RECV_ERROR_BACKOFF);
+                    continue;
+                }
             };
             let t2 = micros(self.epoch.elapsed());
             let Some(p) = open(&mut self.dec, &buf[..n]) else {

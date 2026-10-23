@@ -1,7 +1,7 @@
 //! 主控端：打招呼、发心跳（兼授时）、收画面（按序号重排、请求补发、救不回来才请求关键帧）。
 
 use super::{
-    initial_seq, is_timeout, micros, open, read_i64, rtp_packet, rtx_unwrap, seal, srtp, srtp_rx, udp, unspecified_like, Error, Keys,
+    initial_seq, is_timeout, micros, open, read_i64, rtp_packet, rtx_unwrap, seal, srtp, srtp_rx, udp, unspecified_like, Error, Keys, RECV_ERROR_BACKOFF,
     CTRL_BYE, CTRL_HELLO, CTRL_KEEPALIVE, CTRL_KEYFRAME, CTRL_NACK, CTRL_TIME_ECHO, HISTORY, KEEPALIVE_INTERVAL, MSG_CHANGED,
     MSG_TILE, PEER_TIMEOUT, PT_CONTROL, PT_RTX, PT_RTX_TILE, PT_TILE, PT_VIDEO, TILE_FIRST,
 };
@@ -92,6 +92,8 @@ pub struct RecvStats {
     pub tile_bytes: u64,
     /// RFC 3550 到达抖动，毫秒
     pub jitter_ms: f64,
+    /// 网络出错（不是超时）的收包 / 发控制包次数：都不结束会话，断没断只看 3 秒内有没有画面
+    pub net_errors: u64,
 }
 
 struct Gap {
@@ -254,7 +256,10 @@ impl Receiver {
         let pkt = rtp_packet(PT_CONTROL, self.keys.ssrc_control, self.ctrl_seq, 0, false, payload);
         self.ctrl_seq = self.ctrl_seq.wrapping_add(1);
         let data = seal(&mut self.enc, &pkt)?;
-        self.sock.send_to(&data, self.peer)?;
+        // 网络出错（网卡闪断等）不结束会话：心跳、补发请求、要关键帧本来就会按时再发，断没断看 [`PEER_TIMEOUT`]（P1 审查第 3 条）
+        if self.sock.send_to(&data, self.peer).is_err() {
+            self.stats.net_errors += 1;
+        }
         Ok(())
     }
 
@@ -307,12 +312,16 @@ impl Receiver {
         }
         let (n, from) = match self.sock.recv_from(&mut self.buf) {
             Ok(r) => r,
-            Err(e) if is_timeout(&e) => {
+            Err(e) => {
+                // 超时和预料中的错误照常；别的网络错误也不结束会话（原来名单外的错误直接结束），稍等再收免得空转
+                if !is_timeout(&e) {
+                    self.stats.net_errors += 1;
+                    std::thread::sleep(RECV_ERROR_BACKOFF);
+                }
                 self.check_gaps()?;
                 self.repeat_loss();
                 return Ok(());
             }
-            Err(e) => return Err(e.into()),
         };
         let arrival = self.now_us();
         if from != self.peer {
