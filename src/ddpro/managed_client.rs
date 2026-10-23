@@ -10,9 +10,14 @@ use super::*;
 pub(super) async fn login_with_ticket(
     lc: &Arc<RwLock<LoginConfigHandler>>,
     hash: &Hash,
+    password_preset: &str,
     interface: &impl Interface,
     peer: &mut Stream,
 ) -> Option<bool> {
+    // 命令行预置的口令（--password）是一张应急票：直接用，不找服务端
+    if login_with_pasted_ticket(lc, password_preset, peer).await {
+        return Some(true);
+    }
     let token = LocalConfig::get_option("access_token");
     if token.is_empty() {
         return None;
@@ -45,11 +50,16 @@ pub(super) async fn login_with_ticket(
         interface.msgbox("error", "Connection Error", "Connection authorization failed", detail);
         Some(false)
     };
+    // 服务端连不上（或它自己出错）时照原有流程弹口令框：IT 签发的离线应急票就粘贴在那里（login_with_pasted_ticket）
     let (status, text) = match crate::post_request_with_status(url, body.to_string(), &header).await {
-        Ok(r) => r,
+        Ok(r) if r.0 < 500 => r,
+        Ok((status, _)) => {
+            log::warn!("dd-managed: ticket request for {target_id}: server error {status}, asking for an emergency ticket");
+            return None;
+        }
         Err(e) => {
-            log::warn!("dd-managed: ticket request for {target_id} failed: {e}");
-            return fail("");
+            log::warn!("dd-managed: ticket request for {target_id} failed: {e}, asking for an emergency ticket");
+            return None;
         }
     };
     let reply = serde_json::from_str::<serde_json::Value>(&text).unwrap_or_default();
@@ -70,6 +80,38 @@ pub(super) async fn login_with_ticket(
         log::warn!("dd-managed: ticket reply for {target_id} has no valid ticket");
         return fail("");
     };
+    send_ticket_login(lc, ticket, peer).await;
+    Some(true)
+}
+
+/// 在 `handle_login_from_ui` 开头调用：口令框里粘贴的是一张应急票（IT 用离线应急钥签的，服务端连不上时用）就凭它登录，
+/// 返回 `true`；不是就返回 `false`，照口令处理。真伪和是否用过由被控端验
+pub(super) async fn login_with_pasted_ticket(
+    lc: &Arc<RwLock<LoginConfigHandler>>,
+    pasted: &str,
+    peer: &mut Stream,
+) -> bool {
+    // base64 里没有空格和换行：命令行 --password 经链接传给界面时 `+` 会变成空格，复制粘贴可能带进换行
+    let pasted: String = pasted.trim().chars().filter(|c| *c != '\n' && *c != '\r').map(|c| if c == ' ' { '+' } else { c }).collect();
+    let Some(ticket) = crate::decode64(&pasted).ok().filter(|b| {
+        ddpro::ticket::parse_unverified(b).is_ok_and(|t| {
+            t.sub_kind == ddpro::ticket::SubKind::Emergency && t.kid.starts_with(ddpro::ticket::EMERGENCY_KID_PREFIX)
+        })
+    }) else {
+        return false;
+    };
+    // 应急票不绑这次连接的挑战值，明文发出去会被中间人截去先用掉（只能用一次）。不发票、当口令处理：
+    // 口令只发散列，从中还原不出票，受管被控端照样拒绝
+    if !peer.is_secured() {
+        log::warn!("dd-managed: connection not encrypted, emergency ticket not sent");
+        return false;
+    }
+    log::warn!("dd-managed: logging in with a pasted emergency ticket");
+    send_ticket_login(lc, ticket, peer).await;
+    true
+}
+
+async fn send_ticket_login(lc: &Arc<RwLock<LoginConfigHandler>>, ticket: Vec<u8>, peer: &mut Stream) {
     let mut msg = lc
         .read()
         .unwrap()
@@ -78,7 +120,6 @@ pub(super) async fn login_with_ticket(
         lr.dd_ticket = ticket.into();
     }
     allow_err!(peer.send(&msg).await);
-    Some(true)
 }
 
 /// 和被控端核对的连接类型（协议第二节 `conn_type`，对应 `LoginRequest` 的 union）

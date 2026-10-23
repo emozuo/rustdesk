@@ -42,6 +42,12 @@ impl Connection {
     pub(super) async fn dd_managed_login(&mut self) -> bool {
         let lr = self.lr.clone();
         // 被拒的登录由对端想发多少就发多少，日志要节流
+        // 空口令、不带票：主控端要不到票（服务端连不上、没登录）时照 RustDesk 原样先发一个空口令的登录、弹口令框等输入。
+        // 受管时口令框是粘贴离线应急票的地方，所以不断开，回「要口令」等它再发（未认证连接照常有超时）
+        if lr.dd_ticket.is_empty() && lr.password.is_empty() {
+            self.send_login_error(crate::client::LOGIN_MSG_PASSWORD_EMPTY).await;
+            return true;
+        }
         if lr.dd_ticket.is_empty() {
             hbb_common::throttled_log!(LOG_INTERVAL, warn, "dd-managed: login from {} without ticket refused", lr.my_id);
             self.send_login_error(MSG_TICKET_REQUIRED).await;

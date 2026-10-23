@@ -4645,7 +4645,7 @@ pub async fn handle_hash(
 ) -> bool {
     lc.write().unwrap().hash = hash.clone();
     #[cfg(feature = "dd-managed")]
-    if let Some(keep) = managed_client::login_with_ticket(&lc, &hash, interface, peer).await {
+    if let Some(keep) = managed_client::login_with_ticket(&lc, &hash, password_preset, interface, peer).await {
         return keep;
     }
     // Take care of password application order
@@ -4834,6 +4834,10 @@ pub async fn handle_login_from_ui(
     remember: bool,
     peer: &mut Stream,
 ) {
+    #[cfg(feature = "dd-managed")]
+    if managed_client::login_with_pasted_ticket(&lc, &password, peer).await {
+        return;
+    }
     let mut hash_password = if password.is_empty() {
         let mut password2 = lc.read().unwrap().password.clone();
         if password2.is_empty() {

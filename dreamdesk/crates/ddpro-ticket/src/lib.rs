@@ -205,6 +205,23 @@ impl<'a> Reader<'a> {
 
 /// 解析并验签：`trusted` 是本机受信任的（钥匙编号, 32 字节公钥）。通过后还要调用方用 [`Ticket::check`] 核对用途
 pub fn verify(ticket: &[u8], trusted: &[(&str, &[u8])]) -> Result<Ticket, Error> {
+    let (t, payload, sig) = split_parse(ticket)?;
+    let (_, pk) = trusted.iter().find(|(k, _)| *k == t.kid).ok_or_else(|| Error::UnknownKey(t.kid.clone()))?;
+    let pk = sign::PublicKey::from_slice(pk).ok_or(Error::Malformed("trusted public key"))?;
+    let sig = sign::Signature::from_bytes(sig).map_err(|_| Error::BadSignature)?;
+    if !sign::verify_detached(&sig, &[TICKET_DOMAIN, payload].concat(), &pk) {
+        return Err(Error::BadSignature);
+    }
+    Ok(t)
+}
+
+/// 只解析、不验签：主控端判断粘贴进口令框的是不是一张票用，真伪由被控端验
+pub fn parse_unverified(ticket: &[u8]) -> Result<Ticket, Error> {
+    split_parse(ticket).map(|(t, _, _)| t)
+}
+
+/// 拆成（解出的票, 载荷, 签名）
+fn split_parse(ticket: &[u8]) -> Result<(Ticket, &[u8], &[u8]), Error> {
     if ticket.len() > MAX_TICKET_LEN || ticket.len() <= SIG_LEN {
         return Err(Error::Malformed("length"));
     }
@@ -234,13 +251,7 @@ pub fn verify(ticket: &[u8], trusted: &[(&str, &[u8])]) -> Result<Ticket, Error>
     if !r.0.is_empty() {
         return Err(Error::Malformed("trailing bytes"));
     }
-    let (_, pk) = trusted.iter().find(|(k, _)| *k == t.kid).ok_or_else(|| Error::UnknownKey(t.kid.clone()))?;
-    let pk = sign::PublicKey::from_slice(pk).ok_or(Error::Malformed("trusted public key"))?;
-    let sig = sign::Signature::from_bytes(sig).map_err(|_| Error::BadSignature)?;
-    if !sign::verify_detached(&sig, &[TICKET_DOMAIN, payload].concat(), &pk) {
-        return Err(Error::BadSignature);
-    }
-    Ok(t)
+    Ok((t, payload, sig))
 }
 
 /// 设备签名要签的内容：`"DDDEV-v1\0"` ‖ 方法 ‖ \n ‖ 路径 ‖ \n ‖ 查询串 ‖ \n ‖ 时间 ‖ \n ‖ SHA256(请求体)
