@@ -5,6 +5,21 @@
 
 use super::*;
 
+lazy_static::lazy_static! {
+    /// 会话 → 这次连接验证过的对端设备公钥（握手时用注册服务器的签名验过；没验过的不记）。认粘贴的应急票时核对它是不是发给这台的
+    static ref PEER_PK: Mutex<HashMap<u64, Vec<u8>>> = Default::default();
+}
+
+/// io_loop 连上之后调用（`pk` 是 `Client::start` 返回的、验证过的对端公钥）
+pub(super) fn set_peer_pk(lc: &Arc<RwLock<LoginConfigHandler>>, pk: Option<Vec<u8>>) {
+    let session_id = lc.read().unwrap().session_id;
+    let mut map = PEER_PK.lock().unwrap();
+    match pk {
+        Some(pk) => map.insert(session_id, pk),
+        None => map.remove(&session_id),
+    };
+}
+
 /// 在 `handle_hash` 开头调用。`None`：这次不走票（没登录，或服务端说目标不是受管工作站），照 RustDesk 原有流程；
 /// `Some(keep)`：已经凭票发出登录请求（`true`），或要票失败、已提示用户（`false`，结束这次连接）
 pub(super) async fn login_with_ticket(
@@ -50,16 +65,19 @@ pub(super) async fn login_with_ticket(
         interface.msgbox("error", "Connection Error", "Connection authorization failed", detail);
         Some(false)
     };
-    // 服务端连不上（或它自己出错）时照原有流程弹口令框：IT 签发的离线应急票就粘贴在那里（login_with_pasted_ticket）
+    // 服务端连不上（或它自己出错）时直接弹口令框，等粘贴 IT 签发的离线应急票（login_with_pasted_ticket）。不走 RustDesk 原有流程：
+    // 它会先试存下的口令，受管被控端拒绝后就断开，用户见不到口令框
     let (status, text) = match crate::post_request_with_status(url, body.to_string(), &header).await {
         Ok(r) if r.0 < 500 => r,
         Ok((status, _)) => {
             log::warn!("dd-managed: ticket request for {target_id}: server error {status}, asking for an emergency ticket");
-            return None;
+            interface.msgbox("input-password", "Password Required", "", "");
+            return Some(true);
         }
         Err(e) => {
             log::warn!("dd-managed: ticket request for {target_id} failed: {e}, asking for an emergency ticket");
-            return None;
+            interface.msgbox("input-password", "Password Required", "", "");
+            return Some(true);
         }
     };
     let reply = serde_json::from_str::<serde_json::Value>(&text).unwrap_or_default();
@@ -93,13 +111,19 @@ pub(super) async fn login_with_pasted_ticket(
 ) -> bool {
     // base64 里没有空格和换行：命令行 --password 经链接传给界面时 `+` 会变成空格，复制粘贴可能带进换行
     let pasted: String = pasted.trim().chars().filter(|c| *c != '\n' && *c != '\r').map(|c| if c == ' ' { '+' } else { c }).collect();
-    let Some(ticket) = crate::decode64(&pasted).ok().filter(|b| {
-        ddpro::ticket::parse_unverified(b).is_ok_and(|t| {
-            t.sub_kind == ddpro::ticket::SubKind::Emergency && t.kid.starts_with(ddpro::ticket::EMERGENCY_KID_PREFIX)
-        })
+    let Some((ticket, t)) = crate::decode64(&pasted).ok().and_then(|b| {
+        let t = ddpro::ticket::parse_unverified(&b).ok()?;
+        (t.sub_kind == ddpro::ticket::SubKind::Emergency && t.kid.starts_with(ddpro::ticket::EMERGENCY_KID_PREFIX))
+            .then_some((b, t))
     }) else {
         return false;
     };
+    // 应急票谁先用算谁的：不是发给这次连上的这台（设备号输错、被骗去连了别人的机器）就不发，当口令处理（只发散列）
+    let session_id = lc.read().unwrap().session_id;
+    if PEER_PK.lock().unwrap().get(&session_id).map(|pk| pk.as_slice()) != Some(&t.target_pk[..]) {
+        log::warn!("dd-managed: the emergency ticket is for device {}, not the one connected; not sent", t.target_id);
+        return false;
+    }
     // 应急票不绑这次连接的挑战值，明文发出去会被中间人截去先用掉（只能用一次）。不发票、当口令处理：
     // 口令只发散列，从中还原不出票，受管被控端照样拒绝
     if !peer.is_secured() {

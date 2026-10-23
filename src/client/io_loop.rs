@@ -207,6 +207,8 @@ impl<T: InvokeUiSession> Remote<T> {
                     .unwrap()
                     .set_connected();
                 let is_secured = peer.is_secured();
+                #[cfg(feature = "dd-managed")]
+                super::managed_client::set_peer_pk(&self.handler.lc, pk.clone().filter(|_| is_secured));
                 // Only WebRTC needs refining: its label names the transport that won the race,
                 // not the family ICE ended up nominating, and it is the one path where the two
                 // can disagree with the address the rendezvous observed.
