@@ -6,7 +6,11 @@
 #[cfg(target_os = "linux")]
 pub mod display_check;
 #[cfg(target_os = "linux")]
+mod hdr;
+#[cfg(target_os = "linux")]
 mod wayland;
 
+#[cfg(target_os = "linux")]
+pub use hdr::probe_hdr;
 #[cfg(target_os = "linux")]
 pub use wayland::*;

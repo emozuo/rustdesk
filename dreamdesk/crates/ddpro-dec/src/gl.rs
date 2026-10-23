@@ -42,6 +42,7 @@ const DRM_XYUV8888: u32 = fourcc(b"XYUV");
 const DRM_Y410: u32 = fourcc(b"Y410");
 const DRM_ABGR8888: u32 = fourcc(b"AB24");
 const DRM_XRGB2101010: u32 = fourcc(b"XR30");
+const DRM_ARGB2101010: u32 = fourcc(b"AR30");
 const DRM_XRGB8888: u32 = fourcc(b"XR24");
 
 const VERTEX: &str = "#version 300 es
@@ -58,6 +59,9 @@ void main() {
 /// 再除以被控端「普通内容的白」（`sdr_white`，尼特）→ 1.0 就是普通内容的白；BT.2020 转 BT.709 原色；比白亮的高光按最大的那个
 /// 通道整体缩回 1.0（保色相，不像按通道截那样偏色）；sRGB 编码。普通内容因此和被控端没开 HDR 时一样，高光截到白——
 /// 显示器没有 HDR 输出，没地方放比白还亮的东西，宁可截高光也不把普通内容的白压灰（专业模式先保普通内容的颜色）
+///
+/// HDR 原样输出（`hdr` = 2，本机屏开着 HDR）：只按 BT.2020 非恒定亮度矩阵还原 PQ 编码的 R'G'B'，不解 PQ、不压亮度，
+/// 四舍五入到 10 位画进 10 位输出画面；窗口把画面标成 BT.2020 + PQ，由合成器送到 HDR 屏
 const FRAGMENT: &str = "#version 300 es
 precision highp float;
 uniform highp sampler2D yuv;
@@ -83,10 +87,14 @@ void main() {
     float v = s.r;
     float cb = (u * peak - half_) / peak;
     float cr = (v * peak - half_) / peak;
-    if (hdr == 1) {
+    if (hdr >= 1) {
         float r2 = y + 1.4746 * cr;
         float b2 = y + 1.8814 * cb;
         vec3 e = clamp(vec3(r2, (y - 0.2627 * r2 - 0.0593 * b2) / 0.6780, b2), 0.0, 1.0);
+        if (hdr == 2) {
+            o = vec4(floor(e * 1023.0 + 0.5) / 1023.0, 1.0);
+            return;
+        }
         vec3 q = pow(e, vec3(1.0 / 78.84375));
         vec3 nits = 10000.0 * pow(max(q - 0.8359375, 0.0) / (18.8515625 - 18.6875 * q), vec3(1.0 / 0.1593017578125));
         vec3 lin = max(BT2020_TO_709 * (nits / sdr_white), 0.0);
@@ -132,8 +140,8 @@ impl Gbm {
             .map_err(|e| Error(format!("libgbm: {e}")))
     }
 
-    /// 按 `modifiers` 里驱动支持的一种排布分配一张 XRGB8888 画面（驱动自己挑）
-    fn alloc(&self, width: u32, height: u32, modifiers: &[u64]) -> Result<Bo> {
+    /// 按 `modifiers` 里驱动支持的一种排布分配一张 `format`（XRGB8888 / XRGB2101010）画面（驱动自己挑）
+    fn alloc(&self, width: u32, height: u32, format: u32, modifiers: &[u64]) -> Result<Bo> {
         unsafe {
             let create = self.sym::<unsafe extern "C" fn(*mut c_void, u32, u32, u32, *const u64, u32, u32) -> *mut c_void>(
                 b"gbm_bo_create_with_modifiers2\0",
@@ -142,20 +150,20 @@ impl Gbm {
                 self.dev,
                 width,
                 height,
-                DRM_XRGB8888,
+                format,
                 modifiers.as_ptr(),
                 modifiers.len() as u32,
                 GBM_BO_USE_SCANOUT | GBM_BO_USE_RENDERING,
             );
             if bo.is_null() {
-                return Err(Error(format!("GBM cannot allocate a {width}x{height} XRGB8888 image with modifiers {modifiers:x?}")));
+                return Err(Error(format!("GBM cannot allocate a {width}x{height} {format:#x} image with modifiers {modifiers:x?}")));
             }
             Ok(Bo(bo))
         }
     }
 
     /// 导出成 dmabuf（每次一个新 fd）
-    fn export(&self, bo: &Bo, width: u32, height: u32) -> Result<Exported> {
+    fn export(&self, bo: &Bo, width: u32, height: u32, format: u32) -> Result<Exported> {
         unsafe {
             let fd = self.sym::<unsafe extern "C" fn(*mut c_void) -> RawFd>(b"gbm_bo_get_fd\0")?(bo.0);
             if fd < 0 {
@@ -165,13 +173,13 @@ impl Gbm {
             let pitch = self.sym::<unsafe extern "C" fn(*mut c_void) -> u32>(b"gbm_bo_get_stride\0")?(bo.0);
             let modifier = self.sym::<unsafe extern "C" fn(*mut c_void) -> u64>(b"gbm_bo_get_modifier\0")?(bo.0);
             Ok(Exported {
-                fourcc: DRM_XRGB8888,
+                fourcc: format,
                 width,
                 height,
                 modifiers: vec![modifier],
                 fds: vec![fd],
                 layers: vec![Layer {
-                    drm_format: DRM_XRGB8888,
+                    drm_format: format,
                     planes: vec![Plane { object: 0, offset: 0, pitch }],
                 }],
             })
@@ -251,6 +259,8 @@ pub struct GlConverter {
     renderer: String,
     /// 自己分配的输出画面（[`GlConverter::new`]），和 `targets` 一一对应；[`GlConverter::on`] 时为空
     bos: Vec<Bo>,
+    /// 输出画面的格式：XRGB8888，HDR 原样输出（[`GlConverter::new_hdr`]）时 XRGB2101010
+    format: u32,
     // 最后析构：EGL 显示和上下文、GBM 画面都建在它上面
     gbm: Gbm,
 }
@@ -259,10 +269,27 @@ impl GlConverter {
     /// 自己用 GBM 分配 `count` 张输出画面（排布从 `modifiers` 里由驱动挑），着色器往里画。
     /// 任何一步不支持就报错，调用方退回 [`GlConverter::on`] 或视频处理单元。
     pub fn new(width: u32, height: u32, count: usize, modifiers: &[u64]) -> Result<Self> {
+        Self::allocate(width, height, count, modifiers, DRM_XRGB8888)
+    }
+
+    /// HDR 原样输出（P1 第 4 项，本机屏开着 HDR）：输出画面是 10 位的 XRGB2101010，着色器画 PQ 编码的 BT.2020 R'G'B'。
+    /// 只给 HDR 会话用；窗口要同时把画面标成 BT.2020 + PQ
+    pub fn new_hdr(width: u32, height: u32, count: usize, modifiers: &[u64]) -> Result<Self> {
+        let c = Self::allocate(width, height, count, modifiers, DRM_XRGB2101010)?;
+        unsafe {
+            c.gl.use_program(Some(c.program));
+            let hdr = c.gl.get_uniform_location(c.program, "hdr");
+            c.gl.uniform_1_i32(hdr.as_ref(), 2);
+        }
+        Ok(c)
+    }
+
+    fn allocate(width: u32, height: u32, count: usize, modifiers: &[u64], format: u32) -> Result<Self> {
         let mut c = Self::init(width, height)?;
+        c.format = format;
         for _ in 0..count {
-            let bo = c.gbm.alloc(width, height, modifiers)?;
-            let e = c.gbm.export(&bo, width, height);
+            let bo = c.gbm.alloc(width, height, format, modifiers)?;
+            let e = c.gbm.export(&bo, width, height, format);
             c.bos.push(bo);
             let t = c.target(&e?)?;
             c.targets.push(t);
@@ -288,7 +315,12 @@ impl GlConverter {
             .bos
             .get(index)
             .ok_or_else(|| Error(format!("no output image {index} of my own")))?;
-        self.gbm.export(bo, self.width, self.height)
+        self.gbm.export(bo, self.width, self.height, self.format)
+    }
+
+    /// 输出画面的格式（DRM fourcc）
+    pub fn format(&self) -> u32 {
+        self.format
     }
 
     /// EGL、上下文、着色器；还没有输出画面
@@ -357,6 +389,7 @@ impl GlConverter {
             sources: HashMap::new(),
             renderer,
             bos: Vec::new(),
+            format: DRM_XRGB8888,
             gbm,
         })
     }
@@ -404,6 +437,40 @@ impl GlConverter {
             );
         }
         Ok(rgba.chunks_exact(4).flat_map(|p| [p[0], p[1], p[2]]).collect())
+    }
+
+    /// 同 [`GlConverter::read_rgb`]，读 10 位输出画面（[`GlConverter::new_hdr`]）的原值：每像素 R G B 三个 0–1023（验证用）
+    pub fn read_rgb10(&self, index: usize) -> Result<Vec<u16>> {
+        let t = self.targets.get(index).ok_or_else(|| Error(format!("no output image {index}")))?;
+        self.egl
+            .make_current(self.display, None, None, Some(self.context))
+            .map_err(err("make the context current"))?;
+        let (w, h) = (self.width as usize, self.height as usize);
+        let mut px = vec![0u8; w * h * 4];
+        unsafe {
+            self.gl.bind_framebuffer(glow::FRAMEBUFFER, Some(t.fbo));
+            self.gl.read_pixels(
+                0,
+                0,
+                w as i32,
+                h as i32,
+                glow::RGBA,
+                glow::UNSIGNED_INT_2_10_10_10_REV,
+                glow::PixelPackData::Slice(Some(&mut px)),
+            );
+            match self.gl.get_error() {
+                glow::NO_ERROR => {}
+                e => return Err(Error(format!("read back a 10-bit output image: OpenGL error {e:#x}"))),
+            }
+        }
+        // 每像素一个 32 位数，从低位起 R10 G10 B10 A2
+        Ok(px
+            .chunks_exact(4)
+            .flat_map(|p| {
+                let v = u32::from_le_bytes([p[0], p[1], p[2], p[3]]);
+                [(v & 0x3ff) as u16, (v >> 10 & 0x3ff) as u16, (v >> 20 & 0x3ff) as u16]
+            })
+            .collect())
     }
 
     /// 把 `frame` 转成 RGB 画进第 `index` 张输出画面，等显卡画完再返回。只做 1:1：尺寸和输出画面不一样就报错。
@@ -595,10 +662,13 @@ impl GlConverter {
 
     fn target(&self, e: &Exported) -> Result<Target> {
         let format = e.layers.first().map(|l| l.drm_format).unwrap_or_default();
-        if format != DRM_XRGB8888 {
-            return Err(Error(format!("output image format {:#x}, expected XRGB8888", format)));
+        if format != DRM_XRGB8888 && format != DRM_XRGB2101010 {
+            return Err(Error(format!("output image format {:#x}, expected XRGB8888 / XRGB2101010", format)));
         }
-        let image = self.import(e, DRM_XRGB8888)?;
+        // 10 位的按同样内存排布的 ARGB2101010 导入：iHD 上 XRGB2101010 的纹理不能当画布（2026-10-23 瘦客户机实测）。
+        // 着色器把透明度写满，交给合成器时仍按 XRGB2101010 登记，透明度那两位不看
+        let as_fourcc = if format == DRM_XRGB2101010 { DRM_ARGB2101010 } else { format };
+        let image = self.import(e, as_fourcc)?;
         unsafe {
             let texture = self.texture(&image).inspect_err(|_| {
                 self.egl.destroy_image(self.display, image).ok();

@@ -47,6 +47,8 @@ use std::{
 const SLOTS: usize = 4;
 /// DRM 格式 XRGB8888（'XR24'）
 const XRGB8888: u32 = 0x3432_5258;
+/// DRM_FORMAT_XRGB2101010（'XR30'）：HDR 原样输出的 10 位画面（P1 第 4 项）
+const XRGB2101010: u32 = 0x3033_5258;
 /// 输出画面想要的分块排布（按偏好）：Intel 的 Y 分块、X 分块。带压缩辅助平面的排布不要——着色器导入只认单平面
 const TILED: [u64; 2] = [0x0100_0000_0000_0002, 0x0100_0000_0000_0001];
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
@@ -529,8 +531,12 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
                         shown.clear();
                         // 着色器先放掉（窗口还登记着它的画面，下面重新登记），再按新尺寸建；视频处理单元的旧转换器
                         // 等新的建好、赋值时才放，中间短暂多占一套输出画面
-                        let on = shader.take().is_some();
-                        (conv, shader) = attach(&mut win, &dev, on)?;
+                        let old = shader.take();
+                        let on = old.is_some();
+                        // HDR 原样输出的照旧先试 10 位画面（建不起来时 attach 撤掉 HDR 标记、退回普通画面）
+                        let hdr = old.as_ref().is_some_and(|s| s.format() == XRGB2101010);
+                        drop(old);
+                        (conv, shader) = attach(&mut win, &dev, on, hdr)?;
                         shader = hdr_shader(shader.take(), hdr_white);
                         // 无损纹理随旧转换器没了：要关键帧，被控端整屏重新补
                         lossless.reset();
@@ -850,7 +856,8 @@ fn open_display(start: &ViewStart) -> ResultType<(Window, Device, Decoder, Conve
     let (w, h) = win.size();
     let dev = Device::open().map_err(|e| anyhow!("{e}"))?;
     let dec = Decoder::new(&dev).map_err(|e| anyhow!("{e}"))?;
-    let (conv, shader) = attach(&mut win, &dev, true)?;
+    let hdr_out = start.format.hdr && hdr_output(&mut win, start.format.sdr_white_nits);
+    let (conv, shader) = attach(&mut win, &dev, true, hdr_out)?;
     log::info!(
         "ddpro: pro view {w}x{h} fullscreen for remote {}x{} at ({},{}), keeping the screen awake: {}",
         start.remote_width,
@@ -877,11 +884,33 @@ fn screen_rank(start: &ViewStart, local_screens: usize) -> Option<usize> {
     order.iter().position(|&i| i == me)
 }
 
+/// HDR 会话、本机屏开着 HDR（P1 第 4 项）：合成器收得了 10 位分块画面，就把画面表面标成 BT.2020 + PQ（`white` 是被控端
+/// 普通内容的白，尼特），画面原样交给合成器。哪一步不行返回 false，照旧压成普通画面显示
+fn hdr_output(win: &mut Window, white: u32) -> bool {
+    let tiled = win
+        .formats()
+        .is_some_and(|f| TILED.iter().any(|m| f.usable.contains(&(XRGB2101010, *m))));
+    if !tiled {
+        log::warn!("ddpro: pro view shows HDR as normal video: the compositor takes no tiled 10-bit (XRGB2101010) images");
+        return false;
+    }
+    match win.set_hdr(white) {
+        Ok(()) => {
+            log::info!("ddpro: pro view shows HDR as is (BT.2020 PQ, remote normal white {white} nits)");
+            true
+        }
+        Err(e) => {
+            log::warn!("ddpro: pro view shows HDR as normal video: {e}");
+            false
+        }
+    }
+}
+
 /// HDR 会话（P1 第 4 项）：着色器按 BT.2020 + PQ 还原（`hdr_white` 是被控端普通内容的白，尼特）。设不上就不用着色器——
-/// 视频处理单元那条路做不了 HDR，之后会大声失败而不是显示错的颜色
+/// 视频处理单元那条路做不了 HDR，之后会大声失败而不是显示错的颜色。HDR 原样输出的着色器（10 位输出画面）不用再设
 fn hdr_shader(shader: Option<GlConverter>, hdr_white: Option<u32>) -> Option<GlConverter> {
     let mut s = shader?;
-    if hdr_white.is_none() {
+    if hdr_white.is_none() || s.format() == XRGB2101010 {
         return Some(s);
     }
     match s.set_hdr(hdr_white) {
@@ -917,8 +946,23 @@ fn wait_decoded(dec: &Decoder, frame: &ddpro::dec::Frame, resync: &AtomicBool) -
 /// 3. 只用视频处理单元。
 ///
 /// `shader` 为假（之前着色器出过错）时直接走第 3 种。
-fn attach(win: &mut Window, dev: &Device, shader: bool) -> ResultType<(Converter, Option<GlConverter>)> {
+///
+/// `hdr`：画面表面已标成 HDR（[`hdr_output`]），先试 10 位输出画面；建不起来就撤掉标记，照旧按上面的顺序。
+fn attach(win: &mut Window, dev: &Device, shader: bool, hdr: bool) -> ResultType<(Converter, Option<GlConverter>)> {
     let (w, h) = win.size();
+    if shader && hdr {
+        let tiled: Vec<u64> = win
+            .formats()
+            .map(|f| TILED.iter().copied().filter(|m| f.usable.contains(&(XRGB2101010, *m))).collect())
+            .unwrap_or_default();
+        match hdr_outputs(win, dev, w, h, &tiled) {
+            Ok(v) => return Ok(v),
+            Err(e) => {
+                log::warn!("ddpro: pro view cannot show HDR as is ({e}), showing it as normal video");
+                win.unset_hdr();
+            }
+        }
+    }
     if shader {
         let tiled: Vec<u64> = win
             .formats()
@@ -954,6 +998,30 @@ fn attach(win: &mut Window, dev: &Device, shader: bool) -> ResultType<(Converter
         None
     };
     Ok((conv, gl))
+}
+
+/// HDR 原样输出：GBM 分块的 10 位输出画面，只有着色器画（视频处理单元那条路做不了 HDR，HDR 要缩放时大声失败）。
+/// 视频处理单元的转换器照旧建一个、不登记给窗口，只为凑齐调用方的两样东西
+fn hdr_outputs(win: &mut Window, dev: &Device, w: u32, h: u32, modifiers: &[u64]) -> Result<(Converter, Option<GlConverter>), String> {
+    if modifiers.is_empty() {
+        return Err("the compositor takes no tiled 10-bit images".into());
+    }
+    let gl = GlConverter::new_hdr(w, h, SLOTS, modifiers).map_err(|e| e.to_string())?;
+    let images = (0..SLOTS)
+        .map(|i| gl.export(i))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    let conv = Converter::new(dev, w, h, 1).map_err(|e| e.to_string())?;
+    win.reset_slots(SLOTS);
+    for (slot, image) in images.iter().enumerate() {
+        win.import(slot, image).map_err(|e| e.to_string())?;
+    }
+    log::info!(
+        "ddpro: pro view converts to 10-bit BT.2020 PQ with shaders on {} (output images modifier {:#x})",
+        gl.renderer(),
+        images[0].modifiers.first().copied().unwrap_or_default()
+    );
+    Ok((conv, Some(gl)))
 }
 
 /// 上面第 1 种：GBM 分块输出画面，着色器和视频处理单元都画进它，窗口登记它

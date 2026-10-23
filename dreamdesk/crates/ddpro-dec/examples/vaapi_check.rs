@@ -7,6 +7,9 @@
 //! DIR/shader<帧号>.rgb（可拿去和软件解码按公式算的结果逐像素核对）。
 //! `--hdr N`（和 `--gl` 一起）：HDR 码流，着色器按 BT.2020 + PQ 还原、普通内容的白是 N 尼特（P1 第 4 项；被控端验证工具
 //! `capture_encode hdr` 出的码流，读回的结果用 `capture_encode hdrrgb` 核对）。
+//! `--hdr-pass`（和 `--gl` 一起）：HDR 原样输出（本机屏开着 HDR 时专业窗口走的路径）——着色器只还原 PQ 编码的 BT.2020 R'G'B'，
+//! 画进 GBM 分块的 10 位画面；参考帧读回存 DIR/shader10_<帧号>.rgb（每像素 R G B 三个 16 位小端数，0–1023），
+//! 拿去和软件解码同一帧按公式算的结果逐像素核对。
 //!
 //! - 开显卡，报驱动和 HEVC 4:4:4 / 视频处理能力；
 //! - 逐帧硬解（等显卡解完）→ 转 RGB（等显卡转完），记两段耗时；
@@ -48,6 +51,8 @@ mod linux {
         tiled: bool,
         /// HDR 码流（P1 第 4 项）：着色器按 BT.2020 + PQ 还原，值是被控端普通内容的白（尼特）；要和 `--gl` 一起用
         hdr: Option<u32>,
+        /// HDR 原样输出：着色器画 10 位 PQ 编码的 BT.2020 R'G'B'；要和 `--gl` 一起用
+        hdr_pass: bool,
     }
 
     fn opts() -> Result<Opts, Box<dyn std::error::Error>> {
@@ -64,6 +69,7 @@ mod linux {
             gl: false,
             tiled: false,
             hdr: None,
+            hdr_pass: false,
         };
         let mut it = args[1..].iter();
         while let Some(k) = it.next() {
@@ -74,6 +80,10 @@ mod linux {
                 }
                 "--tiled" => {
                     o.tiled = true;
+                    continue;
+                }
+                "--hdr-pass" => {
+                    o.hdr_pass = true;
                     continue;
                 }
                 _ => {}
@@ -131,7 +141,12 @@ mod linux {
                     return Err("the decoded surface is not 4:4:4 8bit".into());
                 }
                 // --tiled：和专业窗口一样，着色器用 GBM 按 Intel Y / X 分块分配输出画面，视频处理单元导入同一组
-                let (c, g) = if o.tiled {
+                let (c, g) = if o.hdr_pass {
+                    // 和专业窗口 HDR 原样输出一样：GBM 分块的 10 位画面，只有着色器画
+                    let g = GlConverter::new_hdr(w, h, SURFACES, &[0x0100_0000_0000_0002, 0x0100_0000_0000_0001])?;
+                    println!("shader conversion: HDR as is (10-bit BT.2020 PQ), output modifier {:#x}", g.export(0)?.modifiers[0]);
+                    (Converter::new(&dev, w, h, SURFACES)?, Some(g))
+                } else if o.tiled {
                     let g = GlConverter::new(w, h, SURFACES, &[0x0100_0000_0000_0002, 0x0100_0000_0000_0001])?;
                     let images = (0..SURFACES).map(|i| g.export(i)).collect::<Result<Vec<_>, _>>()?;
                     (Converter::with_images(&dev, w, h, &images)?, Some(g))
@@ -177,7 +192,16 @@ mod linux {
                     e.layers
                 );
             }
-            if let (Some(g), true) = (gl.as_mut(), i == o.ref_frame) {
+            if let (Some(g), true, true) = (gl.as_mut(), i == o.ref_frame, o.hdr_pass) {
+                let rgb = g.read_rgb10(slot)?;
+                let peak = rgb.iter().copied().max().unwrap_or(0);
+                println!("frame {i}: read back {} 10-bit values, max {peak}", rgb.len());
+                if let Some(dir) = &o.out {
+                    fs::create_dir_all(dir)?;
+                    let bytes: Vec<u8> = rgb.iter().flat_map(|v| v.to_le_bytes()).collect();
+                    fs::write(dir.join(format!("shader10_{i}.rgb")), bytes)?;
+                }
+            } else if let (Some(g), true) = (gl.as_mut(), i == o.ref_frame) {
                 // 每张输出画面都画同一帧（着色器写一次、视频处理单元写一次），都从着色器那侧读回，数最上面 32 行里的纯黑像素。
                 // 不用视频处理单元那侧读回：iHD 读导入的 GBM 画面（vaGetImage）不可靠——读出过整块黑、视频处理单元写过之后再读
                 // 会在驱动里崩溃（2026-10-21 瘦客户机实测）；正式显示不读回，不受影响

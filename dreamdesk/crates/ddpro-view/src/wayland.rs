@@ -4,6 +4,7 @@
 //! 调用方自己驱动循环：`present` 提交一张画面，`dispatch` 等事件（带超时）。画面轮流用一组槽位，
 //! 合成器还拿着的槽位（没回「已释放」）不能再写，[`Window::free_slot`] 只给空闲的。
 
+use crate::hdr::{ColorData, HasColor};
 use ddpro_dec::Exported;
 use sctk::{
     compositor::{CompositorHandler, CompositorState},
@@ -35,6 +36,14 @@ use sctk::{
                 zwp_linux_dmabuf_feedback_v1::{self, TrancheFlags},
             },
             presentation_time::client::wp_presentation_feedback::{self, Kind},
+            color_management::v1::client::{
+                wp_color_management_output_v1::WpColorManagementOutputV1,
+                wp_color_management_surface_v1::WpColorManagementSurfaceV1,
+                wp_color_manager_v1::{Primaries, RenderIntent, TransferFunction, WpColorManagerV1},
+                wp_image_description_creator_params_v1::WpImageDescriptionCreatorParamsV1,
+                wp_image_description_info_v1::WpImageDescriptionInfoV1,
+                wp_image_description_v1::WpImageDescriptionV1,
+            },
         },
     },
     registry::{ProvidesRegistryState, RegistryState},
@@ -223,6 +232,18 @@ struct State {
     subcompositor: Option<SubcompositorState>,
     /// 叠加图层，按调用方给的编号；用到才建
     layers: Vec<Option<Layer>>,
+    /// HDR 输出（P1 第 4 项，`hdr.rs`）：合成器的颜色管理（不支持时 None）、它报的能力，
+    /// 以及画面表面当前用的 HDR 图像描述（[`Window::set_hdr`] 设上，[`Window::unset_hdr`] 撤掉）
+    color_manager: Option<WpColorManagerV1>,
+    color: ColorData,
+    color_surface: Option<WpColorManagementSurfaceV1>,
+    hdr_description: Option<WpImageDescriptionV1>,
+}
+
+impl HasColor for State {
+    fn color(&mut self) -> &mut ColorData {
+        &mut self.color
+    }
 }
 
 impl State {
@@ -310,6 +331,8 @@ impl Window {
             .ok();
         // 叠加图层用；合成器都支持，万一不支持就没有悬浮球，画面照常
         let subcompositor = SubcompositorState::bind(compositor.wl_compositor().clone(), &globals, &qh).ok();
+        // HDR 输出用（GNOME 48 起有）；没有就只能显示普通画面，下面等窗口配置的同时收它报的能力
+        let color_manager = globals.bind::<WpColorManagerV1, _, _>(&qh, 1..=1, ()).ok();
         let mut w = Self {
             conn,
             queue,
@@ -346,6 +369,10 @@ impl Window {
                 entered: None,
                 subcompositor,
                 layers: Vec::new(),
+                color_manager,
+                color: ColorData::default(),
+                color_surface: None,
+                hdr_description: None,
             },
         };
         while w.state.size.is_none() || (feedback.is_some() && w.state.formats.is_none()) {
@@ -488,6 +515,68 @@ impl Window {
     /// 合成器的格式反馈；合成器不支持 dmabuf v4 时为 None。
     pub fn formats(&self) -> Option<&FormatSupport> {
         self.state.formats.as_ref()
+    }
+
+    /// HDR 输出（P1 第 4 项）：把画面表面标成 BT.2020 原色 + PQ 编码，`sdr_white_nits` 是被控端普通内容的白（参考白），
+    /// 合成器据此把这块画面和桌面上别的东西对齐亮度、送到 HDR 屏。之后提交的画面要是 PQ 编码的 10 位 RGB。
+    /// 下一次提交画面时生效。合成器不支持（没有颜色管理、不收参数化描述、不支持 PQ / BT.2020）时报错，调用方照旧显示普通画面
+    pub fn set_hdr(&mut self, sdr_white_nits: u32) -> Result<()> {
+        let qh = self.queue.handle();
+        let cm = self
+            .state
+            .color_manager
+            .clone()
+            .ok_or_else(|| Error("the desktop has no color management (wp_color_manager_v1, GNOME 48 or later)".into()))?;
+        // 能力在绑定后陆续报来，开窗口时等配置的那几轮不一定收全：最多再等 1 秒
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !self.state.color.reported() && Instant::now() < deadline {
+            self.dispatch(Duration::from_millis(50), None)?;
+        }
+        let s = &self.state;
+        s.color.hdr_capable().map_err(Error)?;
+        let creator: WpImageDescriptionCreatorParamsV1 = cm.create_parametric_creator(&qh, ());
+        creator.set_tf_named(TransferFunction::St2084Pq);
+        creator.set_primaries_named(Primaries::Bt2020);
+        if s.color.sets_luminances() {
+            // 最暗 0.005 尼特（PQ 的默认，单位万分之一尼特）；PQ 时最亮按 10000 计、这里的值不看；参考白 = 被控端普通内容的白
+            creator.set_luminances(50, 10_000, sdr_white_nits.max(1));
+        }
+        let description = creator.create(&qh, ());
+        self.conn.flush().map_err(err("ask for an HDR image description"))?;
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let ready = loop {
+            if let Some(r) = self.state.color.description(&description) {
+                break r;
+            }
+            if Instant::now() >= deadline {
+                break Err("the compositor did not answer".into());
+            }
+            self.dispatch(Duration::from_millis(50), None)?;
+        };
+        if let Err(e) = ready {
+            description.destroy();
+            return Err(Error(format!("the compositor cannot use a BT.2020 PQ image description: {e}")));
+        }
+        let s = &mut self.state;
+        let surface = s
+            .color_surface
+            .get_or_insert_with(|| cm.get_surface(s.window.wl_surface(), &qh, ()));
+        surface.set_image_description(&description, RenderIntent::Perceptual);
+        if let Some(old) = s.hdr_description.replace(description) {
+            old.destroy();
+        }
+        self.state.events.clear();
+        Ok(())
+    }
+
+    /// 撤掉 [`Window::set_hdr`]：画面表面回到合成器默认的普通画面（sRGB），下一次提交画面时生效
+    pub fn unset_hdr(&mut self) {
+        if let Some(surface) = &self.state.color_surface {
+            surface.unset_image_description();
+        }
+        if let Some(d) = self.state.hdr_description.take() {
+            d.destroy();
+        }
     }
 
     /// 准备 `count` 个槽位（丢掉以前导入的画面）。
@@ -888,6 +977,12 @@ delegate_seat!(State);
 delegate_pointer!(State);
 delegate_shm!(State);
 delegate_subcompositor!(State);
+sctk::reexports::client::delegate_dispatch!(State: [WpColorManagerV1: ()] => ColorData);
+sctk::reexports::client::delegate_dispatch!(State: [WpImageDescriptionV1: ()] => ColorData);
+sctk::reexports::client::delegate_dispatch!(State: [WpImageDescriptionInfoV1: ()] => ColorData);
+sctk::reexports::client::delegate_dispatch!(State: [WpImageDescriptionCreatorParamsV1: ()] => ColorData);
+sctk::reexports::client::delegate_dispatch!(State: [WpColorManagementSurfaceV1: ()] => ColorData);
+sctk::reexports::client::delegate_dispatch!(State: [WpColorManagementOutputV1: ()] => ColorData);
 
 impl ShmHandler for State {
     fn shm_state(&mut self) -> &mut Shm {
