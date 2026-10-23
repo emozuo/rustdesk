@@ -17,6 +17,12 @@ pub(super) async fn login_with_ticket(
     if token.is_empty() {
         return None;
     }
+    // 对端身份验不过时 RustDesk 会退回不加密的连接：这时挑战值可能是中间人从别的连接转来的，要来的票会被它截去用掉，
+    // 所以不要票（受管被控端也只在加密连接上认票），照原有流程走
+    if !peer.is_secured() {
+        log::warn!("dd-managed: connection not encrypted, no ticket requested");
+        return None;
+    }
     let (target_id, conn_type) = {
         let lc = lc.read().unwrap();
         (lc.id.clone(), conn_type_code(lc.conn_type))
