@@ -3165,7 +3165,7 @@ impl Connection {
         } else if let Some(message::Union::SwitchSidesResponse(_s)) = msg.union {
             #[cfg(feature = "dd-managed")]
             if dd_managed::MANAGED {
-                log::warn!("dd-managed: switch sides refused");
+                hbb_common::throttled_log!(std::time::Duration::from_secs(60), warn, "dd-managed: switch sides refused");
                 self.send_login_error("Connection not allowed").await;
                 return false;
             }

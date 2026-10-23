@@ -4,7 +4,7 @@
 //! 产品是内网专用，受管构建里没有别的 HTTPS 目的地，所以 RustDesk 建 HTTP 客户端的两个函数在受管构建里整个交给这里。
 //!
 //! 和 RustDesk 原来的建法（`hbbs_http::http_client` 的宏）一样用配置的代理；不同的是任何一步失败都不退回信系统根证书的
-//! 默认客户端：代理设不上就直连，再不行就给一个什么根证书都不信的客户端（请求全失败，不会被中间人）。
+//! 默认客户端：代理设不上就直连，连固定证书的客户端都建不出来就退出进程。
 
 use hbb_common::{
     config::Config,
@@ -57,7 +57,12 @@ fn configured_proxy() -> Result<Option<reqwest::Proxy>, String> {
 macro_rules! pinned_client {
     ($Client:ty) => {{
         let pinned = || {
-            let mut b = <$Client>::builder().no_proxy().use_rustls_tls().tls_built_in_root_certs(false);
+            // 正式版只发 HTTPS（服务器地址也锁成 https 的）；开发测试版要连明文的联调服务
+            let mut b = <$Client>::builder()
+                .no_proxy()
+                .use_rustls_tls()
+                .tls_built_in_root_certs(false)
+                .https_only(cfg!(not(feature = "dd-managed-dev")));
             for c in roots() {
                 b = b.add_root_certificate(c);
             }
@@ -71,16 +76,21 @@ macro_rules! pinned_client {
         match first {
             Ok(c) => c,
             Err(e) => {
-                log::error!("dd-managed: http client: {e}; trying without proxy");
-                pinned().build().unwrap_or_else(|e| {
-                    log::error!("dd-managed: pinned http client failed: {e}; requests will fail");
-                    <$Client>::builder()
-                        .no_proxy()
-                        .use_rustls_tls()
-                        .tls_built_in_root_certs(false)
-                        .build()
-                        .unwrap_or_default()
-                })
+                // 每建一个客户端（心跳每 15 秒）都会走到这里，节流
+                hbb_common::throttled_log!(
+                    std::time::Duration::from_secs(600),
+                    error,
+                    "dd-managed: http client: {e}; trying without proxy"
+                );
+                match pinned().build() {
+                    Ok(c) => c,
+                    // 连不带代理的 rustls 客户端都建不出来（TLS 后端起不来）。reqwest 这时能给的只有信系统根证书的默认客户端，
+                    // 用它就破了证书固定，所以退出（服务会把进程重新拉起）
+                    Err(e) => {
+                        log::error!("dd-managed: no pinned http client can be built ({e}); exiting");
+                        std::process::exit(1)
+                    }
+                }
             }
         }
     }};
