@@ -1506,9 +1506,23 @@ fn parse_simple_header(header: &str) -> Vec<HeaderEntry> {
     entries
 }
 
+#[cfg(feature = "dd-managed")]
+fn dd_signed_header_entries(url: &str, body: &str) -> Vec<HeaderEntry> {
+    crate::ddpro::device_sig::headers("POST", url, body.as_bytes())
+        .into_iter()
+        .map(|(name, value)| HeaderEntry {
+            name,
+            value,
+            ..Default::default()
+        })
+        .collect()
+}
+
 /// POST request via TCP proxy.
 async fn post_request_via_tcp_proxy(url: &str, body: &str, header: &str) -> ResultType<String> {
     let headers = parse_simple_header(header);
+    #[cfg(feature = "dd-managed")]
+    let headers = [headers, dd_signed_header_entries(url, body)].concat();
     let resp = tcp_proxy_request("POST", url, body.as_bytes(), headers).await?;
     if !resp.error.is_empty() {
         bail!("TCP proxy error: {}", resp.error);
@@ -1649,6 +1663,8 @@ async fn post_request_via_tcp_proxy_status(
     header: &str,
 ) -> ResultType<(u16, String)> {
     let headers = parse_simple_header(header);
+    #[cfg(feature = "dd-managed")]
+    let headers = [headers, dd_signed_header_entries(url, body)].concat();
     let resp = tcp_proxy_request("POST", url, body.as_bytes(), headers).await?;
     if !resp.error.is_empty() {
         bail!("TCP proxy error: {}", resp.error);
@@ -1725,6 +1741,10 @@ async fn post_request_(
         }
     }
     req = req.header("Content-Type", "application/json");
+    #[cfg(feature = "dd-managed")]
+    for (k, v) in crate::ddpro::device_sig::headers("POST", url, body.as_bytes()) {
+        req = req.header(k, v);
+    }
     let to = std::time::Duration::from_secs(12);
     if tls_type.is_some() && danger_accept_invalid_cert.is_some() {
         // This branch is used to reduce a `clone()` when both `tls_type` and

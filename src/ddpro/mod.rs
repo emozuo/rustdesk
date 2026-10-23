@@ -31,6 +31,9 @@ mod ball;
 pub mod brand;
 #[cfg(feature = "dd-pro")]
 pub mod client;
+// 受管模式：被控端服务发给服务端的请求带设备签名（验票、要票在 managed.rs / managed_client.rs，分别挂在连接和客户端模块下）
+#[cfg(feature = "dd-managed")]
+pub mod device_sig;
 #[cfg(feature = "dd-pro")]
 pub mod server;
 // 专业视频要采集模块直接输出显卡纹理，这在 RustDesk 里绑在 vram 功能上（官方 Windows 版本来就开着）
