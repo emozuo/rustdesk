@@ -80,6 +80,13 @@ fn main() {
     let mut user = t.clone();
     user.kid = "emg1".to_owned();
     expect("normal ticket with emergency key", user.check(&dev_pk, "abc123", 0, now), Err(Error::EmergencyMismatch));
+    // 有效期上限：普通票 120 秒、应急票 4 小时，多一秒就拒
+    let mut long = t.clone();
+    long.exp = long.iat + 121;
+    expect("normal ticket valid 121 s", long.check(&dev_pk, "abc123", 0, now), Err(Error::LifetimeTooLong));
+    let mut long_emg = e.clone();
+    long_emg.exp = long_emg.iat + 4 * 3600 + 1;
+    expect("emergency ticket valid 4 h + 1 s", long_emg.check(&dev_pk, "", 0, e.iat), Err(Error::LifetimeTooLong));
     println!("{}", if ok { "ALL PASS" } else { "SOME FAILED" });
     std::process::exit(if ok { 0 } else { 1 });
 }

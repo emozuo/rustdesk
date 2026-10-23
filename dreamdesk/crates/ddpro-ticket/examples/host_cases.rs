@@ -17,6 +17,7 @@ fn reason(e: &Error) -> &'static str {
         Error::Expired => "expired",
         Error::NotYetValid => "not_yet_valid",
         Error::EmergencyMismatch => "emergency_mismatch",
+        Error::LifetimeTooLong => "lifetime_too_long",
     }
 }
 

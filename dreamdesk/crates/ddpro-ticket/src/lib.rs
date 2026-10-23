@@ -20,6 +20,9 @@ pub const MAX_TICKET_LEN: usize = 1024;
 pub const CLOCK_SKEW: i64 = 60;
 /// 应急钥的钥匙编号前缀
 pub const EMERGENCY_KID_PREFIX: &str = "emg";
+/// 有效期上限（exp − iat，秒）：普通票 120 秒，应急票 4 小时
+pub const MAX_LIFETIME: i64 = 120;
+pub const MAX_EMERGENCY_LIFETIME: i64 = 4 * 3600;
 
 /// 票的主体
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,6 +79,8 @@ pub enum Error {
     NotYetValid,
     /// 应急票：主体和钥匙编号对不上
     EmergencyMismatch,
+    /// 有效期比协议允许的长（普通票 120 秒、应急票 4 小时）：签发方出错或钥匙被滥用
+    LifetimeTooLong,
 }
 
 impl std::fmt::Display for Error {
@@ -90,6 +95,7 @@ impl std::fmt::Display for Error {
             Error::Expired => write!(f, "the ticket has expired"),
             Error::NotYetValid => write!(f, "the ticket is not valid yet (clock difference too large)"),
             Error::EmergencyMismatch => write!(f, "emergency ticket and key do not match"),
+            Error::LifetimeTooLong => write!(f, "the ticket is valid for longer than allowed"),
         }
     }
 }
@@ -148,6 +154,10 @@ impl Ticket {
         }
         if self.conn_type != conn_type {
             return Err(Error::WrongConnType);
+        }
+        let max = if emergency_key { MAX_EMERGENCY_LIFETIME } else { MAX_LIFETIME };
+        if self.exp.saturating_sub(self.iat) > max {
+            return Err(Error::LifetimeTooLong);
         }
         if now > self.exp.saturating_add(CLOCK_SKEW) {
             return Err(Error::Expired);
