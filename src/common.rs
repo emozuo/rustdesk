@@ -1238,8 +1238,7 @@ pub fn get_api_server(api: String, custom: String) -> String {
 }
 
 fn get_api_server_(api: String, custom: String) -> String {
-    // DreamDesk managed builds: the exe-name license must not override the locked API server.
-    #[cfg(all(windows, not(feature = "dd-managed")))]
+    #[cfg(windows)]
     if let Ok(lic) = crate::platform::windows::get_license_from_exe_name() {
         if !lic.api.is_empty() {
             return lic.api.clone();

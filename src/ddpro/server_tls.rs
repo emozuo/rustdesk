@@ -84,11 +84,26 @@ macro_rules! pinned_client {
                 );
                 match pinned().build() {
                     Ok(c) => c,
-                    // 连不带代理的 rustls 客户端都建不出来（TLS 后端起不来）。reqwest 这时能给的只有信系统根证书的默认客户端，
-                    // 用它就破了证书固定，所以退出（服务会把进程重新拉起）
                     Err(e) => {
-                        log::error!("dd-managed: no pinned http client can be built ({e}); exiting");
-                        std::process::exit(1)
+                        // 不带代理的 rustls 客户端都建不出来（rustls 起不来）：换系统自带的 TLS，同样只信预置根证书
+                        log::error!("dd-managed: pinned rustls http client failed ({e}); trying native TLS");
+                        let mut b = <$Client>::builder()
+                            .no_proxy()
+                            .use_native_tls()
+                            .tls_built_in_root_certs(false)
+                            .https_only(cfg!(not(feature = "dd-managed-dev")));
+                        for c in roots() {
+                            b = b.add_root_certificate(c);
+                        }
+                        match b.build() {
+                            Ok(c) => c,
+                            // 两套 TLS 都起不来。reqwest 这时能给的只有信系统根证书的默认客户端，用它就破了证书固定，
+                            // 所以退出（被控端服务会把进程重新拉起；界面进程会关掉）。两套 TLS 都坏了时什么请求本来也发不出去
+                            Err(e) => {
+                                log::error!("dd-managed: no pinned http client can be built ({e}); exiting");
+                                std::process::exit(1)
+                            }
+                        }
                     }
                 }
             }
