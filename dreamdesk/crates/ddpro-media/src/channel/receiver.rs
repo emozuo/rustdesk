@@ -18,13 +18,19 @@ use std::{
 };
 use webrtc_srtp::context::Context;
 
-/// 主控端：缺的包隔这么久还没补到就再要一次（补发请求或补发包本身也可能丢）。内网往返不到 1 毫秒，
-/// 5 毫秒还没到基本就是丢了
+/// 主控端：要过补发之后这么久一个补发包都没到，就再要一次（补发请求或这一串补发包丢了）。内网往返不到 1 毫秒，
+/// 5 毫秒什么都没到基本就是丢了。补发包还在接连到达时不按时间再要，见 [`NACK_REORDER`]
 const NACK_RETRY: Duration = Duration::from_millis(5);
-/// 每个缺的包最多要几次（都在 [`NACK_GIVE_UP`] 之内）
+/// 被控端按请求的顺序逐个补发：排在某个缺包后面这么多个的补发包已经到了、它还没到，才算它（或它的补发包）丢了、再要它。
+/// 不按时间猜：一次丢几百上千个时被控端要补上百毫秒，按时间再要会把还在路上的整批再要几遍（P1 审查第 1 条：补发放大到近 3 倍）
+const NACK_REORDER: u64 = 2;
+/// 每个缺的包最多要几次
 const NACK_TRIES: u8 = 3;
-/// 主控端：缺的包最多等这么久，过了按救不回来的丢包处理（丢残帧、请求关键帧）
+/// 主控端：缺的包等这么久还没到，按救不回来的丢包处理（丢残帧、请求关键帧）
 const NACK_GIVE_UP: Duration = Duration::from_millis(40);
+/// 补发包还在接连到达（被控端还在补这一批，请求关键帧也要排在它后面）、这个缺包也没被确认丢了时，过了 [`NACK_GIVE_UP`]
+/// 接着等，最多等这么久
+const NACK_GIVE_UP_MAX: Duration = Duration::from_millis(300);
 /// 有缺包在等补发、或一帧还没收齐时，收包超时缩短到这么多，好按时再要 / 放弃 / 试探
 const NACK_POLL: Duration = Duration::from_millis(2);
 /// 一帧还没收齐、这么久没来新包：多半是这帧末尾的包丢了（后面没有更大的序号来暴露断档），
@@ -92,6 +98,8 @@ struct Gap {
     since: Instant,
     asked: Instant,
     tries: u8,
+    /// 上次要它时排在补发请求里的第几个（这条通道上所有请求连着数）
+    order: u64,
 }
 
 /// 主控端：打招呼、发心跳（兼授时）、收画面。
@@ -113,6 +121,10 @@ pub struct Receiver {
     missing: HashMap<u16, Gap>,
     /// 收到过（或试探请求过）的最大序号，缺包表不空时才有意义
     highest: u16,
+    /// 下一个要的补发排第几个；到了的补发包里排得最靠后的那个的下一个（0 = 还没到过）；最近一次有补发包补上缺口的时刻
+    nack_order: u64,
+    rtx_done: u64,
+    rtx_at: Instant,
     /// 没有缺包、也没有收了一半的帧时的收包超时；否则缩到 [`NACK_POLL`]
     idle_timeout: Duration,
     read_timeout: Duration,
@@ -162,6 +174,9 @@ impl Receiver {
             held: HashMap::new(),
             missing: HashMap::new(),
             highest: 0,
+            nack_order: 0,
+            rtx_done: 0,
+            rtx_at: now,
             idle_timeout,
             read_timeout: idle_timeout,
             next_gap_check: now,
@@ -313,6 +328,7 @@ impl Receiver {
             self.on_echo(&p.payload, arrival);
             return Ok(());
         }
+        let rtx = matches!(p.header.payload_type, PT_RTX | PT_RTX_TILE);
         let p = match (p.header.payload_type, p.header.ssrc) {
             (PT_VIDEO | PT_TILE, ssrc) if ssrc == self.keys.ssrc_media => p,
             // 补发只对还在缺包表里的有用（末尾试探也先把序号放进表里）：已经放弃、或原包先到了的晚到补发扔掉。整屏补发时
@@ -326,7 +342,7 @@ impl Receiver {
         self.last_media = Instant::now();
         self.stats.packets += 1;
         self.stats.bytes += n as u64;
-        self.on_media(p, arrival)?;
+        self.on_media(p, arrival, rtx)?;
         self.check_gaps()?;
         self.repeat_loss();
         Ok(())
@@ -342,8 +358,8 @@ impl Receiver {
         self.clock.on_echo(t1, t2, t3, t4);
     }
 
-    /// 按序号排好再拼帧：正好是下一个就直接拼；跳号了就先存着、请求补发缺的。
-    fn on_media(&mut self, p: Packet, arrival: i64) -> Result<(), Error> {
+    /// 按序号排好再拼帧：正好是下一个就直接拼；跳号了就先存着、请求补发缺的。`rtx`：这是补发包
+    fn on_media(&mut self, p: Packet, arrival: i64, rtx: bool) -> Result<(), Error> {
         let seq = p.header.sequence_number;
         let Some(expect) = self.expect else {
             self.expect = Some(seq.wrapping_add(1));
@@ -355,8 +371,13 @@ impl Receiver {
             // 比该拼的还旧：重复的，或已经放弃等待的包晚到了
             return Ok(());
         }
-        if self.missing.remove(&seq).is_some() {
+        if let Some(g) = self.missing.remove(&seq) {
             self.stats.recovered += 1;
+            // 原包晚到（乱序）不算：它和补发的先后无关
+            if rtx {
+                self.rtx_done = self.rtx_done.max(g.order + 1);
+                self.rtx_at = Instant::now();
+            }
         }
         if ahead == 0 {
             self.feed(p, arrival);
@@ -392,8 +413,10 @@ impl Receiver {
                         since: now,
                         asked: now,
                         tries: 1,
+                        order: self.nack_order,
                     },
                 );
+                self.nack_order += 1;
                 nack.push(s);
             }
             self.highest = seq;
@@ -431,8 +454,10 @@ impl Receiver {
                         since: now,
                         asked: now,
                         tries: 1,
+                        order: self.nack_order,
                     },
                 );
+                self.nack_order += 1;
                 self.highest = expect;
                 self.stats.nacked += 1;
                 self.send_nack(&[expect])?;
@@ -443,18 +468,33 @@ impl Receiver {
         }
         let mut again = Vec::new();
         for (&s, g) in self.missing.iter_mut() {
-            if g.tries < NACK_TRIES && now.duration_since(g.asked) >= NACK_RETRY {
+            if g.tries >= NACK_TRIES {
+                continue;
+            }
+            // 排在它后面要的补发已经到了：它（或它的补发包）丢了
+            let overtaken = g.order + NACK_REORDER < self.rtx_done;
+            // 要过它之后一个补发包都没再到过：请求本身或这一串补发包丢了
+            let silent = now.duration_since(g.asked.max(self.rtx_at)) >= NACK_RETRY;
+            if overtaken || silent {
                 g.asked = now;
                 g.tries += 1;
+                g.order = self.nack_order;
+                self.nack_order += 1;
                 again.push(s);
             }
         }
         self.send_nack(&again)?;
         while let Some(expect) = self.expect {
-            if !self.missing.get(&expect).is_some_and(|g| now.duration_since(g.since) >= NACK_GIVE_UP) {
+            let Some(g) = self.missing.get(&expect) else {
                 break;
-            }
-            let mut s = expect;
+            };
+            let waited = now.duration_since(g.since);
+            // 补发包还在接连到达、这个缺包也没被确认丢了（要满了次数、后面的补发也已经到了）：被控端还在补这一批，接着等
+            let arriving = now.duration_since(self.rtx_at) < NACK_RETRY
+                && !(g.tries >= NACK_TRIES && g.order + NACK_REORDER < self.rtx_done);
+            if waited < NACK_GIVE_UP || (arriving && waited < NACK_GIVE_UP_MAX) {
+                break;
+            }            let mut s = expect;
             let mut skipped = 0;
             while self.missing.remove(&s).is_some() {
                 s = s.wrapping_add(1);
