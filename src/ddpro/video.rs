@@ -629,7 +629,17 @@ fn stream(ps: &ProService, channel: Channel, bit_depth: u32, hdr: bool) -> Resul
             break End::ControllerClosed;
         }
         if !sender.peer_alive() {
-            return Err(Stop(Reason::CHANNEL_LOST, "the controller stopped answering on the pro channel".into()).into());
+            // 带上本机发不出包 / 收控制包出错的情况：断网时真正的原因在这里，不只是「对方不应答」
+            let st = &sender.stats;
+            let last = st.last_send_error.as_deref().map(|e| format!(", last error: {e}")).unwrap_or_default();
+            return Err(Stop(
+                Reason::CHANNEL_LOST,
+                format!(
+                    "the controller stopped answering on the pro channel ({} packets failed to send{last}, {} receive errors)",
+                    st.send_failed, st.recv_failed
+                ),
+            )
+            .into());
         }
         // 落后了（关键帧按发包节奏摊开发要一百多毫秒）就跳过错过的节拍，不背靠背补出一串帧
         let due = (first.elapsed().as_nanos() / interval.as_nanos()) as u64;
@@ -641,13 +651,16 @@ fn stream(ps: &ProService, channel: Channel, bit_depth: u32, hdr: bool) -> Resul
     if !matches!(end, End::SourceChanged(_)) {
         let st = &sender.stats;
         log::info!(
-            "ddpro: pro video on display {display} sent {} frames, {} packets, {} bytes, {} retransmitted, {} lossless tiles ({} bytes)",
+            "ddpro: pro video on display {display} sent {} frames, {} packets, {} bytes, {} retransmitted, {} lossless tiles ({} bytes), {} send failures{}, {} receive errors",
             st.frames,
             st.packets,
             st.bytes,
             st.retransmitted,
             st.tiles,
-            st.tile_bytes
+            st.tile_bytes,
+            st.send_failed,
+            st.last_send_error.as_deref().map(|e| format!(" (last: {e})")).unwrap_or_default(),
+            st.recv_failed
         );
     }
     Ok((end, Channel::Open(sender)))

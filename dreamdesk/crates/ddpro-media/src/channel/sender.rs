@@ -170,6 +170,10 @@ pub struct SendStats {
     pub tile_bytes: u64,
     /// 网络出错没发出去、当作丢了的包（主控端会要补发，补不上就要关键帧）
     pub send_failed: u64,
+    /// 最近一次发包出错的原因（断网后会话收场时报出来，免得只看到「主控端不再应答」）
+    pub last_send_error: Option<String>,
+    /// 收控制包的线程遇到的网络错误次数（不含超时）
+    pub recv_failed: u64,
 }
 
 /// 收控制包的线程和发画面的线程共用的补发状态。
@@ -177,6 +181,8 @@ pub struct SendStats {
 struct Rtx {
     sent: AtomicU64,
     failed: AtomicU64,
+    /// 收控制包的网络错误次数（借这份共用状态带给发画面的线程，和补发计数一起同步进统计）
+    recv_failed: AtomicU64,
     /// 发包节奏参数，`kbps << 32 | fps`；0 = 不控节奏。补发也按同样的速度发，免得成批补发又冲爆缓冲
     pace: AtomicU64,
 }
@@ -333,6 +339,7 @@ impl Sender {
         self.stats.frames += 1;
         self.stats.retransmitted = self.rtx.sent.load(Ordering::Relaxed);
         self.stats.retransmit_failed = self.rtx.failed.load(Ordering::Relaxed);
+        self.stats.recv_failed = self.rtx.recv_failed.load(Ordering::Relaxed);
         Ok(())
     }
 
@@ -414,7 +421,14 @@ impl Sender {
                 self.stats.packets += 1;
                 self.stats.bytes += data.len() as u64;
             }
-            Err(_) => self.stats.send_failed += 1,
+            Err(e) => {
+                self.stats.send_failed += 1;
+                // 断网时每个包都出错，只在原因变了时记
+                let e = e.to_string();
+                if self.stats.last_send_error.as_deref() != Some(e.as_str()) {
+                    self.stats.last_send_error = Some(e);
+                }
+            }
         }
     }
 
@@ -475,6 +489,7 @@ impl Control {
                 // 别的网络错误（网卡闪断、对方暂时不可达等）也不退出：退出了闪断恢复后也收不到心跳，3 秒后会话照样结束。
                 // 稍等再收，免得错误连续立刻返回时空转；真断了，心跳停在原处，发送端 3 秒后按「主控端不再应答」收场
                 Err(_) => {
+                    self.rtx.recv_failed.fetch_add(1, Ordering::Relaxed);
                     std::thread::sleep(RECV_ERROR_BACKOFF);
                     continue;
                 }
