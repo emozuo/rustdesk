@@ -34,7 +34,7 @@ use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket},
     time::Duration,
 };
-use webrtc_srtp::{context::Context, protection_profile::ProtectionProfile};
+use webrtc_srtp::{context::Context, option::srtp_replay_protection, protection_profile::ProtectionProfile};
 use webrtc_util::marshal::{Marshal, Unmarshal};
 
 /// 每个 UDP 包的上限：内网以太网 MTU 1500 以内留足余量，不分片。
@@ -149,9 +149,27 @@ impl From<io::Error> for Error {
     }
 }
 
+/// 收包一侧每一路（SSRC）的重放窗口：同一路里收过的序号、或比收到过的最新序号旧这么多以上的包，不解密直接扔。
+/// 内网正常乱序只有几个包；同一路不会合法地重发同一个序号（补发走自己的一路、自己的序号），通道跨采集重建保留、序号接着走
+const REPLAY_WINDOW: usize = 1024;
+
+/// 发包用的加密上下文
 fn srtp(keys: &Keys) -> Result<Context, Error> {
     Context::new(&keys.key, &keys.salt, ProtectionProfile::AeadAes128Gcm, None, None)
         .map_err(|e| Error::Srtp(e.to_string()))
+}
+
+/// 收包用的加密上下文，开重放检测（库默认不查；P1 审查第 4 条）：不开时抓到包的人重放「请求关键帧」能让静止停编失效、
+/// 重放补发请求能放大流量、重放旧画面包能把加密的轮次计数拨乱让之后的包解不开。先查窗口再验认证，认证通过才记进窗口，伪造的包占不了位
+fn srtp_rx(keys: &Keys) -> Result<Context, Error> {
+    Context::new(
+        &keys.key,
+        &keys.salt,
+        ProtectionProfile::AeadAes128Gcm,
+        Some(srtp_replay_protection(REPLAY_WINDOW)),
+        None,
+    )
+    .map_err(|e| Error::Srtp(e.to_string()))
 }
 
 /// 各路的起始 RTP 序号：只在 0–32767 里取（WebRTC 的做法）。加密层把第一个解开的包算作第 0 轮，起点贴近 65535 而回绕前的包

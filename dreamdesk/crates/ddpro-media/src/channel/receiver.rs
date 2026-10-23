@@ -1,7 +1,7 @@
 //! 主控端：打招呼、发心跳（兼授时）、收画面（按序号重排、请求补发、救不回来才请求关键帧）。
 
 use super::{
-    initial_seq, is_timeout, micros, open, read_i64, rtp_packet, rtx_unwrap, seal, srtp, udp, unspecified_like, Error, Keys,
+    initial_seq, is_timeout, micros, open, read_i64, rtp_packet, rtx_unwrap, seal, srtp, srtp_rx, udp, unspecified_like, Error, Keys,
     CTRL_BYE, CTRL_HELLO, CTRL_KEEPALIVE, CTRL_KEYFRAME, CTRL_NACK, CTRL_TIME_ECHO, HISTORY, KEEPALIVE_INTERVAL, MSG_CHANGED,
     MSG_TILE, PEER_TIMEOUT, PT_CONTROL, PT_RTX, PT_RTX_TILE, PT_TILE, PT_VIDEO, TILE_FIRST,
 };
@@ -83,7 +83,7 @@ pub struct RecvStats {
     pub resyncs: u64,
     /// 丢包后到关键帧之前收到、因为解不了而丢掉的帧
     pub discarded_frames: u64,
-    /// 解密 / 认证失败的包（不是本会话的或被篡改的）
+    /// 解密 / 认证失败的包（不是本会话的或被篡改的），和被重放检测扔掉的包（同一路里收过的序号、或旧得超出窗口）
     pub auth_failures: u64,
     /// 诊断开关故意丢掉的包
     pub diag_dropped: u64,
@@ -167,7 +167,7 @@ impl Receiver {
             sock,
             peer,
             enc: srtp(&keys)?,
-            dec: srtp(&keys)?,
+            dec: srtp_rx(&keys)?,
             keys,
             ctrl_seq: initial_seq(),
             last_keepalive: now,

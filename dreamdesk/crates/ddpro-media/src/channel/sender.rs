@@ -1,7 +1,7 @@
 //! 被控端：开端口等主控端打招呼、发画面（发包节奏）、收心跳和补发请求（补发）。
 
 use super::{
-    control, initial_seq, is_timeout, micros, micros_u32, open, read_i64, rtp_packet, rtx_packet, seal, srtp, udp, Error, Keys,
+    control, initial_seq, is_timeout, micros, micros_u32, open, read_i64, rtp_packet, rtx_packet, seal, srtp, srtp_rx, udp, Error, Keys,
     CTRL_BYE, CTRL_HELLO, CTRL_KEEPALIVE, CTRL_KEYFRAME, CTRL_NACK, CTRL_TIME_ECHO, HISTORY, MSG_CHANGED, MSG_TILE,
     PEER_TIMEOUT, PT_CONTROL, PT_TILE, PT_VIDEO, RTP_HEADER, RTP_PAYLOAD_MAX, SRTP_GCM_TAG, TILE_CHUNK, TILE_FIRST,
     UDP_PAYLOAD,
@@ -133,7 +133,7 @@ impl Listener {
     }
 
     pub fn accept(self, timeout: Duration) -> Result<Sender, Error> {
-        let mut dec = srtp(&self.keys)?;
+        let mut dec = srtp_rx(&self.keys)?;
         let deadline = Instant::now() + timeout;
         self.sock.set_read_timeout(Some(CONTROL_POLL))?;
         let mut buf = vec![0u8; 2048];

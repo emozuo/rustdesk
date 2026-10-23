@@ -1,9 +1,11 @@
 //! 第 4 步自测：在本机用录好的真实 H.265 码流走一遍完整通道（UDP + RTP + SRTP），不需要显卡。
 //!
-//!   loopback IN.h265 [--drop 千分比] [--pace KBPS] [--out RECEIVED.h265] [--tiles KBPS] [--burst N [--burst-at 包数]]
+//!   loopback IN.h265 [--drop 千分比] [--pace KBPS] [--out RECEIVED.h265] [--tiles KBPS] [--burst N [--burst-at 包数]] [--replay-ms D]
 //!
 //! - `--burst N`：两端之间加本机中转，被控端发出第 `--burst-at`（默认 3000）个包之后连续丢 N 个，量一次丢一大批时
 //!   被控端补发了多少（发送端统计的 retransmitted）、主控端要了多少（接收端的 nacked）、多久恢复；
+//! - `--replay-ms D`：中转把双向的每个包 D 毫秒后再原样发一遍（模拟抓包重放），看重放的「请求关键帧」、补发请求有没有被再执行
+//!   （发送端的关键帧重发次数、补发数），重放的画面包有没有在解密前被扔掉（接收端的 auth_failures）；
 //! - 发送端按 60 帧/秒发出每一帧，发包节奏按 --pace 的码率（默认 30000，和专业模式一样；0 = 不控节奏）；
 //!   接收端缺包先请求补发，补发也等不到才回发「请求关键帧」，发送端收到后用重发第一帧（关键帧）代替编码器出关键帧；
 //! - 没有救不回来的丢包时（不丢包，或丢的全补回来了）检查收到的和发出的逐个 NAL 完全一致；
@@ -42,32 +44,53 @@ fn fake_tile(n: u32) -> Vec<u8> {
     d
 }
 
-/// `--burst N`：两端之间加一个本机 UDP 中转，被控端发出第 `at` 个包之后连续丢 `n` 个（模拟一次丢一大批），之后的包
-/// （包括补发）照常转发。返回中转的地址，主控端连它
-fn burst_proxy(sender: SocketAddr, at: u64, n: u64) -> std::io::Result<SocketAddr> {
+/// 两端之间的本机 UDP 中转，返回它的地址（主控端连它）。
+/// - `--burst N`：被控端发出第 `at` 个包之后连续丢 `n` 个（模拟一次丢一大批），之后的包（包括补发）照常转发；
+/// - `--replay-ms D`：双向的每个包照常转发，D 毫秒后再原样发一遍（模拟抓包重放：重放的「请求关键帧」、补发请求、画面包）
+fn proxy(sender: SocketAddr, at: u64, n: u64, replay: Option<Duration>) -> std::io::Result<SocketAddr> {
     let sock = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))?;
-    sock.set_read_timeout(Some(Duration::from_secs(5)))?;
     let addr = sock.local_addr()?;
     std::thread::spawn(move || {
         let mut buf = vec![0u8; 65536];
         let mut controller = None;
-        let (mut seen, mut dropped) = (0u64, 0u64);
-        while let Ok((len, from)) = sock.recv_from(&mut buf) {
-            if from == sender {
+        let (mut seen, mut dropped, mut replayed) = (0u64, 0u64, 0u64);
+        let mut later: std::collections::VecDeque<(Instant, Vec<u8>, SocketAddr)> = Default::default();
+        let mut last = Instant::now();
+        loop {
+            while later.front().is_some_and(|(due, ..)| *due <= Instant::now()) {
+                if let Some((_, data, to)) = later.pop_front() {
+                    sock.send_to(&data, to).ok();
+                    replayed += 1;
+                }
+            }
+            let wait = later.front().map_or(Duration::from_millis(50), |(due, ..)| due.saturating_duration_since(Instant::now()));
+            sock.set_read_timeout(Some(wait.max(Duration::from_micros(200)))).ok();
+            let (len, from) = match sock.recv_from(&mut buf) {
+                Ok(r) => r,
+                Err(_) if last.elapsed() < Duration::from_secs(5) || !later.is_empty() => continue,
+                Err(_) => break,
+            };
+            last = Instant::now();
+            let to = if from == sender {
                 seen += 1;
                 if seen > at && dropped < n {
                     dropped += 1;
                     continue;
                 }
-                if let Some(c) = controller {
-                    sock.send_to(&buf[..len], c).ok();
+                match controller {
+                    Some(c) => c,
+                    None => continue,
                 }
             } else {
                 controller = Some(from);
-                sock.send_to(&buf[..len], sender).ok();
+                sender
+            };
+            sock.send_to(&buf[..len], to).ok();
+            if let Some(d) = replay {
+                later.push_back((Instant::now() + d, buf[..len].to_vec(), to));
             }
         }
-        println!("burst proxy: dropped {dropped} consecutive packets after packet {at}");
+        println!("proxy: dropped {dropped} consecutive packets after packet {at}; replayed {replayed} packets");
     });
     Ok(addr)
 }
@@ -81,13 +104,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let input = args
         .first()
-        .ok_or("usage: loopback IN.h265 [--drop PERMILLE] [--pace KBPS] [--out FILE] [--tiles KBPS] [--burst N [--burst-at PACKETS]]")?;
+        .ok_or("usage: loopback IN.h265 [--drop PERMILLE] [--pace KBPS] [--out FILE] [--tiles KBPS] [--burst N [--burst-at PACKETS]] [--replay-ms D]")?;
     let mut drop = 0u32;
     let mut pace = 30_000u32;
     let mut out = None;
     // 静止无损的方块消息：每帧前发「哪些方块变了」，帧之间按这个预算插发假方块（0 = 不发）
     let mut tiles_kbps = 0u32;
     let (mut burst, mut burst_at) = (0u64, 3000u64);
+    let mut replay_ms = 0u64;
     let mut it = args[1..].iter();
     while let Some(k) = it.next() {
         let v = it.next().ok_or_else(|| format!("{k} needs a value"))?;
@@ -98,6 +122,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             "--tiles" => tiles_kbps = v.parse()?,
             "--burst" => burst = v.parse()?,
             "--burst-at" => burst_at = v.parse()?,
+            "--replay-ms" => replay_ms = v.parse()?,
             _ => return Err(format!("unknown option {k}").into()),
         }
     }
@@ -157,7 +182,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         Ok((keyframes, tiles_sent))
     });
 
-    let target = if burst > 0 { burst_proxy(addr, burst_at, burst)? } else { addr };
+    let target = if burst > 0 || replay_ms > 0 {
+        proxy(addr, burst_at, burst, (replay_ms > 0).then(|| Duration::from_millis(replay_ms)))?
+    } else {
+        addr
+    };
     let mut r = Receiver::connect(target, keys, Duration::from_secs(3), drop)?;
     // 被控端时钟 − 主控端时钟 = 主控端零点 − 被控端零点
     let true_offset = r.epoch().duration_since(sender_epoch).as_micros() as i64;
