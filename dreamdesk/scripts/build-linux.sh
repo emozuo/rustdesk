@@ -21,7 +21,7 @@ grep -q "pub const APP_NAME: &str = \"$APP\";" src/ddpro/brand.rs || {
 VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 # 安装包版本 = 程序版本 + 构建时间（如 1.5.1+202610231105）：程序版本跟着上游几个月才变一次，版本号不变的新构建
 # apt 会当成「已是最新」跳过。按 Debian 的比较规则，带后缀的比不带的、比更早的构建都新；程序版本升了照常更新
-DEB_VERSION="$VERSION+$(date +%Y%m%d%H%M)"
+DEB_VERSION="$VERSION+$(date -u +%Y%m%d%H%M)" # 用 UTC：换一台时区不同的机器打包，新包也不会比旧包「小」
 case "$(uname -m)" in
     x86_64) FLUTTER_ARCH=x64 DEB_ARCH=amd64 ;;
     aarch64) FLUTTER_ARCH=arm64 DEB_ARCH=arm64 ;;

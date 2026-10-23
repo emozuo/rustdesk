@@ -192,6 +192,10 @@ $PubLockBytes = [IO.File]::ReadAllBytes($PubLock)
 # （上游文件不改，免得每次合并冲突）。按原始文件名匹配的安全软件规则才不会把它当 rustdesk.exe
 $RunnerRc = Join-Path $Repo 'flutter\windows\runner\Runner.rc'
 $RunnerRcBytes = [IO.File]::ReadAllBytes($RunnerRc)
+# 上一次打包被强杀（关窗口、结束进程不走 finally）会留下改过的 Runner.rc：这里再存「原字节」就把改动固化了，先停下
+if ([Text.Encoding]::UTF8.GetString($RunnerRcBytes).Contains('DreamDesk')) {
+  throw "Runner.rc still has the DreamDesk version strings from an interrupted build: run 'git checkout -- flutter/windows/runner/Runner.rc' first"
+}
 try {
   # 文件是不带 BOM 的 UTF-8（版权行有 ©），按 UTF-8 读写
   $Branded = [Text.Encoding]::UTF8.GetString($RunnerRcBytes)
@@ -248,6 +252,7 @@ try {
   Write-Host "########## output ##########"
   Get-Item $Exe, $Installer | Select-Object Name, @{n = 'MB'; e = { [math]::Round($_.Length / 1MB, 1) } } | Format-Table -AutoSize
 } finally {
-  [IO.File]::WriteAllBytes($PubLock, $PubLockBytes)
-  [IO.File]::WriteAllBytes($RunnerRc, $RunnerRcBytes)
+  # 两处各自还原：一处出错（比如文件被占用）不能让另一处不还原
+  try { [IO.File]::WriteAllBytes($PubLock, $PubLockBytes) } catch { Write-Warning "cannot restore $PubLock : $_" }
+  try { [IO.File]::WriteAllBytes($RunnerRc, $RunnerRcBytes) } catch { Write-Warning "cannot restore $RunnerRc : $_" }
 }
