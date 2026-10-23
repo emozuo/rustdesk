@@ -25,6 +25,8 @@ const DEV_KEYS: &[(&str, &str)] = &[];
 /// 用过的应急票编号，一行一个（应急票不绑挑战值，靠它保证只能用一次）
 const EMERGENCY_USED_FILE: &str = "dd_emergency_used";
 
+const LOG_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
+
 const MSG_TICKET_REQUIRED: &str = "This device only accepts connections authorized by the server";
 const MSG_TICKET_REJECTED: &str = "Connection authorization rejected";
 
@@ -39,16 +41,28 @@ impl Connection {
     /// 登录请求取 `self.lr`（RustDesk 收到时已存下）。返回值同 `on_message`：是否保持连接
     pub(super) async fn dd_managed_login(&mut self) -> bool {
         let lr = self.lr.clone();
+        // 被拒的登录由对端想发多少就发多少，日志要节流
         if lr.dd_ticket.is_empty() {
-            log::warn!("dd-managed: login from {} without ticket refused", lr.my_id);
+            hbb_common::throttled_log!(LOG_INTERVAL, warn, "dd-managed: login from {} without ticket refused", lr.my_id);
             self.send_login_error(MSG_TICKET_REQUIRED).await;
             sleep(1.).await;
             return false;
         }
-        let t = match self.dd_check_ticket(&lr) {
+        let mut checked = self.dd_check_ticket(&lr);
+        // 应急票记「已用」要写盘（先写盘再放行），放到阻塞线程上做
+        if let Some(t) = checked.as_ref().ok().filter(|t| t.sub_kind == SubKind::Emergency) {
+            let jti = t.jti_hex();
+            if let Err(e) = hbb_common::tokio::task::spawn_blocking(move || claim_emergency(&jti))
+                .await
+                .unwrap_or_else(|e| Err(e.to_string()))
+            {
+                checked = Err(e);
+            }
+        }
+        let t = match checked {
             Ok(t) => t,
             Err(e) => {
-                log::warn!("dd-managed: ticket from {} refused: {e}", lr.my_id);
+                hbb_common::throttled_log!(LOG_INTERVAL, warn, "dd-managed: ticket from {} refused: {e}", lr.my_id);
                 self.send_login_error(MSG_TICKET_REJECTED).await;
                 sleep(1.).await;
                 return false;
@@ -64,7 +78,7 @@ impl Connection {
         );
         if t.sub_kind == SubKind::Emergency {
             log::warn!("dd-managed: EMERGENCY ticket {jti} ({}) used by {}", t.sub, lr.my_id);
-            crate::ddpro::emergency_audit::record(json!({
+            let rec = json!({
                 "jti": jti,
                 "kid": t.kid,
                 "sub": t.sub,
@@ -74,7 +88,13 @@ impl Connection {
                 "conn_type": t.conn_type,
                 "at": hbb_common::get_time() / 1000,
                 "exp": t.exp,
-            }));
+            });
+            // 记待补传也要写盘
+            if let Err(e) =
+                hbb_common::tokio::task::spawn_blocking(move || crate::ddpro::emergency_audit::record(rec)).await
+            {
+                log::error!("dd-managed: emergency audit not recorded: {e}");
+            }
         }
         let id = self.inner.id();
         TICKET_JTI.lock().unwrap().insert(id, jti);
@@ -112,9 +132,6 @@ impl Connection {
         if t.target_id != Config::get_id() {
             // 以公钥为准：设备号可能被 hbbs 的冲突处理改掉
             log::warn!("dd-managed: ticket names device {}, this device is {}", t.target_id, Config::get_id());
-        }
-        if t.sub_kind == SubKind::Emergency {
-            claim_emergency(&t.jti_hex())?;
         }
         Ok(t)
     }

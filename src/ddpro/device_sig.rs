@@ -25,7 +25,13 @@ pub fn headers(method: &str, url: &str, body: &[u8]) -> Vec<(String, String)> {
     ) {
         Ok(h) => h,
         Err(e) => {
-            hbb_common::log::error!("dd-managed: device signature for {}: {e}", u.path());
+            // 每次心跳都会走到这里，节流
+            hbb_common::throttled_log!(
+                std::time::Duration::from_secs(600),
+                error,
+                "dd-managed: device signature for {}: {e}",
+                u.path()
+            );
             Vec::new()
         }
     }
