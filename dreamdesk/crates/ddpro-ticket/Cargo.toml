@@ -10,3 +10,7 @@ publish = false
 sodiumoxide = "0.2"
 sha2 = "0.10"
 base64 = "0.22"
+
+[dev-dependencies]
+# 只给 examples/host_cases.rs 读用例文件
+serde_json = "1"
