@@ -135,7 +135,14 @@ pub fn on_message<T: InvokeUiSession>(data: &[u8], _sender: &UnboundedSender<Dat
                 ddpro::describe_format(&accept.format)
             );
             #[cfg(all(feature = "flutter", target_os = "linux"))]
-            super::view_link::start(&accept.media, &accept.format, _sender.clone(), _session, accept.display_index as i32);
+            super::view_link::start(
+                &accept.media,
+                &accept.format,
+                accept.hdr_capable,
+                _sender.clone(),
+                _session,
+                accept.display_index as i32,
+            );
             #[cfg(not(all(feature = "flutter", target_os = "linux")))]
             log::error!("ddpro: this build has no pro view; the peer should not have accepted");
         }
@@ -177,6 +184,12 @@ pub fn on_message<T: InvokeUiSession>(data: &[u8], _sender: &UnboundedSender<Dat
             #[cfg(not(target_os = "linux"))]
             let _ = u;
         }
+        Some(dd_pro::Union::HdrResult(r)) => {
+            #[cfg(all(feature = "flutter", target_os = "linux"))]
+            hdr_switched(_session, _sender.clone(), r);
+            #[cfg(not(all(feature = "flutter", target_os = "linux")))]
+            let _ = r;
+        }
         Some(dd_pro::Union::Released(r)) => {
             #[cfg(all(feature = "flutter", target_os = "linux"))]
             super::view_link::released(_session, r.display_index as i32);
@@ -188,6 +201,31 @@ pub fn on_message<T: InvokeUiSession>(data: &[u8], _sender: &UnboundedSender<Dat
             warn,
             "ddpro: ignoring an unexpected pro protocol message from the peer"
         ),
+    }
+}
+
+/// 被控端切完了 HDR（悬浮球「HDR」）：切成了就也切本机的屏；不论成没成都关掉专业窗口、等两边的显示稳下来再重新请求
+/// （被控端可能切了一部分屏，旧的专业会话的格式已经不对）。切显示模式会阻塞，放在单独的线程里，不占 RustDesk 的消息循环
+#[cfg(all(feature = "flutter", target_os = "linux"))]
+fn hdr_switched<T: InvokeUiSession>(session: &Session<T>, rustdesk: UnboundedSender<Data>, r: ddpro::HdrResult) {
+    if r.ok {
+        log::info!("ddpro: hdr: the peer turned HDR {}", if r.on { "on" } else { "off" });
+    } else {
+        log::warn!("ddpro: hdr: the peer could not turn HDR {}: {}", if r.on { "on" } else { "off" }, r.detail);
+    }
+    let session = session.clone();
+    let spawned = std::thread::Builder::new().name("ddpro-hdr".into()).spawn(move || {
+        let displays = super::view_link::switch_hdr(&session, rustdesk, r.on, r.ok);
+        // 两边切显示模式后桌面和被控端的采集都要重建一下，太早请求会按旧状态谈
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        super::view_link::end_hdr_switch(&session);
+        for d in displays {
+            log::info!("ddpro: hdr: requesting a pro session for remote display {d} again");
+            request_pro(&session, u32::try_from(d).unwrap_or(0));
+        }
+    });
+    if let Err(e) = spawned {
+        log::error!("ddpro: hdr: cannot start the thread that switches HDR: {e}");
     }
 }
 

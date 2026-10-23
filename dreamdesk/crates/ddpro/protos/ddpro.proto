@@ -16,6 +16,8 @@ message DdPro {
     UsbOpen usb_open = 11;
     UsbData usb_data = 12;
     UsbClose usb_close = 13;
+    SetHdr set_hdr = 14;
+    HdrResult hdr_result = 15;
   }
   // 5：v2–v3 的「请求关键帧」（经 RustDesk 原连接）；v4 起改在画面通道上回发。
   // 7：v7–v9 的「开 / 关抖动」（界面没有入口，只有诊断开关触发；HDR 定为走 10bit 后用不上，2026-10-22 删）
@@ -165,6 +167,23 @@ message Accept {
   MediaChannel media = 2;
   // v9 起：答的是哪块屏的请求（多屏时几块屏的请求同时在路上）
   uint32 display_index = 3;
+  // v11 起：这块屏能开 HDR（显示器支持）。悬浮球「HDR」据此决定能不能点
+  bool hdr_capable = 4;
+}
+
+// v11 起（悬浮球「HDR」）：主控端请被控端把这次会话用到的屏的系统 HDR 打开 / 关掉。被控端记下每块屏改之前的样子，
+// 连接关闭时恢复；主控端等它答复后再切自己的屏、重新谈判专业会话
+message SetHdr {
+  bool on = 1;
+  repeated uint32 displays = 2;
+}
+
+// 被控端 → 主控端：SetHdr 做完了。ok = 每块屏都到了要的状态（本来就是也算）；否则 detail 是原因（屏不支持 HDR 等），
+// 已经改了的照旧留着，连接关闭时一起恢复
+message HdrResult {
+  bool on = 1;
+  bool ok = 2;
+  string detail = 3;
 }
 
 // 被控端 → 主控端（v9 起）：主控端关了这块屏的专业窗口，被控端的专业会话已结束、专业服务已退订（出错结束的照旧发 Stopped）。
@@ -228,6 +247,8 @@ message ViewStart {
   bool mic = 12;
   // 谈成的画面格式（被控端答复里的）：位深、是不是 HDR、普通内容的白多亮（P1 第 4 项）
   VideoFormat format = 13;
+  // 被控端这块屏能开 HDR（Accept 里的）。悬浮球「HDR」能不能点还要看本机的屏（专业窗口自己查）；勾不勾看 format.hdr
+  bool hdr_capable = 14;
 }
 
 message ViewPoint {
@@ -266,6 +287,8 @@ message ViewAction {
     ViewResolution change_resolution = 6;
     // 麦克风开 / 关（P2 第 2 项）：会话进程发起 / 结束 RustDesk 的语音通话，被控端把声音送进虚拟麦克风
     bool mic = 7;
+    // HDR 开 / 关（整个会话）：会话进程请被控端切它的屏、再切本机的屏，专业窗口重开、重新谈判
+    bool hdr = 8;
   }
 }
 

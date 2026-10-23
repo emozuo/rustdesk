@@ -14,7 +14,7 @@ mod nvenc;
 mod nvenc_sys;
 
 #[cfg(windows)]
-pub use display::hdr_sdr_white_nits;
+pub use display::{hdr_sdr_white_nits, hdr_supported, set_hdr};
 #[cfg(windows)]
 pub use nvenc::{probe, Config, EncodedFrame, Encoder};
 

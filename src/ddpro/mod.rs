@@ -57,3 +57,8 @@ mod usb_server;
 mod usb_client;
 #[cfg(all(feature = "dd-pro", target_os = "linux"))]
 pub mod usb_helper;
+// 悬浮球「HDR」（v11）：被控端切 Windows 的系统 HDR；主控端切 GNOME 的（和专业窗口同条件）
+#[cfg(all(feature = "dd-pro", windows))]
+mod hdr_server;
+#[cfg(all(feature = "dd-pro", feature = "flutter", target_os = "linux"))]
+mod hdr_client;

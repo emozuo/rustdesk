@@ -85,6 +85,8 @@ pub enum Action {
     ShowStatus(bool),
     /// 麦克风开 / 关之后的状态（会话进程发起 / 结束语音通话，并记下来给换屏开的新窗口）
     Mic(bool),
+    /// HDR 要开 / 关（整个会话）：会话进程请被控端切、再切本机，专业窗口随之重开，勾不勾看重开后谈成的格式
+    Hdr(bool),
     GeneralMode,
     CtrlAltDel,
     LockScreen,
@@ -104,17 +106,19 @@ enum Item {
     Resolution,
     Status,
     Mic,
+    Hdr,
     General,
     CtrlAltDel,
     Lock,
     Disconnect,
 }
 
-const ITEMS: [Item; 8] = [
+const ITEMS: [Item; 9] = [
     Item::SwitchDisplay,
     Item::Resolution,
     Item::Status,
     Item::Mic,
+    Item::Hdr,
     Item::General,
     Item::CtrlAltDel,
     Item::Lock,
@@ -138,6 +142,7 @@ impl Item {
                 // 状态块里就是 RustDesk 质量面板在专业模式下显示的那份实测值，叫法跟它一致
                 Item::Status => "Show quality monitor",
                 Item::Mic => "Microphone",
+                Item::Hdr => "HDR",
                 Item::General => "Switch to general mode",
                 Item::CtrlAltDel => "Insert Ctrl + Alt + Del",
                 Item::Lock => "Insert Lock",
@@ -177,6 +182,9 @@ pub struct Ball {
     show_status: bool,
     /// 麦克风开着（语音通话进行中）
     mic: bool,
+    /// 这个专业窗口谈成的是 HDR 画面（「HDR」打勾）；能不能点（两头的屏都支持 HDR）
+    hdr: bool,
+    hdr_available: bool,
     status_lines: Vec<String>,
     status_dirty: bool,
     /// 球完全露出时的左上角
@@ -214,6 +222,8 @@ impl Ball {
         display_fixed: bool,
         show_status: bool,
         mic: bool,
+        hdr: bool,
+        hdr_available: bool,
     ) -> Self {
         let (face, mono) = load_faces();
         if face.is_none() {
@@ -226,6 +236,8 @@ impl Ball {
             mono,
             show_status,
             mic,
+            hdr,
+            hdr_available,
             status_lines: Vec::new(),
             status_dirty: show_status,
             x: (screen.0 - RIGHT_GAP - BALL).max(0.0),
@@ -419,6 +431,10 @@ impl Ball {
                 if item.has_sub() {
                     // 子菜单随悬停展开（下面的 update_hover），点它不用再做什么
                     None
+                } else if item == Item::Hdr && !self.hdr_available {
+                    // 灰着的「HDR」：点了只关菜单
+                    self.close_menu();
+                    None
                 } else {
                     self.close_menu();
                     Some(match item {
@@ -431,6 +447,8 @@ impl Ball {
                             self.mic = !self.mic;
                             Action::Mic(self.mic)
                         }
+                        // 不在这里翻转勾：切成了专业窗口会重开，新窗口按谈成的格式打勾；没切成就照旧
+                        Item::Hdr => Action::Hdr(!self.hdr),
                         Item::General => Action::GeneralMode,
                         Item::CtrlAltDel => Action::CtrlAltDel,
                         Item::Lock => Action::LockScreen,
@@ -748,7 +766,11 @@ impl Ball {
             if self.hover_row == Some(i) || self.sub_open == Some(i) {
                 fill(&mut pm, rounded(x + 4.0, ry, w - 8.0, ROW_H - 2.0, 7.0), C_HOVER);
             }
-            let fg = if *item == Item::Disconnect { C_DANGER } else { C_TEXT };
+            let fg = match item {
+                Item::Disconnect => C_DANGER,
+                Item::Hdr if !self.hdr_available => C_DIM,
+                _ => C_TEXT,
+            };
             let cy = ry + ROW_H / 2.0;
             draw_icon(&mut pm, *item, x + ICON_X, cy, fg);
             if let Some(face) = &self.face {
@@ -758,7 +780,7 @@ impl Ball {
                 chevron(&mut pm, x + w - 16.0, cy, C_DIM);
             }
             // 开关项：开着时右边一个对勾
-            if (*item == Item::Status && self.show_status) || (*item == Item::Mic && self.mic) {
+            if (*item == Item::Status && self.show_status) || (*item == Item::Mic && self.mic) || (*item == Item::Hdr && self.hdr) {
                 let mut pb = PathBuilder::new();
                 pb.move_to(x + w - 21.0, cy);
                 pb.line_to(x + w - 17.5, cy + 3.5);
@@ -931,6 +953,19 @@ fn draw_icon(pm: &mut Pixmap, item: Item, cx: f32, cy: f32, color: [u8; 4]) {
             pb.move_to(cx - 3.0, cy + 7.0);
             pb.line_to(cx + 3.0, cy + 7.0);
             stroke(pm, pb.finish(), color, lw);
+        }
+        // 圆圈、右半边涂满：明暗对比（亮度范围）
+        Item::Hdr => {
+            let (r, k) = (6.5, 0.5523 * 6.5);
+            let mut pb = PathBuilder::new();
+            pb.push_circle(cx, cy, r);
+            stroke(pm, pb.finish(), color, lw);
+            let mut pb = PathBuilder::new();
+            pb.move_to(cx, cy - r);
+            pb.cubic_to(cx + k, cy - r, cx + r, cy - k, cx + r, cy);
+            pb.cubic_to(cx + r, cy + k, cx + k, cy + r, cx, cy + r);
+            pb.close();
+            fill(pm, pb.finish(), color);
         }
         // 上下两条反向箭头：在两种模式之间切换
         Item::General => {

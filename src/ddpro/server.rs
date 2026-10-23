@@ -5,7 +5,7 @@ use crate::{
     server::{service::Subscriber, ConnInner, ServerPtrWeak},
 };
 use base::message_proto::Message;
-use ddpro::{dd_pro, reject, FormatCaps, Hello};
+use ddpro::{dd_pro, reject, FormatCaps, HdrResult, Hello, SetHdr};
 use hbb_common::{log, throttled_log, tokio};
 use serde_json::{json, Map, Value};
 use std::net::IpAddr;
@@ -119,6 +119,7 @@ fn handle(data: &[u8], ctx: &ConnCtx) -> Option<Message> {
             }
             wrap(reply)
         }
+        Some(dd_pro::Union::SetHdr(s)) => wrap(dd_pro::Union::HdrResult(set_hdr(&s, ctx))),
         _ => {
             throttled_log!(
                 PEER_LOG_INTERVAL,
@@ -127,6 +128,20 @@ fn handle(data: &[u8], ctx: &ConnCtx) -> Option<Message> {
             );
             None
         }
+    }
+}
+
+/// 悬浮球「HDR」（v11）：切这次会话用到的屏的系统 HDR（只有 Windows 被控端能切）
+fn set_hdr(s: &SetHdr, _ctx: &ConnCtx) -> HdrResult {
+    log::info!("ddpro: hdr: the controller asks to turn HDR {} on display(s) {:?}", if s.on { "on" } else { "off" }, s.displays);
+    #[cfg(windows)]
+    return super::hdr_server::apply(_ctx.conn.id(), s.on, &s.displays);
+    #[cfg(not(windows))]
+    HdrResult {
+        on: s.on,
+        ok: false,
+        detail: "switching HDR needs a Windows controlled side".to_owned(),
+        ..Default::default()
     }
 }
 
@@ -200,6 +215,8 @@ pub fn on_conn_closed(_conn_id: i32) {
     super::usb_server::on_conn_closed(_conn_id);
     #[cfg(windows)]
     super::mic::on_conn_closed(_conn_id);
+    #[cfg(windows)]
+    super::hdr_server::on_conn_closed(_conn_id);
 }
 
 fn answer(hello: &Hello, ctx: &ConnCtx) -> dd_pro::Union {
@@ -222,6 +239,10 @@ fn answer(hello: &Hello, ctx: &ConnCtx) -> dd_pro::Union {
                     accept.format.mut_or_insert_default().hdr = true;
                     accept.format.mut_or_insert_default().sdr_white_nits = white;
                 }
+            }
+            #[cfg(windows)]
+            {
+                accept.hdr_capable = super::hdr_server::capable(display);
             }
             match open_channel(display, ctx, accept.format.bit_depth, accept.format.hdr) {
                 Ok(media) => {

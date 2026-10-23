@@ -9,15 +9,15 @@
 
 use crate::{
     client::{Data, Interface},
-    ddpro::wire::PEER_LOG_INTERVAL,
+    ddpro::wire::{wrap, PEER_LOG_INTERVAL},
     ui_session_interface::{InvokeUiSession, Session},
 };
 use base::message_proto::{
     message, misc, KeyboardMode, Message, Misc, PeerInfo, Resolution, SupportedResolutions, SwitchDisplay,
 };
 use ddpro::{
-    reject, stopped, view_action, view_down, view_ended::Kind, view_up, Chroma, DisplayCaps, FormatCaps,
-    MediaChannel, Reject, Stopped, VideoFormat, ViewDown, ViewEnded, ViewPoint, ViewStart, ViewUp,
+    dd_pro, reject, stopped, view_action, view_down, view_ended::Kind, view_up, Chroma, DisplayCaps, FormatCaps,
+    MediaChannel, Reject, SetHdr, Stopped, VideoFormat, ViewDown, ViewEnded, ViewPoint, ViewStart, ViewUp,
 };
 use hbb_common::{log, protobuf::Message as _, throttled_log, tokio::sync::mpsc::UnboundedSender};
 use std::{
@@ -55,6 +55,10 @@ struct Link {
     show_status: bool,
     /// 悬浮球的麦克风开着（这次会话发起了语音通话）：换屏开新的专业窗口时照旧
     mic: bool,
+    /// 悬浮球「HDR」第一次切本机的屏之前各屏的颜色模式：RustDesk 连接断开时按它恢复（用户 2026-10-23 定）
+    hdr_restore: Option<Vec<(String, u32)>>,
+    /// 悬浮球「HDR」切换中（发出请求到重新请求专业模式）：被控端切 HDR 时旧专业会话报的停止是预料之中的，不挂故障提示
+    hdr_switching: bool,
 }
 
 /// 一块远程屏的专业窗口和挂在显示它的那个 RustDesk 窗口上的提示。
@@ -305,6 +309,94 @@ fn choose_general<T: InvokeUiSession>(session: &Session<T>) {
     push_window(session, None, "show");
 }
 
+/// 用户点悬浮球「HDR」（整个会话，用户 2026-10-23 定）：请被控端把开着专业窗口的各块屏的系统 HDR 切成 `on`。
+/// 被控端答复（`HdrResult`）后再切本机、重开专业窗口，见 [`switch_hdr`]
+fn ask_hdr<T: InvokeUiSession>(session: &Session<T>, k: u64, on: bool) {
+    let mut displays: Vec<u32> = {
+        let mut links = links().lock().unwrap();
+        let l = links.entry(k).or_default();
+        l.hdr_switching = true;
+        l.views.iter().filter(|(_, v)| v.down.is_some()).map(|(d, _)| *d as u32).collect()
+    };
+    displays.sort_unstable();
+    let set = SetHdr {
+        on,
+        displays,
+        ..Default::default()
+    };
+    if let Some(m) = wrap(dd_pro::Union::SetHdr(set)) {
+        session.send(Data::Message(m));
+    }
+}
+
+/// 被控端切完了 HDR：关掉这次会话各块屏的专业窗口（被控端随之结束旧的专业会话，和切屏同一条路），`local` 时把本机用着的屏
+/// 也切成 `on`。返回要重新请求专业模式的屏（等两边显示稳下来再请求，按新状态谈判）。切显示模式会阻塞，调用方在单独的线程里调。
+/// 第一次切本机时记下原来的样子，RustDesk 连接断开（`rustdesk` 关了）时恢复
+pub fn switch_hdr<T: InvokeUiSession>(session: &Session<T>, rustdesk: UnboundedSender<Data>, on: bool, local: bool) -> Vec<i32> {
+    let k = key(session);
+    // 有窗口显示着的屏，除了用户切到通用模式的、和再请求也没用的（本机不支持、版本不一致）。被控端切 HDR 时旧专业会话报停
+    // 可能先于这里到，那时专业窗口已经关了，所以不按「开着专业窗口」挑
+    let displays: Vec<i32> = links().lock().unwrap().get_mut(&k).map_or(Vec::new(), |l| {
+        let shown: Vec<i32> = std::iter::once(l.index)
+            .chain(l.views.iter().filter(|(_, v)| v.window.is_some()).map(|(d, _)| *d))
+            .collect();
+        shown
+            .into_iter()
+            .filter(|d| {
+                l.views.get_mut(d).is_some_and(|v| {
+                    v.down = None;
+                    !v.notice.is_some_and(|n| !n.retryable() || n == Notice::General)
+                })
+            })
+            .collect()
+    });
+    if !local {
+        return displays;
+    }
+    let before = match super::hdr_client::set(on) {
+        Ok(before) => before,
+        Err(e) => {
+            log::warn!("ddpro: hdr: cannot turn HDR {} on this machine: {e}", if on { "on" } else { "off" });
+            return displays;
+        }
+    };
+    log::info!("ddpro: hdr: turned HDR {} on this machine (before: {before:?})", if on { "on" } else { "off" });
+    let first = {
+        let mut links = links().lock().unwrap();
+        let l = links.entry(k).or_default();
+        let first = l.hdr_restore.is_none();
+        if first {
+            l.hdr_restore = Some(before);
+        }
+        first
+    };
+    if first {
+        let spawned = std::thread::Builder::new().name("ddpro-hdr-restore".into()).spawn(move || {
+            while !rustdesk.is_closed() {
+                std::thread::sleep(Duration::from_millis(500));
+            }
+            let Some(modes) = links().lock().unwrap().get_mut(&k).and_then(|l| l.hdr_restore.take()) else {
+                return;
+            };
+            match super::hdr_client::restore(&modes) {
+                Ok(()) => log::info!("ddpro: hdr: the connection ended, screens of this machine back to {modes:?}"),
+                Err(e) => log::warn!("ddpro: hdr: cannot restore the screens of this machine after the connection ended: {e}"),
+            }
+        });
+        if let Err(e) = spawned {
+            log::error!("ddpro: hdr: cannot start the thread that restores HDR: {e}");
+        }
+    }
+    displays
+}
+
+/// 悬浮球「HDR」切换结束（要重新请求专业模式了）：之后被控端再报停止就照常是故障
+pub fn end_hdr_switch<T: InvokeUiSession>(session: &Session<T>) {
+    if let Some(l) = links().lock().unwrap().get_mut(&key(session)) {
+        l.hdr_switching = false;
+    }
+}
+
 /// 用户在某个窗口（`window`）的提示上点「重新进入专业模式」（故障）或「进入专业模式」（通用模式）：挂着的是值得再试的故障时
 /// 撤掉这块屏的提示；是通用模式时撤掉所有切到通用模式的屏的提示。返回要重新请求的屏号。
 pub fn retry<T: InvokeUiSession>(session: &Session<T>, window: uuid::Uuid) -> Vec<i32> {
@@ -390,8 +482,12 @@ pub fn peer_stopped<T: InvokeUiSession>(session: &Session<T>, s: &Stopped) {
         Ok(Reason::PRIVACY_MODE) => Notice::PrivacyMode,
         _ => Notice::PeerFailed,
     };
-    // 被控端说的是确切原因：主控端等 3 秒没画面先挂上的通道原因（推测）让给它
-    raise(session, display, notice, &s.detail, Notice::is_guess);
+    if links().lock().unwrap().get(&key(session)).is_some_and(|l| l.hdr_switching) {
+        log::info!("ddpro: hdr: pro video of display {display} stopped while switching HDR, a new pro session follows");
+    } else {
+        // 被控端说的是确切原因：主控端等 3 秒没画面先挂上的通道原因（推测）让给它
+        raise(session, display, notice, &s.detail, Notice::is_guess);
+    }
     // 丢掉通道，写线程随之关管道，专业窗口读到断开就自己退出（它报「会话让它关的」，不再改提示）
     if let Some(v) = links().lock().unwrap().get_mut(&key(session)).and_then(|l| l.views.get_mut(&display)) {
         v.down = None;
@@ -574,6 +670,7 @@ pub fn display_caps() -> DisplayCaps {
 pub fn start<T: InvokeUiSession>(
     media: &MediaChannel,
     format: &VideoFormat,
+    hdr_capable: bool,
     rustdesk: UnboundedSender<Data>,
     session: &Session<T>,
     display_index: i32,
@@ -661,6 +758,7 @@ pub fn start<T: InvokeUiSession>(
             })
             .collect(),
         all_displays: session.get_use_all_my_displays_for_the_remote_session() == "Y",
+        hdr_capable,
         ..Default::default()
     })))
     .ok();
@@ -821,6 +919,10 @@ pub fn start<T: InvokeUiSession>(
                         } else if !on && was {
                             session.close_voice_call();
                         }
+                    }
+                    Some(view_action::Union::Hdr(on)) => {
+                        log::info!("ddpro: floating menu: HDR {}", if on { "on" } else { "off" });
+                        ask_hdr(&session, k, on);
                     }
                     Some(view_action::Union::GeneralMode(_)) => {
                         log::info!("ddpro: floating menu: switch to general mode");

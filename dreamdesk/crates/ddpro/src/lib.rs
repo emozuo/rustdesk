@@ -26,7 +26,8 @@ use protobuf::Message as _;
 /// v8：画面通道加静止无损方块（「这一帧哪些方块变了」和方块数据）。
 /// v9：多屏——「同意」「拒绝」带屏号；被控端的专业会话因主控端关窗结束时发「放回」。
 /// v10：USB 透传（设备全集、挂载状态、USB/IP 流的开 / 数据 / 关）。
-pub const PROTOCOL_VERSION: u32 = 10;
+/// v11：悬浮球「HDR」——主控端请被控端切屏的系统 HDR（SetHdr / HdrResult），「同意」带这块屏能不能开 HDR。
+pub const PROTOCOL_VERSION: u32 = 11;
 
 /// 被控端名片在 RustDesk「平台附加信息」里的键，值是 [`PROTOCOL_VERSION`]。
 pub const NAME_CARD_KEY: &str = "ddpro";
