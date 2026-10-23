@@ -188,7 +188,21 @@ $UsbipInstaller = Get-UsbipInstaller
 # flutter pub get 会改写这个被跟踪的文件：打完用改前的原字节还原（不用 git checkout，那样会丢掉本地未提交的改动）
 $PubLock = Join-Path $Repo 'flutter\pubspec.lock'
 $PubLockBytes = [IO.File]::ReadAllBytes($PubLock)
+# 主程序（Flutter 的 runner）的版本信息写在 Runner.rc 里，是 RustDesk 的：编之前临时换成我们的产品名 / 原始文件名，打完用原字节还原
+# （上游文件不改，免得每次合并冲突）。按原始文件名匹配的安全软件规则才不会把它当 rustdesk.exe
+$RunnerRc = Join-Path $Repo 'flutter\windows\runner\Runner.rc'
+$RunnerRcBytes = [IO.File]::ReadAllBytes($RunnerRc)
 try {
+  # 文件是不带 BOM 的 UTF-8（版权行有 ©），按 UTF-8 读写
+  $Branded = [Text.Encoding]::UTF8.GetString($RunnerRcBytes)
+  $Branded = $Branded.Replace('"FileDescription", "RustDesk Remote Desktop"', '"FileDescription", "DreamDesk Remote Desktop"')
+  $Branded = $Branded.Replace('"InternalName", "rustdesk"', "`"InternalName`", `"$AppName`"")
+  $Branded = $Branded.Replace('"OriginalFilename", "rustdesk.exe"', "`"OriginalFilename`", `"$AppName.exe`"")
+  $Branded = $Branded.Replace('"ProductName", "RustDesk"', '"ProductName", "DreamDesk"')
+  if ($Branded -match '"(FileDescription|InternalName|OriginalFilename|ProductName)", "[Rr]ust[Dd]esk') {
+    throw "Runner.rc changed upstream: cannot rename every version string"
+  }
+  [IO.File]::WriteAllBytes($RunnerRc, [Text.Encoding]::UTF8.GetBytes($Branded))
   # pub get 必须在 codegen 之前：codegen 的 ffigen 要读 pub get 生成的 package_config.json
   Invoke-Checked 'flutter pub get' { Push-Location flutter; flutter pub get; Pop-Location }
   Invoke-Checked 'bridge codegen' {
@@ -235,4 +249,5 @@ try {
   Get-Item $Exe, $Installer | Select-Object Name, @{n = 'MB'; e = { [math]::Round($_.Length / 1MB, 1) } } | Format-Table -AutoSize
 } finally {
   [IO.File]::WriteAllBytes($PubLock, $PubLockBytes)
+  [IO.File]::WriteAllBytes($RunnerRc, $RunnerRcBytes)
 }

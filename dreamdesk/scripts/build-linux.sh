@@ -19,6 +19,9 @@ grep -q "pub const APP_NAME: &str = \"$APP\";" src/ddpro/brand.rs || {
     exit 1
 }
 VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+# 安装包版本 = 程序版本 + 构建时间（如 1.5.1+202610231105）：程序版本跟着上游几个月才变一次，版本号不变的新构建
+# apt 会当成「已是最新」跳过。按 Debian 的比较规则，带后缀的比不带的、比更早的构建都新；程序版本升了照常更新
+DEB_VERSION="$VERSION+$(date +%Y%m%d%H%M)"
 case "$(uname -m)" in
     x86_64) FLUTTER_ARCH=x64 DEB_ARCH=amd64 ;;
     aarch64) FLUTTER_ARCH=arm64 DEB_ARCH=arm64 ;;
@@ -26,7 +29,7 @@ case "$(uname -m)" in
 esac
 # 开关只在 build.py 一处定（和官方 Linux 发布版一样带 hwcodec）
 FEATURES=$(python3 build.py --flutter --hwcodec --dd-pro --dd-brand --print-features)
-echo "## $APP $VERSION ($DEB_ARCH), features: $FEATURES"
+echo "## $APP $DEB_VERSION ($DEB_ARCH), features: $FEATURES"
 
 echo "## pub get + bridge codegen"
 (cd flutter && flutter pub get >/dev/null)
@@ -93,7 +96,7 @@ cat >"$D/DEBIAN/control" <<EOF
 Package: $APP
 Section: net
 Priority: optional
-Version: $VERSION
+Version: $DEB_VERSION
 Architecture: $DEB_ARCH
 Maintainer: $MAINTAINER
 Depends: $DEPENDS
@@ -105,7 +108,7 @@ Description: DreamDesk remote desktop (pro mode), based on RustDesk.
 EOF
 (cd "$D" && find usr -type f -exec md5sum {} + >DEBIAN/md5sums)
 # 先打在临时目录、自检过了才挪到仓库根：查出问题时不能已经把上一个好的包覆盖掉
-OUT=$T/$APP-$VERSION.deb
+OUT=$T/$APP-$DEB_VERSION.deb
 dpkg-deb --root-owner-group -b "$D" "$OUT" >/dev/null
 
 echo "## 自检"
@@ -119,5 +122,7 @@ if grep -rn -i rustdesk "$D"/DEBIAN/{postinst,prerm,preinst,postrm} \
     echo "上面这些安装文件里还有 rustdesk" >&2
     exit 1
 fi
+# 文件名带构建时间、每次都不同：仓库根只留这一个，之前打的包删掉
+rm -f "./$APP"-*.deb
 mv "$OUT" .
 echo "OK: $(basename "$OUT")"
