@@ -16,7 +16,7 @@ use hbb_common::config;
 pub const APP_NAME: &str = "dreamdesk-pro";
 
 const INTRANET_SERVER: &str = "dreamdesk.of3d.com";
-const INTRANET_API: &str = "https://dreamdesk.of3d.com";
+pub(crate) const INTRANET_API: &str = "https://dreamdesk.of3d.com";
 /// 内网 RustDesk 服务端（192.168.0.208 上的 hbbs，2026-10-13 部署 1.1.16）的公钥，客户端凭它认服务器。
 /// 服务端重装、换了密钥就要改这里并发新版。
 const INTRANET_SERVER_KEY: &str = "k0JPM24w59r7hkKuSfjwcGQAxezVb+sTBj5+UZOOlOg=";

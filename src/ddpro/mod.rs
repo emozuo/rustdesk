@@ -22,6 +22,19 @@ pub fn apply() {
         base::config::keys::OPTION_USE_ALL_MY_DISPLAYS_FOR_THE_REMOTE_SESSION.to_owned(),
         "Y".to_owned(),
     );
+    // 受管正式版：服务器地址锁成产品内置的。能改的话，被控端上的人（包括凭票进来的远程用户）可以把它改成 http 或别的地址，
+    // 证书固定就落空，服务端经心跳下发的「断开」也送不到。开发测试版不锁，方便指向联调服务
+    #[cfg(all(feature = "dd-managed", not(feature = "dd-managed-dev")))]
+    hbb_common::config::OVERWRITE_SETTINGS.write().unwrap().insert(
+        base::config::keys::OPTION_API_SERVER.to_owned(),
+        brand::INTRANET_API.to_owned(),
+    );
+    // 受管：界面的 HTTP 请求（登录、令牌、设备列表）固定走 Rust 这边（带证书固定），不许经本地选项换成 Dart 自带的 HTTP
+    #[cfg(feature = "dd-managed")]
+    hbb_common::config::OVERWRITE_LOCAL_SETTINGS.write().unwrap().insert(
+        base::config::keys::OPTION_ENABLE_FLUTTER_HTTP_ON_RUST.to_owned(),
+        "Y".to_owned(),
+    );
 }
 
 // 专业窗口的悬浮球和菜单，和专业窗口同条件
