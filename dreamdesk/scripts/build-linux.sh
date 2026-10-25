@@ -29,6 +29,8 @@ case "$(uname -m)" in
 esac
 # 开关只在 build.py 一处定（和官方 Linux 发布版一样带 hwcodec）
 FEATURES=$(python3 build.py --flutter --hwcodec --dd-pro --dd-brand "$@" --print-features)
+# 测试包另加 build.py 没有的开关，例如受管联调用 EXTRA_FEATURES=dd-managed-dev（正式包不要设）
+[ -n "${EXTRA_FEATURES:-}" ] && FEATURES="$FEATURES,$EXTRA_FEATURES"
 echo "## $APP $DEB_VERSION ($DEB_ARCH), features: $FEATURES"
 
 echo "## pub get + bridge codegen"
