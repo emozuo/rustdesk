@@ -5,6 +5,7 @@
 #
 # 前置：VS、Flutter 3.24.5、Python 3、Rust、vcpkg（见仓库根的 BUILD-DEPLOY.md）。
 # 用法：powershell -File dreamdesk\scripts\build-windows.ps1
+#       受管版：powershell -File dreamdesk\scripts\build-windows.ps1 -BuildPyFlags --hwcodec,--vram,--dd-managed
 # 默认 --hwcodec --vram：和官方 Windows x64 发布版的构建参数一致（.github/workflows/flutter-build.yml），
 # 通用模式因此和官方原版一样；专业模式的采集要用 vram 带来的「直接输出显卡纹理」。
 param(

@@ -14,6 +14,12 @@ use hbb_common::{
 
 /// 产品根证书（PEM）：当前和备用两张，密钥仪式后填入；根证书私钥离线保管，服务器证书到期换发不用改客户端
 const PRODUCT_ROOTS: &[&str] = &[];
+// 正式受管版没有产品根证书就不许编出来：编出来的客户端什么服务器都不信，登录、要票、心跳全失败
+#[cfg(not(feature = "dd-managed-dev"))]
+const _: () = assert!(
+    !PRODUCT_ROOTS.is_empty(),
+    "dd-managed: fill PRODUCT_ROOTS with the production root certificates (key ceremony) before building a managed product"
+);
 /// 开发根证书：私钥在 dreamdesk-gateway 的开发环境里，只有 `dd-managed-dev` 构建认
 #[cfg(feature = "dd-managed-dev")]
 const DEV_ROOTS: &[&str] = &[include_str!("dev-root-ca.pem")];

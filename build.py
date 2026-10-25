@@ -157,6 +157,12 @@ def make_parser():
              'On Windows, package with dreamdesk/scripts/build-windows.ps1, which also renames the program'
     )
     parser.add_argument(
+        '--dd-managed',
+        action='store_true',
+        help='DreamDesk: enable feature dd-managed (hosts only accept server-issued connection tickets; '
+             'implies dd-pro and dd-brand; needs the production keys built in)'
+    )
+    parser.add_argument(
         '--print-features',
         action='store_true',
         help='Print the cargo feature list these flags select, and exit without building. For a '
@@ -337,6 +343,8 @@ def get_features(args):
         features.append('dd-pro')
     if args.dd_brand:
         features.append('dd-brand')
+    if args.dd_managed:
+        features.append('dd-managed')
     if args.drm:
         # Say so rather than quietly handing back a stock build: the backend is Linux-only, so on
         # any other host the flag cannot be honoured and the resulting binary would look like a

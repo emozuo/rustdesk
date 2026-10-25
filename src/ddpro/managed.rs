@@ -13,6 +13,12 @@ pub(super) const MANAGED: bool = true;
 
 /// 产品预置的受信任公钥（钥匙编号, Ed25519 公钥十六进制）。密钥仪式后填入当前钥、备用钥和应急钥
 const PRODUCT_KEYS: &[(&str, &str)] = &[];
+// 正式受管版没有产品钥就不许编出来：编出来的被控端谁的票都不认，装上去就没人连得上
+#[cfg(not(feature = "dd-managed-dev"))]
+const _: () = assert!(
+    !PRODUCT_KEYS.is_empty(),
+    "dd-managed: fill PRODUCT_KEYS with the production ticket keys (key ceremony) before building a managed product"
+);
 /// 开发测试钥：私钥在 dreamdesk-gateway 的开发环境里，只有 `dd-managed-dev` 构建认，产品构建不带
 #[cfg(feature = "dd-managed-dev")]
 const DEV_KEYS: &[(&str, &str)] = &[
