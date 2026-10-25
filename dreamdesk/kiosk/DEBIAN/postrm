@@ -1,24 +1,14 @@
 #!/bin/sh
-# 卸载：GDM 的自动登录两行换回装包前的样子（别的设置不动），去掉 kiosk 账户的默认会话设置；
+# 卸载：去掉 kiosk 账户的默认会话设置和切换记录（自动登录已由 prerm 换回装包前的样子）；
 # 彻底删除（purge）时连本包建的账户和它的目录一起删
 set -e
 U=kiosk
-GDM=/etc/gdm3/custom.conf
 STATE=/var/lib/dreamdesk-kiosk
 OWNED=$STATE/account-created
-SAVED=$STATE/gdm-autologin-orig
 
 case "$1" in
     remove|purge)
-        if [ -f "$SAVED" ] && [ -f "$GDM" ]; then
-            sed -i -e '/^[[:space:]]*AutomaticLoginEnable[[:space:]]*=/d' -e '/^[[:space:]]*AutomaticLogin[[:space:]]*=/d' "$GDM"
-            # 原来的两行放回 [daemon] 下（倒着插，插完顺序和原来一样）；[daemon] 段被人删了就先补上，不然一行都插不回去
-            [ ! -s "$SAVED" ] || grep -q '^\[daemon\]' "$GDM" || printf '[daemon]\n' >>"$GDM"
-            tac "$SAVED" | while IFS= read -r line; do
-                sed -i "/^\[daemon\]/a $line" "$GDM"
-            done
-            rm -f "$SAVED"
-        fi
+        rm -f "$STATE/gdm-autologin-orig" "$STATE/disabled"
         rm -f "/var/lib/AccountsService/users/$U"
         ;;
 esac

@@ -1,0 +1,8 @@
+#!/bin/sh
+# 卸载前把 GDM 自动登录换回装包前的样子（切换命令卸载后就没了，只能在这里调）；没换成也不让卸载失败
+set -e
+if [ "$1" = remove ]; then
+    /usr/bin/dreamdesk-kiosk off --no-reboot >/dev/null ||
+        echo "自动登录没换回去，手动改 /etc/gdm3/custom.conf 里 AutomaticLogin 那两行" >&2
+fi
+exit 0

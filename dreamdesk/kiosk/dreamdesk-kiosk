@@ -1,0 +1,78 @@
+#!/bin/sh
+# 切换这台机器开机进 kiosk 还是进装包前的桌面，管理员经 SSH 用：
+#   dreamdesk-kiosk on|off [--no-reboot]   切完马上重启生效；--no-reboot 只改设置、下次开机生效
+#   dreamdesk-kiosk status
+# 只改 GDM 自动登录那两行；off 放回装包前的两行（记在 /var/lib/dreamdesk-kiosk/），程序、账户、会话都不动。
+# 装包（postinst）和卸载（prerm）也走这里，改 GDM 设置的只有这一份。
+set -e
+U=kiosk
+GDM=/etc/gdm3/custom.conf
+STATE=/var/lib/dreamdesk-kiosk
+SAVED=$STATE/gdm-autologin-orig
+# 管理员关掉了 kiosk：升级时装包脚本看到它就不改回 kiosk
+OFF=$STATE/disabled
+
+drop_autologin() {
+    sed -i -e '/^[[:space:]]*AutomaticLoginEnable[[:space:]]*=/d' -e '/^[[:space:]]*AutomaticLogin[[:space:]]*=/d' "$GDM"
+}
+
+to_kiosk() {
+    install -d "$STATE"
+    [ -f "$GDM" ] || install -D -m 644 /dev/null "$GDM"
+    # 只在第一次记原来的两行（之后现在的两行已经是本包写的）
+    [ -f "$SAVED" ] || grep -E '^[[:space:]]*AutomaticLogin(Enable)?[[:space:]]*=' "$GDM" >"$SAVED" || true
+    grep -q '^\[daemon\]' "$GDM" || printf '[daemon]\n' >>"$GDM"
+    drop_autologin
+    sed -i "/^\[daemon\]/a AutomaticLoginEnable=true\nAutomaticLogin=$U" "$GDM"
+    rm -f "$OFF"
+}
+
+to_orig() {
+    if [ -f "$SAVED" ] && [ -f "$GDM" ]; then
+        drop_autologin
+        # 原来的两行放回 [daemon] 下（倒着插，插完顺序和原来一样）；[daemon] 段被人删了就先补上，不然一行都插不回去
+        [ ! -s "$SAVED" ] || grep -q '^\[daemon\]' "$GDM" || printf '[daemon]\n' >>"$GDM"
+        tac "$SAVED" | while IFS= read -r line; do
+            sed -i "/^\[daemon\]/a $line" "$GDM"
+        done
+    fi
+    install -d "$STATE"
+    touch "$OFF"
+}
+
+next_boot() {
+    if grep -q '^[[:space:]]*AutomaticLoginEnable[[:space:]]*=[[:space:]]*[Tt]rue' "$GDM" 2>/dev/null; then
+        who=$(sed -n 's/^[[:space:]]*AutomaticLogin[[:space:]]*=[[:space:]]*//p' "$GDM" | head -1)
+        if [ "$who" = "$U" ]; then echo "kiosk"; else echo "自动登录 $who 的桌面"; fi
+    else
+        echo "登录界面"
+    fi
+}
+
+usage() {
+    echo "用法: dreamdesk-kiosk on|off [--no-reboot] | status" >&2
+    exit 2
+}
+
+reboot=1
+case "${2:-}" in
+    "") ;;
+    --no-reboot) reboot=0 ;;
+    *) usage ;;
+esac
+case "${1:-}" in
+    on | off)
+        [ "$(id -u)" = 0 ] || { echo "要 root 权限（sudo dreamdesk-kiosk $1）" >&2; exit 1; }
+        if [ "$1" = on ]; then to_kiosk; else to_orig; fi
+        echo "下次开机：$(next_boot)"
+        if [ $reboot = 1 ]; then
+            echo "马上重启"
+            systemctl reboot
+        fi
+        ;;
+    status)
+        if pgrep -u "$U" -f -- '[-]-kiosk' >/dev/null 2>&1; then echo "现在：kiosk 在运行"; else echo "现在：kiosk 没在运行"; fi
+        echo "下次开机：$(next_boot)"
+        ;;
+    *) usage ;;
+esac

@@ -1,13 +1,11 @@
 #!/bin/sh
-# 建 kiosk 账户（没有口令、只能自动登录，没有 sudo），默认会话设成 DreamDesk Kiosk，开机自动登录它。
-# GDM 设置只改自动登录那两行，改前把原来的两行记下（卸载时放回去，别的设置不动）。
+# 建 kiosk 账户（没有口令、只能自动登录，没有 sudo），默认会话设成 DreamDesk Kiosk，开机自动登录它
+# （GDM 设置由 dreamdesk-kiosk 命令改，只动自动登录那两行）。
 set -e
 U=kiosk
-GDM=/etc/gdm3/custom.conf
 STATE=/var/lib/dreamdesk-kiosk
 # 本包建的账户留个记号：说明字段可能被改过，不能拿它认
 OWNED=$STATE/account-created
-SAVED=$STATE/gdm-autologin-orig
 
 if [ "$1" = configure ]; then
     install -d "$STATE"
@@ -38,11 +36,7 @@ if [ "$1" = configure ]; then
     install -d /var/lib/AccountsService/users
     printf '[User]\nSession=dreamdesk-kiosk\nSystemAccount=false\n' > "/var/lib/AccountsService/users/$U"
 
-    [ -f "$GDM" ] || install -D -m 644 /dev/null "$GDM"
-    # 只在第一次装时记原来的两行（升级时现在的两行已经是本包写的）
-    [ -f "$SAVED" ] || grep -E '^[[:space:]]*AutomaticLogin(Enable)?[[:space:]]*=' "$GDM" >"$SAVED" || true
-    grep -q '^\[daemon\]' "$GDM" || printf '[daemon]\n' >>"$GDM"
-    sed -i -e '/^[[:space:]]*AutomaticLoginEnable[[:space:]]*=/d' -e '/^[[:space:]]*AutomaticLogin[[:space:]]*=/d' "$GDM"
-    sed -i "/^\[daemon\]/a AutomaticLoginEnable=true\nAutomaticLogin=$U" "$GDM"
+    # 管理员用 dreamdesk-kiosk off 关掉过的，升级时不改回 kiosk
+    [ -f "$STATE/disabled" ] || /usr/bin/dreamdesk-kiosk on --no-reboot >/dev/null
 fi
 exit 0

@@ -2,7 +2,7 @@
 # DreamDesk kiosk 安装包：dreamdesk-kiosk-<版本>.deb（不含程序，依赖 dreamdesk-pro）。在仓库根目录跑：
 #   bash dreamdesk/scripts/build-kiosk-deb.sh
 # 装在全新的 Ubuntu 26.04 上：建 kiosk 账户、开机自动登录进只跑 dreamdesk-pro --kiosk 的 GNOME Kiosk 会话；
-# 卸载还原自动登录设置，彻底删除（purge）连账户一起删。方案见 dreamdesk/docs/K-kiosk方案.md
+# 卸载还原自动登录设置，彻底删除（purge）连账户一起删；不卸载时用 dreamdesk-kiosk on|off 切换。方案见 dreamdesk/docs/K-kiosk方案.md
 set -euo pipefail
 
 APP=dreamdesk-pro
@@ -32,7 +32,10 @@ crlf "$SRC/systemd-user/gnome-session-manager@$PKG.service.d/kiosk.conf" \
     "$D/usr/lib/systemd/user/gnome-session-manager@$PKG.service.d/kiosk.conf"
 crlf "$SRC/dconf/00-$PKG" "$D/usr/share/$PKG/dconf/00-$PKG"
 crlf "$SRC/masked-user-units" "$D/usr/share/$PKG/masked-user-units"
-for s in postinst postrm; do
+mkdir -p "$D/usr/bin"
+crlf "$SRC/$PKG" "$D/usr/bin/$PKG"
+chmod 755 "$D/usr/bin/$PKG"
+for s in postinst prerm postrm; do
     crlf "$SRC/DEBIAN/$s" "$D/DEBIAN/$s"
     chmod 755 "$D/DEBIAN/$s"
 done
