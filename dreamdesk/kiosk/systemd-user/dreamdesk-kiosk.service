@@ -2,6 +2,8 @@
 Description=DreamDesk kiosk
 BindsTo=gnome-session.target
 After=gnome-session.target
+# 不设启动次数上限：默认 10 秒内起 5 次就停掉不再拉起，开机时程序连续秒退（显示还没就绪之类）会话就只剩黑屏
+StartLimitIntervalSec=0
 
 [Service]
 ExecStart=/usr/bin/dreamdesk-pro --kiosk

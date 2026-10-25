@@ -1,27 +1,38 @@
 #!/bin/sh
-# 卸载：GDM 设置还原成装包前的样子、去掉 kiosk 账户的默认会话设置；彻底删除（purge）时连账户和它的目录一起删
+# 卸载：GDM 的自动登录两行换回装包前的样子（别的设置不动），去掉 kiosk 账户的默认会话设置；
+# 彻底删除（purge）时连本包建的账户和它的目录一起删
 set -e
 U=kiosk
 GDM=/etc/gdm3/custom.conf
-ORIG=$GDM.dreamdesk-kiosk-orig
+STATE=/var/lib/dreamdesk-kiosk
+OWNED=$STATE/account-created
+SAVED=$STATE/gdm-autologin-orig
 
 case "$1" in
     remove|purge)
-        if [ -f "$ORIG" ]; then
-            mv -f "$ORIG" "$GDM"
+        if [ -f "$SAVED" ] && [ -f "$GDM" ]; then
+            sed -i -e '/^[[:space:]]*AutomaticLoginEnable[[:space:]]*=/d' -e '/^[[:space:]]*AutomaticLogin[[:space:]]*=/d' "$GDM"
+            # 原来的两行放回 [daemon] 下（倒着插，插完顺序和原来一样）
+            tac "$SAVED" | while IFS= read -r line; do
+                sed -i "/^\[daemon\]/a $line" "$GDM"
+            done
+            rm -f "$SAVED"
         fi
         rm -f "/var/lib/AccountsService/users/$U"
         ;;
 esac
-if [ "$1" = purge ] && id -u "$U" >/dev/null 2>&1; then
-    # 账户的 kiosk 会话还在跑时删不掉：先结束它（彻底删除就是要撤掉 kiosk），等进程退完
-    loginctl terminate-user "$U" 2>/dev/null || true
-    for _ in 1 2 3 4 5 6 7 8 9 10; do
-        pgrep -u "$U" >/dev/null || break
-        sleep 1
-    done
-    # 还是删不掉也不让卸载失败（包会卡在半删除状态），留下账户、说明怎么手动删
-    userdel --remove "$U" 2>/dev/null || userdel "$U" 2>/dev/null ||
-        echo "账户 $U 没删掉（还有进程在用），重启后执行 userdel --remove $U" >&2
+if [ "$1" = purge ]; then
+    if [ -f "$OWNED" ] && id -u "$U" >/dev/null 2>&1; then
+        # 账户的 kiosk 会话还在跑时删不掉：先结束它（彻底删除就是要撤掉 kiosk），等进程退完
+        loginctl terminate-user "$U" 2>/dev/null || true
+        for _ in 1 2 3 4 5 6 7 8 9 10; do
+            pgrep -u "$U" >/dev/null || break
+            sleep 1
+        done
+        # 还是删不掉也不让卸载失败（包会卡在半删除状态），留下账户、说明怎么手动删
+        userdel --remove "$U" 2>/dev/null || userdel "$U" 2>/dev/null ||
+            echo "账户 $U 没删掉（还有进程在用），重启后执行 userdel --remove $U" >&2
+    fi
+    rm -rf "$STATE"
 fi
 exit 0
