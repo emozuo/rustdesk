@@ -1,0 +1,27 @@
+#!/bin/sh
+# 卸载：GDM 设置还原成装包前的样子、去掉 kiosk 账户的默认会话设置；彻底删除（purge）时连账户和它的目录一起删
+set -e
+U=kiosk
+GDM=/etc/gdm3/custom.conf
+ORIG=$GDM.dreamdesk-kiosk-orig
+
+case "$1" in
+    remove|purge)
+        if [ -f "$ORIG" ]; then
+            mv -f "$ORIG" "$GDM"
+        fi
+        rm -f "/var/lib/AccountsService/users/$U"
+        ;;
+esac
+if [ "$1" = purge ] && id -u "$U" >/dev/null 2>&1; then
+    # 账户的 kiosk 会话还在跑时删不掉：先结束它（彻底删除就是要撤掉 kiosk），等进程退完
+    loginctl terminate-user "$U" 2>/dev/null || true
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        pgrep -u "$U" >/dev/null || break
+        sleep 1
+    done
+    # 还是删不掉也不让卸载失败（包会卡在半删除状态），留下账户、说明怎么手动删
+    userdel --remove "$U" 2>/dev/null || userdel "$U" 2>/dev/null ||
+        echo "账户 $U 没删掉（还有进程在用），重启后执行 userdel --remove $U" >&2
+fi
+exit 0

@@ -1,0 +1,13 @@
+[Unit]
+Description=DreamDesk kiosk
+BindsTo=gnome-session.target
+After=gnome-session.target
+
+[Service]
+ExecStart=/usr/bin/dreamdesk-pro --kiosk
+# 程序起来就向 GDM 报「画面就绪」。不报的话 GDM 的会话包装程序过 10 秒才代报，而 GDM 在会话报到时也起了个 10 秒的计时器，
+# 到点没收到就把开机动画硬关掉，前台落回 1 号终端，GDM 在那里另起一个登录界面盖住我们（GNOME 桌面由 gnome-shell 自己尽早报，没这事）
+ExecStartPost=-/usr/bin/gdbus call --system --dest org.gnome.DisplayManager --object-path /org/gnome/DisplayManager/Manager --method org.gnome.DisplayManager.Manager.RegisterDisplay
+# 退出或崩溃都在 2 秒后拉起，不结束整个会话（官方示例退出就结束会话、回登录界面）
+Restart=always
+RestartSec=2

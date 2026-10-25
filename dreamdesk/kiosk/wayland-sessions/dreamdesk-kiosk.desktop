@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=DreamDesk Kiosk
+Comment=Connects to the bound workstation full screen (dreamdesk/docs/K-kiosk方案.md)
+Exec=gnome-session --session dreamdesk-kiosk
+TryExec=gnome-session
+Type=Application
+DesktopNames=GNOME-Kiosk;GNOME;
+X-GDM-SessionRegisters=false

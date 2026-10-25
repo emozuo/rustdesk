@@ -65,6 +65,19 @@
 - kiosk 页之下照样建原来的主窗口页（不显示）：远程窗口要主窗口应答一套请求（屏幕列表、窗口激活登记等），
   那套应答写在原来的首页里。只换掉首页时远程窗口一开就报「没有这个方法」。
 
+### 安装包（10-25）
+
+- 装法：`apt-get install --no-install-recommends ./dreamdesk-pro-*.deb ./dreamdesk-kiosk-*.deb`。不加 `--no-install-recommends` 时
+  apt 会顺带装上 gnome-kiosk 推荐的两个示例会话（搜索机、脚本会话），开机自动登录用不到，但多两个会话入口。
+- 会话照 gnome-kiosk-script-session 的结构：wayland 会话文件 → gnome-session 会话 → 用户级 systemd 目标要求 GNOME Kiosk 和
+  我们的程序；我们的程序退出或崩溃 2 秒后拉起，不结束会话（官方示例退出就回登录界面）。
+- 装包：建 `kiosk` 账户（口令锁住、只能自动登录）、默认会话设成 DreamDesk Kiosk、GDM 自动登录改成它；改 GDM 前留原样。
+  已有一个不是本包建的 `kiosk` 账户时停下不装，不动别人的账户。卸载还原 GDM 设置；彻底删除（purge）连账户一起删。
+- 开机被登录界面盖住（瘦客户机实测，10-25）：非 GNOME 桌面的会话由 GDM 的会话包装程序代报「画面就绪」，要等 10 秒；
+  GDM 在会话报到时也起了个 10 秒计时器，到点没收到就硬关开机动画，前台落回 1 号终端，GDM 在那里另起登录界面、成了前台，
+  kiosk 会话被挤到后台（官方 gnome-kiosk-script 会话同样如此）。修法：我们的程序一起来就自己向 GDM 报「画面就绪」
+  （系统总线 `RegisterDisplay`，不带参数），和 GNOME 桌面由 gnome-shell 自己报是同一条路。
+
 ## 分期
 
 - **K1**：上表。

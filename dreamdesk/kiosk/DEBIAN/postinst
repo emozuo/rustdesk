@@ -1,0 +1,31 @@
+#!/bin/sh
+# 建 kiosk 账户（没有口令、只能自动登录，没有 sudo），默认会话设成 DreamDesk Kiosk，开机自动登录它。
+# 改 GDM 设置前先留原样（卸载时还原）。
+set -e
+U=kiosk
+GDM=/etc/gdm3/custom.conf
+ORIG=$GDM.dreamdesk-kiosk-orig
+
+if [ "$1" = configure ]; then
+    if ! id -u "$U" >/dev/null 2>&1; then
+        useradd --create-home --shell /bin/bash --comment "DreamDesk Kiosk" "$U"
+    elif [ "$(getent passwd "$U" | cut -d: -f5)" != "DreamDesk Kiosk" ]; then
+        # 同名账户不是本包建的：不锁它的口令、不改它的会话
+        echo "已有一个不是本包建的账户 $U，先改名或删掉它再装" >&2
+        exit 1
+    fi
+    passwd --lock "$U" >/dev/null
+    install -d -o "$U" -g "$U" "/home/$U/.config"
+    # 跳过 GNOME 首次登录向导
+    touch "/home/$U/.config/gnome-initial-setup-done"
+    chown "$U:$U" "/home/$U/.config/gnome-initial-setup-done"
+
+    install -d /var/lib/AccountsService/users
+    printf '[User]\nSession=dreamdesk-kiosk\nSystemAccount=false\n' > "/var/lib/AccountsService/users/$U"
+
+    [ -f "$ORIG" ] || cp -p "$GDM" "$ORIG"
+    grep -q '^\[daemon\]' "$GDM" || printf '[daemon]\n' >>"$GDM"
+    sed -i -e '/^[[:space:]]*AutomaticLoginEnable[[:space:]]*=/d' -e '/^[[:space:]]*AutomaticLogin[[:space:]]*=/d' "$GDM"
+    sed -i "/^\[daemon\]/a AutomaticLoginEnable=true\nAutomaticLogin=$U" "$GDM"
+fi
+exit 0
