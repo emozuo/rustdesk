@@ -118,7 +118,7 @@ class _DdKioskPageState extends State<DdKioskPage> {
         if (mounted) connect(context, id);
         // 远程窗口开出来要一会儿：期间不重复连。等够了一次都没开出来（开窗失败），照连不上处理；
         // 开出来又因出错关了的，关窗时已经排了重试
-        await Future.delayed(const Duration(seconds: 10));
+        await Future.delayed(const Duration(seconds: 20));
         if (mounted && _openedAt == openedBefore && !_sessionWindowOpen()) {
           // 窗口在两次查看之间开了又关时，它交来的原因还没被取走
           final end = ddKioskLastEnd.value;
@@ -133,9 +133,12 @@ class _DdKioskPageState extends State<DdKioskPage> {
       } else {
         final error = body['error'] as String? ?? '';
         debugPrint('dd-kiosk: seat target ${resp.statusCode}: $error');
+        // 服务端没给原因时：404 是没绑定，其余（服务端出错、中间代理回的错误页）按连不上算
         _scheduleRetry(error.isNotEmpty
             ? error
-            : translate('This seat is not bound to a workstation yet'));
+            : translate(resp.statusCode == 404
+                ? 'This seat is not bound to a workstation yet'
+                : 'Cannot reach the server'));
       }
     } catch (e) {
       debugPrint('dd-kiosk: seat target failed: $e');

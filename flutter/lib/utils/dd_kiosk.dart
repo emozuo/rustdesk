@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_hbb/common.dart';
+import 'package:flutter_hbb/common/widgets/ddpro_mode_badge.dart';
 import 'package:flutter_hbb/utils/multi_window_manager.dart';
 
 /// 本进程是不是以 `--kiosk` 启动的。读进程自己的启动参数、不由 main() 设：远程窗口跑在同一进程的另一个 Dart 环境里，
@@ -24,13 +25,20 @@ const String kWindowDdKioskSessionEnded = 'dd_kiosk_session_ended';
 /// 远程窗口里调用（提示框入口）：kiosk 下远程窗口不自己重试，连接类的错误（连接出错、登录被拒、要票被拒）和没人能填的口令框
 /// 一出来，就把原因交给主窗口的状态页、关掉这个连接，由状态页过一会儿重新问绑定再连——座位改绑了能跟上，被拒时不会每次重试都
 /// 要一张票。返回 true 表示已接手、不弹提示框
-bool ddKioskTakeOverMsgBox(
-    String type, String title, String text, String peerId) {
+bool ddKioskTakeOverMsgBox(String type, String title, String text,
+    SessionID sessionId, String peerId, void Function() reconnectViaRelay) {
   if (!kDdKiosk) return false;
+  debugPrint('dd-kiosk: msgbox $type / $title: $text');
+  // 直连被对端重置时 RustDesk 问要不要改走中继：没人能答，照提示框里「走中继」那个按钮做
+  if (type == 'relay-hint' || type == 'relay-hint2') {
+    reconnectViaRelay();
+    return true;
+  }
   final String reason;
   if (type == 'error' &&
       (title == 'Connection Error' ||
           title == 'Login Error' ||
+          title == 'Error' ||
           title == 'Connection authorization failed')) {
     reason = translate(text);
   } else if (type == 'input-password' || type == 're-input-password') {
@@ -38,12 +46,15 @@ bool ddKioskTakeOverMsgBox(
   } else {
     return false;
   }
-  // 「Closed manually by …」：控制台或工作站上的人断开的，RustDesk 自己也不重连；状态页同样不自动再连
-  final manual = text.toLowerCase().contains('manually');
+  // 只有工作站上的人断开的（「Closed manually by the peer」）才停住；「… by web console」是服务端经心跳要断的，
+  // 收回授权、解绑、改绑、退役、控制台单独断开都是这一句，照常退避后重新问绑定（绑定没变就连回原工作站）
+  final manual = text.toLowerCase().contains('manually by the peer');
   () async {
     await rustDeskWinManager.call(WindowType.Main, kWindowDdKioskSessionEnded,
         jsonEncode({'reason': reason, 'manual': manual}));
-    closeConnection(id: peerId);
+    // 和专业模式关窗同一套收尾：专业画面开着时这个窗口是藏着的，只移除标签关不掉会话和窗口（见那里的说明）；
+    // 关窗走子窗口的关闭流程，会通知主窗口把它移出活动名单
+    onDdproWindowEvent(sessionId, peerId, {'action': 'close'});
   }();
   return true;
 }

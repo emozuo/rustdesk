@@ -898,7 +898,8 @@ class FfiModel with ChangeNotifier {
     final title = evt['title'];
     final text = evt['text'];
     final link = evt['link'];
-    if (ddKioskTakeOverMsgBox(type, title, text, peerId)) return;
+    if (ddKioskTakeOverMsgBox(type, title, text, sessionId, peerId,
+        () => reconnect(dialogManager, sessionId, true))) return;
 
     // The peer-gone detector reconnects under `restarting-show` rather than an error title, so
     // it needs naming here too. By its own title, not the type: an explicitly restarted remote

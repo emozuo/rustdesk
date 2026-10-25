@@ -12,7 +12,8 @@ case "$1" in
     remove|purge)
         if [ -f "$SAVED" ] && [ -f "$GDM" ]; then
             sed -i -e '/^[[:space:]]*AutomaticLoginEnable[[:space:]]*=/d' -e '/^[[:space:]]*AutomaticLogin[[:space:]]*=/d' "$GDM"
-            # 原来的两行放回 [daemon] 下（倒着插，插完顺序和原来一样）
+            # 原来的两行放回 [daemon] 下（倒着插，插完顺序和原来一样）；[daemon] 段被人删了就先补上，不然一行都插不回去
+            [ ! -s "$SAVED" ] || grep -q '^\[daemon\]' "$GDM" || printf '[daemon]\n' >>"$GDM"
             tac "$SAVED" | while IFS= read -r line; do
                 sed -i "/^\[daemon\]/a $line" "$GDM"
             done
