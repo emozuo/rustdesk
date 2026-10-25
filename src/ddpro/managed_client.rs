@@ -20,8 +20,9 @@ pub(crate) fn set_peer_pk(lc: &Arc<RwLock<LoginConfigHandler>>, pk: Option<Vec<u
     };
 }
 
-/// 在 `handle_hash` 开头调用。`None`：这次不走票（没登录，或服务端说目标不是受管工作站），照 RustDesk 原有流程；
-/// `Some(keep)`：已经凭票发出登录请求（`true`），或要票失败、已提示用户（`false`，结束这次连接）
+/// 在 `handle_hash` 里、RustDesk 试口令之前调用。登录了以用户身份要票，没登录以座位身份要票。
+/// `None`：这次不走票（连接没加密、服务端说目标不是受管工作站、或不是这台的座位），照 RustDesk 原有流程；
+/// `Some(keep)`：已经凭票发出登录请求或弹了口令框等应急票（`true`），或要票被拒、已提示用户（`false`，结束这次连接）
 pub(super) async fn login_with_ticket(
     lc: &Arc<RwLock<LoginConfigHandler>>,
     hash: &Hash,
@@ -33,16 +34,16 @@ pub(super) async fn login_with_ticket(
     if login_with_pasted_ticket(lc, password_preset, peer).await {
         return Some(true);
     }
-    let token = LocalConfig::get_option("access_token");
-    if token.is_empty() {
-        return None;
-    }
     // 对端身份验不过时 RustDesk 会退回不加密的连接：这时挑战值可能是中间人从别的连接转来的，要来的票会被它截去用掉，
     // 所以不要票（受管被控端也只在加密连接上认票），照原有流程走
     if !peer.is_secured() {
         log::warn!("dd-managed: connection not encrypted, no ticket requested");
         return None;
     }
+    // 没登录就以座位身份要票（kiosk 瘦客户机不登录）：请求不带令牌、由 device_sig 用设备密钥签名，服务端按公钥认座位、
+    // 只发它绑定的那台的票
+    let token = LocalConfig::get_option("access_token");
+    let seat = token.is_empty();
     let (target_id, conn_type) = {
         let lc = lc.read().unwrap();
         (lc.id.clone(), conn_type_code(lc.conn_type))
@@ -60,7 +61,7 @@ pub(super) async fn login_with_ticket(
         "id": my_id,
         "uuid": crate::ui_interface::get_uuid(),
     });
-    let header = format!("Authorization: Bearer {token}");
+    let header = if seat { String::new() } else { format!("Authorization: Bearer {token}") };
     let fail = |detail: &str| {
         interface.msgbox("error", "Connection Error", "Connection authorization failed", detail);
         Some(false)
@@ -86,6 +87,12 @@ pub(super) async fn login_with_ticket(
         // 目标不是受管工作站（例如连的是外部的普通 RustDesk）：照原有流程用口令
         404 => {
             log::info!("dd-managed: {target_id} is not a managed workstation, normal login");
+            return None;
+        }
+        // 不是确认过的座位、或没绑定这台：照原有流程（受管被控端会拒绝并说明只认授权连接）
+        _ if seat => {
+            let error = reply["error"].as_str().unwrap_or_default();
+            log::info!("dd-managed: no seat ticket for {target_id} (status {status}: {error}), normal login");
             return None;
         }
         _ => {
