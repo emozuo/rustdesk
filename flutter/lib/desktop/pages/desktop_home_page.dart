@@ -24,6 +24,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:window_size/window_size.dart' as window_size;
 import '../widgets/button.dart';
+import '../../utils/dd_kiosk.dart';
 
 class DesktopHomePage extends StatefulWidget {
   const DesktopHomePage({Key? key}) : super(key: key);
@@ -843,6 +844,8 @@ class _DesktopHomePageState extends State<DesktopHomePage>
           return jsonEncode(
               await rustDeskWinManager.getOtherRemoteWindowCoords(windowId));
         }
+      } else if (call.method == kWindowDdKioskSessionEnded) {
+        ddKioskOnSessionEnded(call.arguments);
       }
     });
     _uniLinksSubscription = listenUniLinks();

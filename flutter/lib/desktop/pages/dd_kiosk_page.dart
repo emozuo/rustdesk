@@ -1,16 +1,19 @@
 // DreamDesk kiosk 主窗口（dreamdesk/docs/K-kiosk方案.md 第 2 项）：程序以 `--kiosk` 启动时主窗口换成这一页，全屏。
 // 开机问服务端「我绑定哪台」（座位接口，请求由 Rust 那边带上设备签名），以座位身份连上去（要票在 Rust 里自动做）；
 // 问不到就显示一句原因、倒计时自动再问，另有「重新连接」「关机」。
-// 连上以后掉线、工作站离线由远程窗口自己重试（见 utils/dd_kiosk.dart），窗口不关；远程窗口只在用户断开时关
-// （悬浮球的「断开」、提示框里的取消），这时回这一页、不自动再连，等用户点「重新连接」。
+// 重试只在这一页：远程窗口出了连接类错误（掉线、工作站离线、被拒）不自己重试，把原因交过来、关掉自己
+// （utils/dd_kiosk.dart），这一页按退避重新问绑定再连——座位改绑了能跟上。远程窗口关了却没交原因的是用户自己断开的
+// （悬浮球的「断开」）；被人手动断开的（控制台、工作站上的人）也算。这两种回这一页、不自动再连，等用户点「重新连接」。
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_hbb/common.dart';
+import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_tab_page.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
+import 'package:flutter_hbb/utils/dd_kiosk.dart';
 import 'package:flutter_hbb/utils/http_service.dart' as http;
 import 'package:flutter_hbb/utils/multi_window_manager.dart';
 import 'package:window_manager/window_manager.dart';
@@ -23,12 +26,14 @@ class DdKioskPage extends StatefulWidget {
 }
 
 class _DdKioskPageState extends State<DdKioskPage> {
-  /// 连不上时的重试间隔：从短到长，连上过一次就回到最短
+  /// 连不上时的重试间隔：从短到长；一次连接撑过 [_stableSession] 才断的，从最短重新算
   static const _backoff = [5, 10, 20, 30, 60];
+  static const _stableSession = Duration(seconds: 60);
   int _failures = 0;
   String _text = '';
   int _countdown = 0;
   bool _sessionOpen = false;
+  DateTime? _openedAt;
   bool _busy = false;
   Timer? _tick;
 
@@ -47,20 +52,39 @@ class _DdKioskPageState extends State<DdKioskPage> {
     super.dispose();
   }
 
-  Future<void> _onTick() async {
-    final open = (await rustDeskWinManager.getAllSubWindowIds()).isNotEmpty;
-    if (_sessionOpen && !open) {
-      debugPrint('dd-kiosk: session window closed by the user');
-      _failures = 0;
-      setState(() {
-        _text = translate('Disconnected');
-        _countdown = 0;
-      });
-    }
+  /// 有没有连接开着：看主窗口的活动窗口名单。远程窗口关掉最后一个连接时只是藏起来留着复用（子窗口还在，不能拿它判断），
+  /// 但会通知主窗口把它移出名单；专业模式藏通用窗口不通知，不影响
+  bool _sessionWindowOpen() =>
+      rustDeskWinManager.getActiveWindows().any((w) => w != kMainWindowId);
+
+  void _onTick() {
+    if (!mounted) return;
+    final open = _sessionWindowOpen();
+    if (_sessionOpen && !open) _onSessionClosed();
+    if (!_sessionOpen && open) _openedAt = DateTime.now();
     _sessionOpen = open;
     if (!open && !_busy && _countdown > 0) {
       setState(() => _countdown -= 1);
       if (_countdown == 0) _attempt();
+    }
+  }
+
+  void _onSessionClosed() {
+    final end = ddKioskLastEnd.value;
+    ddKioskLastEnd.value = null;
+    final opened = _openedAt;
+    if (opened != null && DateTime.now().difference(opened) >= _stableSession) {
+      _failures = 0;
+    }
+    if (end == null || end.manual) {
+      debugPrint('dd-kiosk: session ended by a person: ${end?.reason}');
+      setState(() {
+        _text = end?.reason ?? translate('Disconnected');
+        _countdown = 0;
+      });
+    } else {
+      debugPrint('dd-kiosk: session ended: ${end.reason}');
+      _scheduleRetry(end.reason);
     }
   }
 
@@ -90,10 +114,22 @@ class _DdKioskPageState extends State<DdKioskPage> {
       if (resp.statusCode == 200 && (body['target_id'] ?? '') != '') {
         final id = body['target_id'] as String;
         debugPrint('dd-kiosk: bound to $id, connecting');
+        final openedBefore = _openedAt;
         if (mounted) connect(context, id);
-        _failures = 0;
-        // 远程窗口开出来要一会儿：期间不重复连
-        await Future.delayed(const Duration(seconds: 5));
+        // 远程窗口开出来要一会儿：期间不重复连。等够了一次都没开出来（开窗失败），照连不上处理；
+        // 开出来又因出错关了的，关窗时已经排了重试
+        await Future.delayed(const Duration(seconds: 10));
+        if (mounted && _openedAt == openedBefore && !_sessionWindowOpen()) {
+          // 窗口在两次查看之间开了又关时，它交来的原因还没被取走
+          final end = ddKioskLastEnd.value;
+          ddKioskLastEnd.value = null;
+          debugPrint('dd-kiosk: no session window after connecting: ${end?.reason}');
+          if (end != null && end.manual) {
+            setState(() => _text = end.reason);
+          } else {
+            _scheduleRetry(end?.reason ?? translate('Connection Error'));
+          }
+        }
       } else {
         final error = body['error'] as String? ?? '';
         debugPrint('dd-kiosk: seat target ${resp.statusCode}: $error');

@@ -63,17 +63,19 @@ pub(super) async fn login_with_ticket(
         "uuid": crate::ui_interface::get_uuid(),
     });
     let header = if seat { String::new() } else { format!("Authorization: Bearer {token}") };
-    // 服务端给的原因是给人看的整句话，放在提示正文（第四个参数是链接，放那儿只会多一个跳转按钮）
+    // 服务端给的原因是给人看的整句话，放在提示正文（第四个参数是链接，放那儿只会多一个跳转按钮）。
+    // 标题不用「Connection Error」：RustDesk 按那个标题加正文里的英文词判断要不要自动重连，中文原因会被当成可重连，
+    // 被拒之后一直重连、一直要票。kiosk 下由状态页接手（flutter/lib/utils/dd_kiosk.dart）
     let fail = |reason: &str| {
         let text = if reason.is_empty() { "Connection authorization failed" } else { reason };
-        interface.msgbox("error", "Connection Error", text, "");
+        interface.msgbox("error", "Connection authorization failed", text, "");
         Some(false)
     };
     // 服务端连不上（或它自己出错）时直接弹口令框，等粘贴 IT 签发的离线应急票（login_with_pasted_ticket）。不走 RustDesk 原有流程：
     // 它会先试存下的口令，受管被控端拒绝后就断开，用户见不到口令框。
-    // kiosk 进程（`--kiosk`）前没人能粘贴应急票：报错，由远程窗口自动重试（flutter/lib/utils/dd_kiosk.dart）
+    // kiosk 前没人能粘贴应急票：报错，由状态页过一会儿重新问绑定再连
     let no_server = || {
-        if std::env::args().any(|a| a == "--kiosk") {
+        if is_kiosk() {
             return fail("Cannot reach the server");
         }
         interface.msgbox("input-password", "Password Required", "", "");
@@ -94,6 +96,12 @@ pub(super) async fn login_with_ticket(
     match status {
         200 => {}
         // 目标不是受管工作站（例如连的是外部的普通 RustDesk），或没登录的这台不是座位：照原有流程用口令
+        // kiosk 例外：原有流程会弹口令框，kiosk 前没人能输入，报出服务端的原因
+        404 if is_kiosk() => {
+            let error = reply["error"].as_str().unwrap_or_default();
+            log::warn!("dd-managed: kiosk: {target_id} is not a managed workstation or this is not a seat: {error}");
+            return fail(error);
+        }
         404 => {
             log::info!("dd-managed: {target_id} is not a managed workstation, normal login");
             return None;
@@ -116,6 +124,11 @@ pub(super) async fn login_with_ticket(
     }
     send_ticket_login(lc, ticket, peer).await;
     Some(true)
+}
+
+/// 本进程是 kiosk 瘦客户机的界面进程（`--kiosk`，远程窗口和它同一个进程）：前面没人能输口令、粘贴应急票
+fn is_kiosk() -> bool {
+    std::env::args().any(|a| a == "--kiosk")
 }
 
 /// 在 `handle_login_from_ui` 开头调用：口令框里粘贴的是一张应急票（IT 用离线应急钥签的，服务端连不上时用）就凭它登录，

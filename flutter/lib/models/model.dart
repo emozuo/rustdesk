@@ -898,6 +898,7 @@ class FfiModel with ChangeNotifier {
     final title = evt['title'];
     final text = evt['text'];
     final link = evt['link'];
+    if (ddKioskTakeOverMsgBox(type, title, text, peerId)) return;
 
     // The peer-gone detector reconnects under `restarting-show` rather than an error title, so
     // it needs naming here too. By its own title, not the type: an explicitly restarted remote
@@ -977,7 +978,6 @@ class FfiModel with ChangeNotifier {
       if (!hasRetry) {
         hasRetry = shouldAutoRetryOnOffline(type, title, text);
       }
-      hasRetry = ddKioskRetry(type, hasRetry);
       showMsgBox(sessionId, type, title, text, link, hasRetry, dialogManager);
     }
   }
@@ -1103,7 +1103,6 @@ class FfiModel with ChangeNotifier {
         reconnect(dialogManager, sessionId, false);
       });
       _reconnects *= 2;
-      _reconnects = ddKioskReconnectDelay(_reconnects);
     } else {
       _reconnects = 1;
       _offlineReconnectStartTime = null;
