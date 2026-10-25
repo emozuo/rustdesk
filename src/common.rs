@@ -1513,7 +1513,8 @@ fn parse_simple_header(header: &str) -> Vec<HeaderEntry> {
 
 #[cfg(feature = "dd-managed")]
 fn dd_signed_header_entries(url: &str, header: &str, body: &str) -> Vec<HeaderEntry> {
-    crate::ddpro::device_sig::headers("POST", url, header, body.as_bytes())
+    let user_auth = header.to_ascii_lowercase().starts_with("authorization:");
+    crate::ddpro::device_sig::headers("POST", url, user_auth, body.as_bytes())
         .into_iter()
         .map(|(name, value)| HeaderEntry {
             name,
@@ -1747,7 +1748,12 @@ async fn post_request_(
     }
     req = req.header("Content-Type", "application/json");
     #[cfg(feature = "dd-managed")]
-    for (k, v) in crate::ddpro::device_sig::headers("POST", url, header, body.as_bytes()) {
+    for (k, v) in crate::ddpro::device_sig::headers(
+        "POST",
+        url,
+        header.to_ascii_lowercase().starts_with("authorization:"),
+        body.as_bytes(),
+    ) {
         req = req.header(k, v);
     }
     let to = std::time::Duration::from_secs(12);
@@ -1852,6 +1858,15 @@ async fn get_http_response_async(
     };
     for entry in parse_json_header_entries(header)? {
         http_client = http_client.header(entry.name, entry.value);
+    }
+    #[cfg(feature = "dd-managed")]
+    for (k, v) in crate::ddpro::device_sig::headers(
+        &normalized_method.to_ascii_uppercase(),
+        url,
+        header.to_ascii_lowercase().contains("\"authorization\""),
+        body.as_deref().unwrap_or_default().as_bytes(),
+    ) {
+        http_client = http_client.header(k, v);
     }
 
     if tls_type.is_some() && danger_accept_invalid_cert.is_some() {

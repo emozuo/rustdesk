@@ -1,5 +1,6 @@
 //! 受管模式的主控端（dreamdesk-gateway 仓库 docs/协议-连接票与设备签名.md 第二、四节）：收到被控端的挑战值后，
-//! 凭登录令牌向服务端要这次连接的连接票（`POST /api/dd/ticket`），放进登录请求的 `dd_ticket` 代替口令。
+//! 向服务端要这次连接的连接票（`POST /api/dd/ticket`；登录了凭令牌以用户身份，没登录凭设备签名以座位身份），
+//! 放进登录请求的 `dd_ticket` 代替口令。服务端连不上时可以粘贴离线应急票。
 //!
 //! 作为 `client` 的子模块编进去（要用 `LoginConfigHandler` 的私有方法），只在 `dd-managed` 下编译。
 
@@ -62,39 +63,43 @@ pub(super) async fn login_with_ticket(
         "uuid": crate::ui_interface::get_uuid(),
     });
     let header = if seat { String::new() } else { format!("Authorization: Bearer {token}") };
-    let fail = |detail: &str| {
-        interface.msgbox("error", "Connection Error", "Connection authorization failed", detail);
+    // 服务端给的原因是给人看的整句话，放在提示正文（第四个参数是链接，放那儿只会多一个跳转按钮）
+    let fail = |reason: &str| {
+        let text = if reason.is_empty() { "Connection authorization failed" } else { reason };
+        interface.msgbox("error", "Connection Error", text, "");
         Some(false)
     };
     // 服务端连不上（或它自己出错）时直接弹口令框，等粘贴 IT 签发的离线应急票（login_with_pasted_ticket）。不走 RustDesk 原有流程：
-    // 它会先试存下的口令，受管被控端拒绝后就断开，用户见不到口令框
+    // 它会先试存下的口令，受管被控端拒绝后就断开，用户见不到口令框。
+    // kiosk 进程（`--kiosk`）前没人能粘贴应急票：报错，由远程窗口自动重试（flutter/lib/utils/dd_kiosk.dart）
+    let no_server = || {
+        if std::env::args().any(|a| a == "--kiosk") {
+            return fail("Cannot reach the server");
+        }
+        interface.msgbox("input-password", "Password Required", "", "");
+        Some(true)
+    };
     let (status, text) = match crate::post_request_with_status(url, body.to_string(), &header).await {
         Ok(r) if r.0 < 500 => r,
         Ok((status, _)) => {
-            log::warn!("dd-managed: ticket request for {target_id}: server error {status}, asking for an emergency ticket");
-            interface.msgbox("input-password", "Password Required", "", "");
-            return Some(true);
+            log::warn!("dd-managed: ticket request for {target_id}: server error {status}");
+            return no_server();
         }
         Err(e) => {
-            log::warn!("dd-managed: ticket request for {target_id} failed: {e}, asking for an emergency ticket");
-            interface.msgbox("input-password", "Password Required", "", "");
-            return Some(true);
+            log::warn!("dd-managed: ticket request for {target_id} failed: {e}");
+            return no_server();
         }
     };
     let reply = serde_json::from_str::<serde_json::Value>(&text).unwrap_or_default();
     match status {
         200 => {}
-        // 目标不是受管工作站（例如连的是外部的普通 RustDesk）：照原有流程用口令
+        // 目标不是受管工作站（例如连的是外部的普通 RustDesk），或没登录的这台不是座位：照原有流程用口令
         404 => {
             log::info!("dd-managed: {target_id} is not a managed workstation, normal login");
             return None;
         }
-        // 不是确认过的座位、或没绑定这台：照原有流程（受管被控端会拒绝并说明只认授权连接）
-        _ if seat => {
-            let error = reply["error"].as_str().unwrap_or_default();
-            log::info!("dd-managed: no seat ticket for {target_id} (status {status}: {error}), normal login");
-            return None;
-        }
+        // 其余 4xx：用户没授权、或座位被拒（没确认、没绑这台、疑似克隆、签名不对……；不是座位的设备服务端回 404，见上）。
+        // 显示服务端给的原因、结束这次连接——退回原有流程会先试存下的口令，被受管被控端拒绝后断开，用户见不到原因
         _ => {
             let error = reply["error"].as_str().unwrap_or_default();
             log::warn!("dd-managed: ticket for {target_id} refused, status {status}: {error}");

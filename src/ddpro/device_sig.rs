@@ -7,12 +7,13 @@ const SIGNED_PATHS: &[&str] = &["/api/sysinfo", "/api/heartbeat", "/api/audit/co
 /// 座位（不登录的主控端，例如 kiosk 瘦客户机）要票、问绑定：不带登录令牌时签，服务端凭设备公钥认座位；带了令牌的是用户，不签
 const SEAT_PATHS: &[&str] = &["/api/dd/ticket", "/api/dd/seat/target"];
 
-/// 按请求算签名头（`header` 是调用方原有的那个请求头）；不该签、地址解析不了、本机还没有设备密钥时返回空
-pub fn headers(method: &str, url: &str, header: &str, body: &[u8]) -> Vec<(String, String)> {
+/// 按请求算签名头（`method` 大写，和服务端看到的一样；`user_auth`：调用方的请求头里带了登录令牌）；
+/// 不该签、地址解析不了、本机还没有设备密钥时返回空
+pub fn headers(method: &str, url: &str, user_auth: bool, body: &[u8]) -> Vec<(String, String)> {
     let Ok(u) = url::Url::parse(url) else {
         return Vec::new();
     };
-    let seat = SEAT_PATHS.contains(&u.path()) && !header.to_ascii_lowercase().starts_with("authorization:");
+    let seat = SEAT_PATHS.contains(&u.path()) && !user_auth;
     if !SIGNED_PATHS.contains(&u.path()) && !seat {
         return Vec::new();
     }

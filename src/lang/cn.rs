@@ -847,5 +847,10 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("This device only accepts connections authorized by the server", "这台设备只接受经服务器授权的连接"),
         ("Connection authorization rejected", "连接授权未通过"),
         ("Connection authorization failed", "没能取得连接授权"),
+        ("Connecting to the workstation...", "正在连接工作站…"),
+        ("This seat is not bound to a workstation yet", "这台终端还没有绑定工作站"),
+        ("Cannot reach the server", "连不上服务器"),
+        ("Retrying in {} s", "{} 秒后重试"),
+        ("Shut down", "关机"),
     ].iter().cloned().collect();
 }

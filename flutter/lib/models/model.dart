@@ -29,6 +29,7 @@ import 'package:flutter_hbb/models/terminal_model.dart';
 import 'package:flutter_hbb/common/shared_state.dart';
 import 'package:flutter_hbb/utils/multi_window_manager.dart';
 import 'package:flutter_hbb/utils/http_service.dart' as http;
+import 'package:flutter_hbb/utils/dd_kiosk.dart';
 import 'package:tuple/tuple.dart';
 import 'package:image/image.dart' as img2;
 import 'package:flutter_svg/flutter_svg.dart';
@@ -976,6 +977,7 @@ class FfiModel with ChangeNotifier {
       if (!hasRetry) {
         hasRetry = shouldAutoRetryOnOffline(type, title, text);
       }
+      hasRetry = ddKioskRetry(type, hasRetry);
       showMsgBox(sessionId, type, title, text, link, hasRetry, dialogManager);
     }
   }
@@ -1101,6 +1103,7 @@ class FfiModel with ChangeNotifier {
         reconnect(dialogManager, sessionId, false);
       });
       _reconnects *= 2;
+      _reconnects = ddKioskReconnectDelay(_reconnects);
     } else {
       _reconnects = 1;
       _offlineReconnectStartTime = null;
