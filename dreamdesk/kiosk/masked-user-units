@@ -1,0 +1,19 @@
+# kiosk 账户下屏蔽的用户级 systemd 单元（装包时在这个账户的 ~/.config/systemd/user 里各建一个指向 /dev/null 的链接）。
+# 这些单元挂在所有用户会话共用的启动目标上，没法只从 kiosk 会话里摘掉；它们会弹窗口盖住全屏画面，或白占资源。
+# 不存在的单元名照样屏蔽（链接无害），以后发现新的往这里加。一行一个，# 开头是注释
+# 首次登录向导、Ubuntu 升级后的「新功能介绍」（检查的标记带系统版本号，补标记文件下个版本就失效）
+gnome-initial-setup-first-login.service
+gnome-initial-setup-upgrade-login.service
+gnome-initial-setup-copy-worker.service
+# 崩溃报告、系统升级提示
+update-notifier-crash.path
+update-notifier-release.path
+# snap 的桌面集成（刷新提示）、固件更新提醒
+snap.snapd-desktop-integration.snapd-desktop-integration.service
+snap.firmware-updater.firmware-notifier.timer
+# 使用统计上报
+ubuntu-report.path
+ubuntu-insights-collect.timer
+ubuntu-insights-upload.timer
+# 文件索引
+tracker-miner-fs-3.service

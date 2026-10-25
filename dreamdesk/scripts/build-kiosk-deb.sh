@@ -17,8 +17,10 @@ SRC=dreamdesk/kiosk
 T=$(mktemp -d)
 trap 'rm -rf "$T"' EXIT
 D=$T/deb
+# xdg 是空目录：kiosk 会话的会话管理服务把它当系统配置目录，找不到任何自动启动项（见 kiosk.conf）
 mkdir -p "$D/DEBIAN" "$D/usr/share/wayland-sessions" "$D/usr/share/gnome-session/sessions" \
-    "$D/usr/lib/systemd/user/gnome-session@$PKG.target.d"
+    "$D/usr/lib/systemd/user/gnome-session@$PKG.target.d" "$D/usr/lib/systemd/user/gnome-session-manager@$PKG.service.d" \
+    "$D/usr/share/$PKG/dconf" "$D/usr/share/$PKG/xdg"
 # 去掉行尾回车：工作区从 Windows 拷过来时文件带 CRLF
 crlf() { sed -e 's/\r$//' "$1" >"$2"; }
 crlf "$SRC/wayland-sessions/$PKG.desktop" "$D/usr/share/wayland-sessions/$PKG.desktop"
@@ -26,6 +28,10 @@ crlf "$SRC/gnome-session/$PKG.session" "$D/usr/share/gnome-session/sessions/$PKG
 crlf "$SRC/systemd-user/$PKG.service" "$D/usr/lib/systemd/user/$PKG.service"
 crlf "$SRC/systemd-user/gnome-session@$PKG.target.d/session.conf" \
     "$D/usr/lib/systemd/user/gnome-session@$PKG.target.d/session.conf"
+crlf "$SRC/systemd-user/gnome-session-manager@$PKG.service.d/kiosk.conf" \
+    "$D/usr/lib/systemd/user/gnome-session-manager@$PKG.service.d/kiosk.conf"
+crlf "$SRC/dconf/00-$PKG" "$D/usr/share/$PKG/dconf/00-$PKG"
+crlf "$SRC/masked-user-units" "$D/usr/share/$PKG/masked-user-units"
 for s in postinst postrm; do
     crlf "$SRC/DEBIAN/$s" "$D/DEBIAN/$s"
     chmod 755 "$D/DEBIAN/$s"
@@ -37,7 +43,7 @@ Priority: optional
 Version: $DEB_VERSION
 Architecture: all
 Maintainer: $MAINTAINER
-Depends: $APP, gnome-kiosk, gdm3, accountsservice, openssh-server
+Depends: $APP, gnome-kiosk, gdm3, accountsservice, dconf-cli, openssh-server
 Description: DreamDesk kiosk: boots straight into a full-screen connection to the bound workstation.
 
 EOF

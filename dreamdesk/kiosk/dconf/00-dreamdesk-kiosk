@@ -1,0 +1,27 @@
+# kiosk 账户的 GNOME 设置（装包时编进这个账户自己的设置库，见 DEBIAN/postinst）
+
+# 切终端（Ctrl+Alt+F1–F12）切走就是一个文字登录提示或空终端；「恢复快捷键」（Super+Esc）会把专业画面截住的系统快捷键还给合成器
+[org/gnome/mutter/wayland/keybindings]
+switch-to-session-1=@as []
+switch-to-session-2=@as []
+switch-to-session-3=@as []
+switch-to-session-4=@as []
+switch-to-session-5=@as []
+switch-to-session-6=@as []
+switch-to-session-7=@as []
+switch-to-session-8=@as []
+switch-to-session-9=@as []
+switch-to-session-10=@as []
+switch-to-session-11=@as []
+switch-to-session-12=@as []
+restore-shortcuts=@as []
+
+# 没有口令的账户锁了屏就解不开
+[org/gnome/desktop/screensaver]
+lock-enabled=false
+
+[org/gnome/desktop/lockdown]
+disable-lock-screen=true
+
+[org/gnome/desktop/session]
+idle-delay=uint32 0

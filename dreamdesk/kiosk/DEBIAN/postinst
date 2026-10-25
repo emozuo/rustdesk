@@ -16,9 +16,19 @@ if [ "$1" = configure ]; then
     fi
     passwd --lock "$U" >/dev/null
     install -d -o "$U" -g "$U" "/home/$U/.config"
-    # 跳过 GNOME 首次登录向导
-    touch "/home/$U/.config/gnome-initial-setup-done"
-    chown "$U:$U" "/home/$U/.config/gnome-initial-setup-done"
+    # 屏蔽会弹窗口的用户级单元（首次登录向导、升级提示……，清单见该文件）；每次装 / 升级按清单重建
+    M="/home/$U/.config/systemd/user"
+    install -d -o "$U" -g "$U" "/home/$U/.config/systemd" "$M"
+    find "$M" -maxdepth 1 -type l -lname /dev/null -delete
+    grep -v -e '^#' -e '^[[:space:]]*$' /usr/share/dreamdesk-kiosk/masked-user-units | while read -r unit; do
+        ln -sf /dev/null "$M/$unit"
+    done
+    chown -h "$U:$U" "$M"/* 2>/dev/null || true
+
+    # 账户自己的设置库直接由本包的设置文件编出来（快捷键、锁屏，见 /usr/share/dreamdesk-kiosk/dconf）；每次装 / 升级都重编
+    install -d -o "$U" -g "$U" "/home/$U/.config/dconf"
+    dconf compile "/home/$U/.config/dconf/user" /usr/share/dreamdesk-kiosk/dconf
+    chown "$U:$U" "/home/$U/.config/dconf/user"
 
     install -d /var/lib/AccountsService/users
     printf '[User]\nSession=dreamdesk-kiosk\nSystemAccount=false\n' > "/var/lib/AccountsService/users/$U"
