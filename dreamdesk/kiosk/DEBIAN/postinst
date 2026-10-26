@@ -38,5 +38,12 @@ if [ "$1" = configure ]; then
 
     # 管理员用 dreamdesk-kiosk off 关掉过的，升级时不改回 kiosk
     [ -f "$STATE/disabled" ] || /usr/bin/dreamdesk-kiosk on --no-reboot >/dev/null
+
+    # 本包带的座位记号（/usr/share/dreamdesk-kiosk/seat）被控端服务只在启动时看：第一次装上记号时重启它，马上不登记、不监听、
+    # 上报为座位。只重启这一次——平常升级不重启，免得打断正在用的 USB 透传（它经这个服务做）
+    if [ ! -f "$STATE/seat-applied" ]; then
+        systemctl try-restart dreamdesk-pro.service 2>/dev/null || true
+        touch "$STATE/seat-applied"
+    fi
 fi
 exit 0

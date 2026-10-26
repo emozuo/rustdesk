@@ -12,6 +12,11 @@ case "$1" in
         rm -f "/var/lib/AccountsService/users/$U"
         ;;
 esac
+# 座位记号随包删掉了：重启被控端服务，恢复成普通设备（重新登记、不再上报座位）
+if [ "$1" = remove ] && [ -f "$STATE/seat-applied" ]; then
+    rm -f "$STATE/seat-applied"
+    systemctl try-restart dreamdesk-pro.service 2>/dev/null || true
+fi
 if [ "$1" = purge ]; then
     if [ -f "$OWNED" ] && id -u "$U" >/dev/null 2>&1; then
         # 账户的 kiosk 会话还在跑时删不掉：先结束它（彻底删除就是要撤掉 kiosk），等进程退完
