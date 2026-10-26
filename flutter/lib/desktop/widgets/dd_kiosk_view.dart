@@ -5,6 +5,7 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter_hbb/desktop/widgets/dd_icons.dart';
 
 const kDdKioskRed = Color(0xFFFF2A3D);
 const _bg = Color(0xFF05050A);
@@ -253,7 +254,7 @@ class _UserChip extends StatelessWidget {
                 const SizedBox(width: 8),
                 Text(name, style: _body(11)),
                 const SizedBox(width: 8),
-                Icon(open ? Icons.expand_less : Icons.expand_more, size: 14, color: _white(0.8)),
+                ddIcon(open ? DdIcon.chevronUp : DdIcon.chevronDown, size: 14, color: _white(0.8)),
               ]),
             ),
           ),
@@ -284,7 +285,7 @@ class _UserChip extends StatelessWidget {
                     color: kDdKioskRed.withOpacity(0.08),
                     padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
                     child: Row(children: [
-                      const Icon(Icons.logout, size: 14, color: kDdKioskRed),
+                      ddIcon(DdIcon.logOut, size: 14, color: kDdKioskRed),
                       const SizedBox(width: 8),
                       Text(signOut, style: _body(12, color: kDdKioskRed)),
                     ]),
@@ -410,7 +411,7 @@ class DdKioskCard extends StatelessWidget {
   final String cta;
   final VoidCallback onCta;
   final String secondaryLabel;
-  final IconData? secondaryIcon;
+  final DdIcon? secondaryIcon;
   final VoidCallback onSecondary;
 
   const DdKioskCard({
@@ -453,7 +454,7 @@ class DdKioskCard extends StatelessWidget {
                   padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
                   decoration: BoxDecoration(color: _white(0.02), border: Border.all(color: _white(0.12))),
                   child: Row(children: [
-                    Icon(Icons.desktop_windows_outlined, size: 18, color: _white(0.6)),
+                    ddIcon(DdIcon.monitor, size: 18, color: _white(0.6)),
                     const SizedBox(width: 12),
                     Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                       Text(t.label.toUpperCase(), style: _mono(9, color: _white(0.55), em: 0.22)),
@@ -600,7 +601,7 @@ class _CtaButtonState extends State<_CtaButton> {
                   AnimatedSlide(
                     duration: const Duration(milliseconds: 200),
                     offset: Offset(hover ? 0.4 : 0, 0),
-                    child: const Icon(Icons.arrow_forward, size: 18, color: Colors.white),
+                    child: ddIcon(DdIcon.arrowRight, size: 18, color: Colors.white),
                   ),
               ]),
             ),
@@ -613,7 +614,7 @@ class _CtaButtonState extends State<_CtaButton> {
 
 class DdKioskGhostButton extends StatelessWidget {
   final String label;
-  final IconData? icon;
+  final DdIcon? icon;
   final double? width;
   final double height;
   final double fontSize;
@@ -634,7 +635,7 @@ class DdKioskGhostButton extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 14),
           decoration: BoxDecoration(border: Border.all(color: _white(0.24))),
           child: Row(mainAxisSize: MainAxisSize.min, mainAxisAlignment: MainAxisAlignment.center, children: [
-            if (icon != null) ...[Icon(icon, size: fontSize + 1, color: _white(0.88)), const SizedBox(width: 8)],
+            if (icon != null) ...[ddIcon(icon!, size: fontSize + 1, color: _white(0.88)), const SizedBox(width: 8)],
             Text(label, style: _grotesk(fontSize, weight: 500, color: _white(0.88))),
           ]),
         ),
@@ -646,7 +647,7 @@ class DdKioskGhostButton extends StatelessWidget {
 /// 一行输入框：浅色底块里图标加输入，空着时显示字段名；聚焦时底块提亮、图标变红（不画下划线，用户定）
 class _Field extends StatefulWidget {
   final String label;
-  final IconData icon;
+  final DdIcon icon;
   final TextEditingController controller;
   final FocusNode focusNode;
   final bool password;
@@ -692,7 +693,7 @@ class _FieldState extends State<_Field> {
         padding: const EdgeInsets.symmetric(horizontal: 14),
         color: _white(focus ? 0.09 : 0.05),
         child: Row(children: [
-          Icon(widget.icon, size: 16, color: focus ? kDdKioskRed : _white(0.55)),
+          ddIcon(widget.icon, size: 16, color: focus ? kDdKioskRed : _white(0.55)),
           const SizedBox(width: 10),
           Expanded(
             child: TextField(
@@ -721,7 +722,7 @@ class _FieldState extends State<_Field> {
               cursor: SystemMouseCursors.click,
               child: GestureDetector(
                 onTap: () => setState(() => _reveal = !_reveal),
-                child: Icon(_reveal ? Icons.visibility_off_outlined : Icons.visibility_outlined,
+                child: ddIcon(_reveal ? DdIcon.eyeOff : DdIcon.eye,
                     size: 16, color: _reveal ? kDdKioskRed : _white(0.55)),
               ),
             ),
@@ -825,14 +826,14 @@ class DdKioskLoginState extends State<DdKioskLogin> {
               child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, mainAxisSize: MainAxisSize.min, children: [
                 _Field(
                     label: t.user,
-                    icon: Icons.person_outline,
+                    icon: DdIcon.user,
                     controller: _user,
                     focusNode: _userFocus,
                     onSubmitted: (_) => _passwordFocus.requestFocus()),
                 const SizedBox(height: 14),
                 _Field(
                     label: t.password,
-                    icon: Icons.lock_outline,
+                    icon: DdIcon.lock,
                     controller: _password,
                     focusNode: _passwordFocus,
                     password: true,

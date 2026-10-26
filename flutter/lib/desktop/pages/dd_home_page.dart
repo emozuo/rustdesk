@@ -10,6 +10,7 @@ import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common.dart' hide Dialog;
 import 'package:flutter_hbb/common/hbbs/hbbs.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_setting_page.dart';
@@ -41,7 +42,12 @@ class _Ws {
   final String name;
   final String os;
   final _WsState state;
-  const _Ws(this.id, this.name, this.os, this.state);
+  /// 设备详情「设备信息」卡片的内容（网关 /api/dd/workstations 的可选字段，没有的就空、不显示）
+  final Map<String, String> info;
+  const _Ws(this.id, this.name, this.os, this.state, {this.info = const {}});
+
+  /// 网关给的设备信息字段（10-27 请网关补）：主机名、当前登录的系统账号、IP、DreamDesk 版本、CPU、内存、我最近一次连上的时间
+  static const infoKeys = ['hostname', 'os_username', 'ip', 'version', 'cpu', 'memory', 'last_connected'];
 
   /// 能连：空闲的、或我自己在别处连着的（再连一次接过来）
   bool get connectable => state == _WsState.available || state == _WsState.mine;
@@ -148,7 +154,11 @@ class _DdHomePageState extends State<DdHomePage> {
             : (m['in_use_by_me'] == true
                 ? _WsState.mine
                 : (m['in_use'] == true ? _WsState.busy : _WsState.available));
-        items.add(_Ws(id, name, m['os'] as String? ?? '', state));
+        final info = <String, String>{
+          for (final k in _Ws.infoKeys)
+            if (m[k] is String && (m[k] as String).isNotEmpty) k: m[k] as String,
+        };
+        items.add(_Ws(id, name, m['os'] as String? ?? '', state, info: info));
       }
       setState(() {
         _items = items;
@@ -194,10 +204,18 @@ class _DdHomePageState extends State<DdHomePage> {
                   gFFI.userModel.userName.value;
                   return Row(children: [
                     SizedBox(width: 236, child: _sidebar()),
+                    // 内容区照 UU：上边、左边一条细线和左栏分开，左上角圆角（外层是线的颜色，里层错开 1 像素铺内容区的底）
                     Expanded(
-                      child: ClipRRect(
-                        borderRadius: const BorderRadius.only(topLeft: Radius.circular(10)),
-                        child: Container(color: _kPane, child: _right()),
+                      child: Container(
+                        padding: const EdgeInsets.only(left: 1, top: 1),
+                        decoration: const BoxDecoration(
+                          color: DdColors.paneLine,
+                          borderRadius: BorderRadius.only(topLeft: Radius.circular(10)),
+                        ),
+                        child: ClipRRect(
+                          borderRadius: const BorderRadius.only(topLeft: Radius.circular(9)),
+                          child: Container(color: _kPane, child: _right()),
+                        ),
                       ),
                     ),
                   ]);
@@ -246,7 +264,7 @@ class _DdHomePageState extends State<DdHomePage> {
                 ),
             _SideRow(
               indent: true,
-              icon: const _FourDots(size: 20),
+              icon: ddAllDevicesIcon(),
               label: translate('All devices'),
               selected: _selected == _kAll,
               onTap: () => setState(() => _selected = _kAll),
@@ -254,7 +272,8 @@ class _DdHomePageState extends State<DdHomePage> {
           ],
         ]),
       ),
-      Container(height: 1, color: _kLine, margin: const EdgeInsets.symmetric(horizontal: 12)),
+      // 「设置」上方一条横贯左栏的分隔线（照 UU）
+      Container(height: 1, color: DdColors.sideDivider),
       const SizedBox(height: 6),
       _SideRow(
         icon: ddIcon(DdIcon.settings),
@@ -328,12 +347,23 @@ class _DdHomePageState extends State<DdHomePage> {
             _DeviceTile(
               ws: w,
               stateText: _stateText(w.state),
+              stateColor: _stateColor(w.state),
               onTap: () => setState(() => _selected = w.id),
             ),
         ]),
       );
     }
-    return _page(title: _heading(translate('All devices')), child: body);
+    return _page(
+      // 标题后面写台数（照原型）
+      title: Row(crossAxisAlignment: CrossAxisAlignment.baseline, textBaseline: TextBaseline.alphabetic, children: [
+        _heading(translate('All devices')),
+        if (_loaded && _items.isNotEmpty) ...[
+          const SizedBox(width: 8),
+          Text(translate('{${_items.length}} devices'), style: const TextStyle(fontSize: 13, color: _kText2)),
+        ],
+      ]),
+      child: body,
+    );
   }
 
   Widget _detail(_Ws w) {
@@ -347,13 +377,41 @@ class _DdHomePageState extends State<DdHomePage> {
       title: Row(children: [
         _StatePill(text: _stateText(w.state), color: _stateColor(w.state)),
         const SizedBox(width: 12),
-        Flexible(child: _heading(w.name)),
-        const SizedBox(width: 4),
+        // 名字后面灰字写系统，「更多」按钮靠右、浅灰底（照原型）
+        Expanded(
+          child: Row(children: [
+            Flexible(child: _heading(w.name)),
+            if (_osShort(w.os).isNotEmpty) ...[
+              const SizedBox(width: 12),
+              Text(_osShort(w.os), style: const TextStyle(fontSize: 12, color: _kText2)),
+            ],
+          ]),
+        ),
         PopupMenuButton<int>(
           tooltip: '',
-          icon: ddIcon(DdIcon.moreVertical, size: 20),
+          offset: const Offset(0, 38),
+          color: Colors.white,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          // 按钮自己画（RustDesk 的主题不是 Material 3，IconButton 的 style 不生效）
+          child: Container(
+            width: 32,
+            height: 32,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(color: const Color(0x0F000000), borderRadius: BorderRadius.circular(6)),
+            child: ddIcon(DdIcon.moreVertical),
+          ),
           itemBuilder: (_) => [
-            for (final (i, a) in actions.indexed) PopupMenuItem<int>(value: i, enabled: on, child: Text(a.$2)),
+            for (final (i, a) in actions.indexed)
+              PopupMenuItem<int>(
+                value: i,
+                enabled: on,
+                height: 36,
+                child: Row(children: [
+                  ddIcon(a.$1, color: on ? _kText : _kText3),
+                  const SizedBox(width: 10),
+                  Text(a.$2, style: const TextStyle(fontSize: 14)),
+                ]),
+              ),
           ],
           onSelected: (i) => actions[i].$3(),
         ),
@@ -369,11 +427,13 @@ class _DdHomePageState extends State<DdHomePage> {
             ),
             clipBehavior: Clip.antiAlias,
             child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-              AspectRatio(
-                aspectRatio: 2.5,
+              SizedBox(
+                height: 220,
                 child: _EnterDesktop(
                   label: on ? translate('Enter desktop') : _stateText(w.state),
                   arrow: on,
+                  os: w.os,
+                  online: w.online,
                   onTap: on ? () => _connect(w) : null,
                 ),
               ),
@@ -388,6 +448,8 @@ class _DdHomePageState extends State<DdHomePage> {
               ),
             ]),
           ),
+          const SizedBox(height: 18),
+          _DeviceInfo(ws: w),
         ]),
       ),
     );
@@ -433,15 +495,14 @@ class _TitleBar extends StatelessWidget {
             onPanStart: (_) => startDragging(true),
             child: Row(children: [
               const SizedBox(width: 16),
-              loadIcon(20),
+              loadIcon(22),
               const SizedBox(width: 8),
-              const Text('DreamDesk', style: TextStyle(fontSize: 13, color: _kText)),
+              const Text('DreamDesk', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: _kText)),
             ]),
           ),
         ),
         const _AccountButton(),
         _MoreButton(onAbout: onAbout),
-        Container(width: 1, height: 16, color: _kLine, margin: const EdgeInsets.symmetric(horizontal: 6)),
         WindowActionPanel(
           isMainWindow: true,
           state: tabController.state,
@@ -508,8 +569,8 @@ class _MoreButton extends StatelessWidget {
   }
 }
 
-/// 标题栏的头像：点开是一张小卡片（照 UU）——没登录：灰头像、一句提示、整宽「立即登录」；
-/// 登录了：头像（名字首字）、显示名和账号、「退出登录」
+/// 标题栏的头像：点开是一张小卡片（照原型 HomeMenus）——没登录：灰头像、一句提示、整宽「立即登录」；
+/// 登录了：头像（名字首字）和显示名、账号横排，下面一行「退出登录」
 class _AccountButton extends StatelessWidget {
   const _AccountButton();
 
@@ -521,13 +582,72 @@ class _AccountButton extends StatelessWidget {
       color: Colors.white,
       elevation: 8,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-      icon: ddIcon(DdIcon.user, size: 20),
+      // 登录了是蓝底圆形、写名字首字（照原型），没登录是人像
+      icon: Obx(() {
+        final name = gFFI.userModel.displayNameOrUserName;
+        if (gFFI.userModel.userName.value.isEmpty || name.isEmpty) return ddIcon(DdIcon.user, size: 20);
+        return Container(
+          width: 24,
+          height: 24,
+          alignment: Alignment.center,
+          decoration: const BoxDecoration(color: _kBlue, shape: BoxShape.circle),
+          child: Text(name.characters.first.toUpperCase(), style: const TextStyle(fontSize: 12, color: Colors.white)),
+        );
+      }),
       itemBuilder: (ctx) => [
         _CardEntry(child: Obx(() {
           final account = gFFI.userModel.userName.value;
           final name = gFFI.userModel.displayNameOrUserName;
           final signedIn = account.isNotEmpty;
           final initial = name.isEmpty ? '' : name.characters.first.toUpperCase();
+          // 登录了（照原型）：左边头像、右边名字和账号，下面一行「退出登录」
+          if (signedIn) {
+            return SizedBox(
+              width: 260,
+              child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(18, 16, 18, 14),
+                  child: Row(children: [
+                    Container(
+                      width: 44,
+                      height: 44,
+                      alignment: Alignment.center,
+                      decoration: const BoxDecoration(color: _kBlue, shape: BoxShape.circle),
+                      child: Text(initial, style: const TextStyle(color: Colors.white, fontSize: 18)),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Text(name,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: _kText)),
+                        if (name != account) ...[
+                          const SizedBox(height: 2),
+                          Text(account,
+                              overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12, color: _kText2)),
+                        ],
+                      ]),
+                    ),
+                  ]),
+                ),
+                const Divider(height: 1, color: _kLine),
+                InkWell(
+                  onTap: () {
+                    Navigator.of(ctx).pop();
+                    gFFI.userModel.logOut();
+                  },
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    child: Row(children: [
+                      ddIcon(DdIcon.logOut),
+                      const SizedBox(width: 10),
+                      Text(translate('Sign out'), style: const TextStyle(fontSize: 14, color: _kText)),
+                    ]),
+                  ),
+                ),
+              ]),
+            );
+          }
           return SizedBox(
             width: 220,
             child: Padding(
@@ -538,47 +658,22 @@ class _AccountButton extends StatelessWidget {
                     width: 52,
                     height: 52,
                     alignment: Alignment.center,
-                    decoration: BoxDecoration(color: signedIn ? _kBlue : const Color(0xFFE4E6EA), shape: BoxShape.circle),
-                    child: signedIn
-                        ? Text(initial, style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.w600))
-                        : const Icon(Icons.person, size: 34, color: Color(0xFFB8BDC5)),
+                    decoration: const BoxDecoration(color: Color(0xFFE4E6EA), shape: BoxShape.circle),
+                    child: ddIcon(DdIcon.user, size: 30, color: const Color(0xFFB8BDC5)),
                   ),
                 ),
                 const SizedBox(height: 12),
-                if (signedIn) ...[
-                  Text(name, textAlign: TextAlign.center, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: _kText)),
-                  if (name != account) ...[
-                    const SizedBox(height: 2),
-                    Text(account, textAlign: TextAlign.center, style: const TextStyle(fontSize: 12, color: _kText2)),
-                  ],
-                ] else
-                  Text(translate('Sign in to see the workstations assigned to you.'),
-                      textAlign: TextAlign.center, style: const TextStyle(fontSize: 14, color: _kText, height: 1.5)),
+                Text(translate('Sign in to see the workstations assigned to you.'),
+                    textAlign: TextAlign.center, style: const TextStyle(fontSize: 14, color: _kText, height: 1.5)),
                 const SizedBox(height: 16),
-                signedIn
-                    ? SizedBox(
-                        height: 36,
-                        child: OutlinedButton(
-                          onPressed: () {
-                            Navigator.of(ctx).pop();
-                            gFFI.userModel.logOut();
-                          },
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: _kText,
-                            side: const BorderSide(color: _kLine),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
-                          ),
-                          child: Text(translate('Sign out')),
-                        ),
-                      )
-                    : _BlueButton(
-                        label: translate('Sign in now'),
-                        expand: true,
-                        onTap: () {
-                          Navigator.of(ctx).pop();
-                          _showLogin(context);
-                        },
-                      ),
+                _BlueButton(
+                  label: translate('Sign in now'),
+                  expand: true,
+                  onTap: () {
+                    Navigator.of(ctx).pop();
+                    _showLogin(context);
+                  },
+                ),
               ]),
             ),
           );
@@ -608,7 +703,7 @@ class _CardEntryState extends State<_CardEntry> {
   Widget build(BuildContext context) => widget.child;
 }
 
-/// 左栏的一行：选中时浅灰圆角底、最左边一条蓝竖线（照 UU）
+/// 左栏的一行（照 UU）：底色块从左栏边上 4 像素开始；选中时浅灰圆角底，蓝竖线在底色块里面、贴最左边（4×16、两头圆、上下居中）
 class _SideRow extends StatelessWidget {
   final Widget icon;
   final String label;
@@ -635,19 +730,12 @@ class _SideRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // 底色撑满这一行（上下各留 2 像素），蓝竖线在这一行里上下居中
+    // 底色撑满这一行（上下各留 2 像素）；竖线画在底色上面，所以放在 Stack 的后面
     return SizedBox(
       height: 40,
       child: Stack(fit: StackFit.expand, children: [
-        if (selected)
-          Positioned(
-            left: 4,
-            top: 10,
-            bottom: 10,
-            child: Container(width: 3, decoration: BoxDecoration(color: _kBlue, borderRadius: BorderRadius.circular(2))),
-          ),
         Padding(
-          padding: const EdgeInsets.fromLTRB(10, 2, 10, 2),
+          padding: const EdgeInsets.fromLTRB(4, 2, 4, 2),
           child: Material(
             color: selected ? _kSelected : Colors.transparent,
             borderRadius: BorderRadius.circular(6),
@@ -659,17 +747,21 @@ class _SideRow extends StatelessWidget {
                 if (onDoubleTap != null && _Clicks.isDouble('side:${clickId ?? label}')) onDoubleTap!();
               },
               child: Padding(
-                padding: EdgeInsets.only(left: indent ? 18 : 8, right: 8),
+                padding: EdgeInsets.only(left: indent ? 24 : 14, right: 14),
                 child: Row(children: [
                   if (indent)
                     SizedBox(
-                      width: 12,
+                      width: 18,
                       child: dot == null
                           ? null
-                          : Container(width: 5, height: 5, decoration: BoxDecoration(color: dot, shape: BoxShape.circle)),
+                          : Align(
+                              alignment: Alignment.centerLeft,
+                              child: Container(
+                                  width: 6, height: 6, decoration: BoxDecoration(color: dot, shape: BoxShape.circle)),
+                            ),
                     ),
                   icon,
-                  const SizedBox(width: 10),
+                  const SizedBox(width: 12),
                   Expanded(
                     child: Text(label,
                         overflow: TextOverflow.ellipsis,
@@ -681,6 +773,15 @@ class _SideRow extends StatelessWidget {
             ),
           ),
         ),
+        if (selected)
+          Positioned(
+            left: 4,
+            top: 12,
+            bottom: 12,
+            child: IgnorePointer(
+              child: Container(width: 4, decoration: BoxDecoration(color: _kBlue, borderRadius: BorderRadius.circular(2))),
+            ),
+          ),
       ]),
     );
   }
@@ -696,42 +797,21 @@ class _OsBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = os.toLowerCase();
-    final (IconData icon, Color color) = p.startsWith('linux')
-        ? (Icons.terminal, DdColors.osLinux)
+    // 系统标志用 Font Awesome 的品牌图标（dd_icons.dart）
+    final (DdIcon icon, Color color) = p.startsWith('linux')
+        ? (DdIcon.osLinux, DdColors.osLinux)
         : p.startsWith('mac')
-            ? (Icons.apple, DdColors.osMac)
-            : (Icons.window, DdColors.osWindows);
+            ? (DdIcon.osMac, DdColors.osMac)
+            : (DdIcon.osWindows, DdColors.osWindows);
     return Container(
       width: size,
       height: size,
+      alignment: Alignment.center,
       decoration: BoxDecoration(
         color: online ? color : DdColors.offline,
         borderRadius: BorderRadius.circular(size * 0.22),
       ),
-      child: Icon(icon, size: size * 0.66, color: Colors.white),
-    );
-  }
-}
-
-/// 「全部设备」的图标：田字排的四个圆点
-class _FourDots extends StatelessWidget {
-  final double size;
-  const _FourDots({required this.size});
-
-  @override
-  Widget build(BuildContext context) {
-    final d = size * 0.42;
-    Widget dot(Color c) => Container(width: d, height: d, decoration: BoxDecoration(color: c, shape: BoxShape.circle));
-    return SizedBox(
-      width: size,
-      height: size,
-      child: Column(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [dot(_kBlue), dot(const Color(0xFF7FA8FA))]),
-        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-          dot(const Color(0xFF7FA8FA)),
-          dot(_kBlue),
-        ]),
-      ]),
+      child: ddIcon(icon, size: size * 0.6, color: Colors.white),
     );
   }
 }
@@ -786,7 +866,9 @@ class _EnterDesktop extends StatefulWidget {
   final String label;
   final bool arrow;
   final VoidCallback? onTap;
-  const _EnterDesktop({required this.label, required this.arrow, this.onTap});
+  final String os;
+  final bool online;
+  const _EnterDesktop({required this.label, required this.arrow, required this.os, required this.online, this.onTap});
 
   @override
   State<_EnterDesktop> createState() => _EnterDesktopState();
@@ -804,16 +886,26 @@ class _EnterDesktopState extends State<_EnterDesktop> {
       child: GestureDetector(
         onTap: widget.onTap,
         child: Stack(fit: StackFit.expand, children: [
-          const CustomPaint(painter: _WallpaperPainter()),
-          Container(color: Colors.black.withOpacity(_hover && widget.onTap != null ? 0.28 : 0.12)),
+          CustomPaint(painter: _OsWallpaperPainter(os: widget.os, online: widget.online)),
+          Container(color: Colors.black.withOpacity(_hover && widget.onTap != null ? 0.12 : 0)),
+          // 能连时是白色胶囊按钮（照原型）；连不了时只写状态，不像按钮
           Center(
-            child: Row(mainAxisSize: MainAxisSize.min, children: [
-              Text(widget.label, style: const TextStyle(color: Colors.white, fontSize: 16, letterSpacing: 1)),
-              if (widget.arrow) ...[
-                const SizedBox(width: 12),
-                ddIcon(DdIcon.arrowRight, color: Colors.white, size: 20),
-              ],
-            ]),
+            child: widget.arrow
+                ? Container(
+                    height: 44,
+                    padding: const EdgeInsets.symmetric(horizontal: 22),
+                    decoration: BoxDecoration(
+                      color: const Color(0xEBFFFFFF),
+                      borderRadius: BorderRadius.circular(22),
+                      boxShadow: const [BoxShadow(color: Color(0x26000000), blurRadius: 16, offset: Offset(0, 4))],
+                    ),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      Text(widget.label, style: const TextStyle(color: _kText, fontSize: 15, fontWeight: FontWeight.w600)),
+                      const SizedBox(width: 8),
+                      ddIcon(DdIcon.arrowRight),
+                    ]),
+                  )
+                : Text(widget.label, style: const TextStyle(color: Colors.white, fontSize: 16, letterSpacing: 1)),
           ),
         ]),
       ),
@@ -821,43 +913,65 @@ class _EnterDesktopState extends State<_EnterDesktop> {
   }
 }
 
-class _WallpaperPainter extends CustomPainter {
-  const _WallpaperPainter();
+/// 设备卡片、详情大卡片的背景：按被控端系统画的主题背景（10-27 定）。自己画的近似配色——系统自带的壁纸图片有版权、不能打包；
+/// 也不取被控端的真实桌面壁纸：公司机器多是统一壁纸认不出来，取图还要上传、有隐私问题。离线一律灰。
+/// 数值照原型 dreamdesk/design/prototype/dd.css 的 dd-wall--*（CSS 的线性渐变角度、椭圆光斑的位置和半径都按画布的百分比）
+class _OsWallpaperPainter extends CustomPainter {
+  final String os;
+  final bool online;
+  const _OsWallpaperPainter({required this.os, required this.online});
+
+  /// CSS 的 linear-gradient 角度：0 度朝上、顺时针
+  static void _linear(Canvas canvas, Rect rect, double deg, List<Color> colors, List<double> stops) {
+    final r = deg * math.pi / 180;
+    final dx = math.sin(r), dy = -math.cos(r);
+    canvas.drawRect(
+      rect,
+      Paint()
+        ..shader = LinearGradient(begin: Alignment(-dx, -dy), end: Alignment(dx, dy), colors: colors, stops: stops)
+            .createShader(rect),
+    );
+  }
+
+  /// CSS 的 radial-gradient(rx% ry% at cx% cy%, color 0, transparent stop)：椭圆光斑，先画单位圆再按两个半径拉伸
+  static void _glow(Canvas canvas, Size s, double cx, double cy, double rx, double ry, Color color, double stop) {
+    canvas.save();
+    canvas.translate(s.width * cx, s.height * cy);
+    canvas.scale(s.width * rx, s.height * ry);
+    const unit = Rect.fromLTWH(-1, -1, 2, 2);
+    canvas.drawCircle(
+      Offset.zero,
+      1,
+      Paint()..shader = RadialGradient(colors: [color, color.withOpacity(0)], stops: [0, stop]).createShader(unit),
+    );
+    canvas.restore();
+  }
 
   @override
   void paint(Canvas canvas, Size size) {
     final rect = Offset.zero & size;
-    // 色块的圆比画布大，不裁会画到下面的白色名字栏、操作栏上
+    // 光斑比画布大，不裁会画到下面的白色名字栏、操作栏上
     canvas.clipRect(rect);
-    canvas.drawRect(
-      rect,
-      Paint()
-        ..shader = const LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [Color(0xFF6E8F7A), Color(0xFF3F7F86), Color(0xFF2B5F7C)],
-        ).createShader(rect),
-    );
-    // 几团柔和的色块，像航拍的水和滩
-    final blobs = [
-      (0.18, 0.30, 0.42, const Color(0x99C9D8B0)),
-      (0.55, 0.55, 0.38, const Color(0x8862A89A)),
-      (0.82, 0.22, 0.30, const Color(0x77A9C7C4)),
-      (0.35, 0.85, 0.34, const Color(0x664F8F7F)),
-    ];
-    for (final (x, y, r, c) in blobs) {
-      final center = Offset(size.width * x, size.height * y);
-      final radius = math.max(size.width, size.height) * r;
-      canvas.drawCircle(
-        center,
-        radius,
-        Paint()..shader = RadialGradient(colors: [c, c.withOpacity(0)]).createShader(Rect.fromCircle(center: center, radius: radius)),
-      );
+    if (!online) {
+      _linear(canvas, rect, 135, const [Color(0xFFC9CDD4), Color(0xFFB3B8C0)], const [0, 1]);
+      return;
+    }
+    final p = os.toLowerCase();
+    if (p.startsWith('linux')) {
+      _linear(canvas, rect, 150, const [Color(0xFF6B2A5A), Color(0xFF3A0F33), Color(0xFF22061E)], const [0, 0.6, 1]);
+      _glow(canvas, size, 0.72, 0.82, 0.60, 0.85, const Color(0xFFFF8A3D), 0.62);
+    } else if (p.startsWith('mac')) {
+      _linear(canvas, rect, 160, const [Color(0xFF24305E), Color(0xFF1A1F3D), Color(0xFF3B2450)], const [0, 0.55, 1]);
+      _glow(canvas, size, 0.30, 0.75, 0.60, 0.80, const Color(0xFF7A6CFF), 0.60);
+    } else {
+      _linear(canvas, rect, 160, const [Color(0xFF0D4BB0), Color(0xFF0A2F78), Color(0xFF071A45)], const [0, 0.55, 1]);
+      _glow(canvas, size, 0.42, 0.78, 0.70, 0.90, const Color(0xFF2F7BFF), 0.65);
+      _glow(canvas, size, 0.62, 0.62, 0.55, 0.75, const Color(0xFF8FD8FF), 0.60);
     }
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+  bool shouldRepaint(covariant _OsWallpaperPainter old) => old.os != os || old.online != online;
 }
 
 class _ActionCell extends StatelessWidget {
@@ -880,17 +994,97 @@ class _ActionCell extends StatelessWidget {
   }
 }
 
-/// 全部设备里的一张：上面缩略的「壁纸」，下面系统图标、名字和状态
-class _DeviceTile extends StatelessWidget {
+/// 系统的简称，写在设备卡片状态后面、详情页名字后面：网关给的是「类别 / 版本」（如 windows / Windows 11 Enterprise - 11 (26200)），
+/// 取版本、去掉「 - 」后面的版本号
+String _osShort(String os) => os.split(' / ').last.split(' - ').first.trim();
+
+/// 设备详情下面的「设备信息」卡片（照原型 HomeDetail）：两列「名称 值」，只列网关给了值的项；IP 后面可以复制
+class _DeviceInfo extends StatelessWidget {
   final _Ws ws;
-  final String stateText;
-  final VoidCallback onTap;
-  const _DeviceTile({required this.ws, required this.stateText, required this.onTap});
+  const _DeviceInfo({required this.ws});
+
+  /// 网关给的时间（RFC3339）按本机时间显示成「年-月-日 时:分」
+  static String _time(String s) {
+    final t = DateTime.tryParse(s)?.toLocal();
+    if (t == null) return s;
+    String two(int n) => n.toString().padLeft(2, '0');
+    return '${t.year}-${two(t.month)}-${two(t.day)} ${two(t.hour)}:${two(t.minute)}';
+  }
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
+    final i = ws.info;
+    final rows = <(String, String, bool)>[
+      if (i['ip'] != null) (translate('IP address'), i['ip']!, true),
+      // 网关给的系统是「类别 / 版本」（如 windows / Windows 11 Enterprise - 11 (26200)），只显示后面的版本
+      if (ws.os.isNotEmpty) (translate('Operating system'), ws.os.split(' / ').last, false),
+      if (i['hostname'] != null) (translate('Hostname'), i['hostname']!, false),
+      if (i['os_username'] != null) (translate('Signed-in user'), i['os_username']!, false),
+      if (i['cpu'] != null) ('CPU', i['cpu']!, false),
+      if (i['memory'] != null) (translate('Memory'), i['memory']!, false),
+      if (i['version'] != null) (translate('Version'), 'DreamDesk ${i['version']}', false),
+      if (i['last_connected'] != null) (translate('Last connected'), _time(i['last_connected']!), false),
+    ];
+    if (rows.isEmpty) return const SizedBox.shrink();
+    Widget cell((String, String, bool) r) => Row(children: [
+          SizedBox(width: 72, child: Text(r.$1, style: const TextStyle(fontSize: 13, color: _kText2))),
+          const SizedBox(width: 12),
+          Flexible(child: Text(r.$2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13, color: _kText))),
+          if (r.$3)
+            TextButton(
+              style: TextButton.styleFrom(
+                  minimumSize: const Size(0, 20), padding: const EdgeInsets.symmetric(horizontal: 4), foregroundColor: _kBlue),
+              onPressed: () {
+                Clipboard.setData(ClipboardData(text: r.$2));
+                showToast(translate('Copied'));
+              },
+              child: Text(translate('Copy'), style: const TextStyle(fontSize: 12)),
+            ),
+        ]);
+    return Container(
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 18),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8), boxShadow: DdShadow.card),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Text(translate('Device information'), style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: _kText)),
+        const SizedBox(height: 12),
+        // 两列，按行往下排；窗口窄（默认 800 宽）时两列放不下 IP，改成一列
+        LayoutBuilder(builder: (context, c) {
+          final cols = c.maxWidth >= 560 ? 2 : 1;
+          return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            for (var k = 0; k < rows.length; k += cols)
+              Padding(
+                padding: EdgeInsets.only(top: k == 0 ? 0 : 12),
+                child: Row(children: [
+                  Expanded(child: cell(rows[k])),
+                  if (cols == 2) ...[
+                    const SizedBox(width: 32),
+                    Expanded(child: k + 1 < rows.length ? cell(rows[k + 1]) : const SizedBox.shrink()),
+                  ],
+                ]),
+              ),
+          ]);
+        }),
+      ]),
+    );
+  }
+}
+
+/// 全部设备里的一张：上面按系统画的主题背景，下面系统图标、名字和状态
+class _DeviceTile extends StatelessWidget {
+  final _Ws ws;
+  final String stateText;
+  final Color stateColor;
+  final VoidCallback onTap;
+  const _DeviceTile({required this.ws, required this.stateText, required this.stateColor, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    // 状态行照原型：彩色圆点 + 状态；能连的后面再写系统（「在线 · Windows 11」）
+    final os = _osShort(ws.os);
+    final state = ws.connectable && os.isNotEmpty ? '$stateText · $os' : stateText;
+    return Container(
       width: 220,
+      decoration: BoxDecoration(borderRadius: BorderRadius.circular(8), boxShadow: DdShadow.card),
       child: Material(
         color: Colors.white,
         borderRadius: BorderRadius.circular(8),
@@ -901,20 +1095,27 @@ class _DeviceTile extends StatelessWidget {
           child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
             AspectRatio(
               aspectRatio: 2.2,
-              child: Opacity(opacity: ws.online ? 1 : 0.45, child: const CustomPaint(painter: _WallpaperPainter())),
+              child: CustomPaint(painter: _OsWallpaperPainter(os: ws.os, online: ws.online)),
             ),
             Padding(
               padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
               child: Row(children: [
-                _OsBadge(os: ws.os, online: ws.online, size: 22),
-                const SizedBox(width: 10),
+                _OsBadge(os: ws.os, online: ws.online, size: 20),
+                const SizedBox(width: 12),
                 Expanded(
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     Text(ws.name,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: _kText)),
+                        style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: ws.online ? _kText : _kText3)),
                     const SizedBox(height: 2),
-                    Text(stateText, style: TextStyle(fontSize: 12, color: ws.online ? _kText2 : _kText3)),
+                    Row(children: [
+                      Container(width: 6, height: 6, decoration: BoxDecoration(color: stateColor, shape: BoxShape.circle)),
+                      const SizedBox(width: 5),
+                      Flexible(
+                        child: Text(state,
+                            overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12, color: _kText2)),
+                      ),
+                    ]),
                   ]),
                 ),
               ]),
@@ -971,7 +1172,7 @@ class _Illustration extends StatelessWidget {
               Expanded(
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(4),
-                  child: const CustomPaint(painter: _WallpaperPainter()),
+                  child: const CustomPaint(painter: _OsWallpaperPainter(os: 'windows', online: true)),
                 ),
               ),
               const SizedBox(height: 6),
@@ -990,7 +1191,7 @@ class _Illustration extends StatelessWidget {
         padding: const EdgeInsets.all(6),
         child: Column(children: [
           bar(30, _kText),
-          SizedBox(height: 40, child: ClipRRect(borderRadius: BorderRadius.circular(3), child: const CustomPaint(painter: _WallpaperPainter(), size: Size.infinite))),
+          SizedBox(height: 40, child: ClipRRect(borderRadius: BorderRadius.circular(3), child: const CustomPaint(painter: _OsWallpaperPainter(os: 'windows', online: true), size: Size.infinite))),
           const SizedBox(height: 6),
           Wrap(spacing: 5, runSpacing: 5, children: [
             for (final c in [_kBlue, const Color(0xFFF08A24), _kGreen, const Color(0xFF7FA8FA), _kText3, _kBlue])
@@ -1100,11 +1301,14 @@ class _LoginDialogState extends State<_LoginDialog> {
     });
   }
 
-  InputDecoration _decoration(String hint, {Widget? suffix}) => InputDecoration(
+  // 输入框左边一个灰色小图标（照原型：用户名是人像、口令是锁）
+  InputDecoration _decoration(String hint, DdIcon icon, {Widget? suffix}) => InputDecoration(
         hintText: hint,
         hintStyle: const TextStyle(color: _kText3, fontSize: 14),
         isDense: true,
         filled: false,
+        prefixIcon: Padding(padding: const EdgeInsets.only(right: 10), child: ddIcon(icon, color: _kText3)),
+        prefixIconConstraints: const BoxConstraints(minWidth: 0, minHeight: 0),
         contentPadding: const EdgeInsets.symmetric(vertical: 12),
         enabledBorder: const UnderlineInputBorder(borderSide: BorderSide(color: _kLine)),
         focusedBorder: const UnderlineInputBorder(borderSide: BorderSide(color: _kBlue)),
@@ -1156,7 +1360,7 @@ class _LoginDialogState extends State<_LoginDialog> {
                   controller: _user,
                   autofocus: _user.text.isEmpty,
                   style: const TextStyle(fontSize: 14, color: _kText),
-                  decoration: _decoration(translate('Username')),
+                  decoration: _decoration(translate('Username'), DdIcon.user),
                   onSubmitted: (_) => _submit(),
                 ),
                 const SizedBox(height: 6),
@@ -1167,6 +1371,7 @@ class _LoginDialogState extends State<_LoginDialog> {
                   style: const TextStyle(fontSize: 14, color: _kText),
                   decoration: _decoration(
                     translate('Password'),
+                    DdIcon.lock,
                     suffix: IconButton(
                       icon: ddIcon(_reveal ? DdIcon.eye : DdIcon.eyeOff, color: _kText3),
                       onPressed: () => setState(() => _reveal = !_reveal),

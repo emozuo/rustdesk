@@ -3,6 +3,7 @@
 // 窗口按钮。画面上的悬浮工具栏不要了，操作都收进控制中心（菜单项调用 RustDesk 原工具栏背后的同一个功能，挑的时候按它的动作编号）。
 // 只在受管版用（远程窗口的标签组件 DesktopTab 收 `customBar` 时整条换成这个）；窗口关闭、最大化、记窗口位置等照旧由 DesktopTab 管。
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_hbb/common.dart';
@@ -12,7 +13,6 @@ import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/desktop/pages/remote_page.dart';
 import 'package:flutter_hbb/desktop/widgets/dd_icons.dart';
 import 'package:flutter_hbb/desktop/widgets/dd_theme.dart';
-import 'package:flutter_hbb/desktop/widgets/remote_toolbar.dart';
 import 'package:flutter_hbb/desktop/widgets/tabbar_widget.dart';
 import 'package:flutter_hbb/models/chat_model.dart';
 import 'package:flutter_hbb/models/model.dart';
@@ -22,8 +22,8 @@ import 'package:flutter_hbb/utils/dd_kiosk.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:get/get.dart';
 
-// 和主窗口首页同一套 UU 的浅色
-const _kChrome = DdColors.chrome;
+// 照 UU 的远程窗口：标题栏比主窗口深一档（10-27，原型 dreamdesk/design/prototype/Remote.html）
+const _kChrome = DdColors.chromeRemote;
 const _kTabSelected = DdColors.surface;
 const _kHover = DdColors.hover;
 const _kText = DdColors.ink;
@@ -78,18 +78,22 @@ class _DdRemoteTitleBarState extends State<DdRemoteTitleBar> {
                   loadIcon(18),
                   const SizedBox(width: 8),
                   _PeerName(id: id),
-                  Container(width: 1, height: 16, color: _kLine, margin: const EdgeInsets.symmetric(horizontal: 12)),
-                  Flexible(child: _DisplayTabs(id: id, ffi: ffi)),
+                  Container(width: 1, height: 16, color: _kLine, margin: const EdgeInsets.only(left: 12, right: 8)),
+                  // 照 UU：信号格和连接时长紧跟在屏幕标签后面，右边只留麦克风、控制中心、窗口按钮。
+                  // 标签多到放不下时它占大头、可以横着滚，剩下的空白留给拖动窗口
+                  Flexible(flex: 20, child: _DisplayTabs(id: id, ffi: ffi)),
+                  const SizedBox(width: 12),
+                  ddIcon(DdIcon.signal, size: 16, color: _kGreen),
+                  const SizedBox(width: 6),
+                  _Elapsed(key: ValueKey(id), ffi: ffi),
+                  const Spacer(),
                 ]),
               ),
             ),
-            ddIcon(DdIcon.signal, size: 16, color: _kGreen),
-            const SizedBox(width: 6),
-            _Elapsed(key: ValueKey(id), ffi: ffi),
             _MicButton(ffi: ffi),
             const SizedBox(width: 4),
             _ControlCenter(id: id, ffi: ffi),
-            Container(width: 1, height: 16, color: _kLine, margin: const EdgeInsets.only(left: 8, right: 4)),
+            const SizedBox(width: 8),
             WindowActionPanel(
               isMainWindow: false,
               state: widget.tabController.state,
@@ -145,14 +149,28 @@ class _ElapsedState extends State<_Elapsed> {
       text = '${two(s ~/ 3600)}:${two(s % 3600 ~/ 60)}:${two(s % 60)}';
     }
     return SizedBox(
-      width: 60,
+      width: 64,
       child: Text(text,
-          style: const TextStyle(fontSize: 12, color: _kText2, fontFeatures: [FontFeature.tabularFigures()])),
+          style: const TextStyle(fontSize: 13, color: _kText2, fontFeatures: [FontFeature.tabularFigures()])),
     );
   }
 }
 
-/// 机器名（别名优先，和 RustDesk 标签上的一样）+ 连接安全标识（加密 / 中继的小图标，悬停看说明）
+/// 左上角的名字（照原型只写名字）：受管版用户不认设备号，有备注名用备注名，否则用主机名（RustDesk 的标签是「设备号@主机名」），
+/// 都没有（还没连上过）才用设备号
+String _peerTitle(String id) {
+  final alias = bind.mainGetPeerOptionSync(id: id, key: 'alias');
+  if (alias.isNotEmpty) return alias;
+  try {
+    final hostname = jsonDecode(bind.mainGetPeerSync(id: id))['info']['hostname'];
+    if (hostname is String && hostname.isNotEmpty) return hostname;
+  } catch (e) {
+    debugPrint('dd: peer hostname: $e');
+  }
+  return id;
+}
+
+/// 机器名（[_peerTitle]）+ 连接安全标识（加密 / 中继的小图标，悬停看说明）
 class _PeerName extends StatelessWidget {
   final String id;
   const _PeerName({required this.id});
@@ -160,10 +178,10 @@ class _PeerName extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Obx(() {
-      final name = DesktopTab.tablabelGetter(id).value;
+      final name = _peerTitle(id);
       final type = ConnectionTypeState.find(id);
       return Row(mainAxisSize: MainAxisSize.min, children: [
-        Text(name.toUpperCase(), style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _kText)),
+        Text(name.toUpperCase(), style: const TextStyle(fontSize: 13, color: _kText)),
         if (type.isValid()) ...[
           const SizedBox(width: 6),
           Tooltip(
@@ -273,24 +291,66 @@ class _DisplayTabState extends State<_DisplayTab> {
         onPanCancel: canDrag ? () => setState(() => _drag = Offset.zero) : null,
         child: Transform.translate(
           offset: _drag,
-          child: Container(
-          height: 34,
-          margin: const EdgeInsets.only(top: 6, right: 2),
-          padding: const EdgeInsets.symmetric(horizontal: 14),
-          decoration: BoxDecoration(
-            color: bg,
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(8)),
-          ),
-          child: Row(mainAxisSize: MainAxisSize.min, children: [
-            ddIcon(DdIcon.monitor, size: 15, color: _kText),
-            const SizedBox(width: 6),
-            Text(widget.label, style: const TextStyle(fontSize: 13, color: _kText)),
-          ]),
+          // 照 UU（10-27 截图）：固定宽、内容靠左；选中的白底，上两角圆、下两角向外弯，和下面的画面连成一片（Chrome 的标签形状）
+          child: CustomPaint(
+            painter: _TabShape(color: bg, flare: widget.selected),
+            child: Container(
+              width: 230,
+              height: 33,
+              margin: const EdgeInsets.only(top: 7),
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              child: Row(children: [
+                ddIcon(DdIcon.monitor, size: 16, color: _kText),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(widget.label,
+                      overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13, color: _kText)),
+                ),
+              ]),
+            ),
           ),
         ),
       ),
     );
   }
+}
+
+/// 屏幕标签的底：上两角圆角 8；[flare] 时（选中的那个）下两角再向外弯出 8 像素，画到标签外面、和标题栏下沿接上。
+/// 标签的子部件带着 7 像素的上边距，形状从那里画起
+class _TabShape extends CustomPainter {
+  final Color color;
+  final bool flare;
+  const _TabShape({required this.color, required this.flare});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (color.alpha == 0) return;
+    const r = 8.0;
+    const top = 7.0;
+    final w = size.width, h = size.height;
+    final path = Path();
+    if (flare) {
+      path.moveTo(-r, h);
+      path.arcToPoint(Offset(0, h - r), radius: const Radius.circular(r), clockwise: false);
+    } else {
+      path.moveTo(0, h);
+    }
+    path.lineTo(0, top + r);
+    path.arcToPoint(Offset(r, top), radius: const Radius.circular(r));
+    path.lineTo(w - r, top);
+    path.arcToPoint(Offset(w, top + r), radius: const Radius.circular(r));
+    if (flare) {
+      path.lineTo(w, h - r);
+      path.arcToPoint(Offset(w + r, h), radius: const Radius.circular(r), clockwise: false);
+    } else {
+      path.lineTo(w, h);
+    }
+    path.close();
+    canvas.drawPath(path, Paint()..color = color);
+  }
+
+  @override
+  bool shouldRepaint(covariant _TabShape old) => old.color != color || old.flare != flare;
 }
 
 /// 麦克风：开了就用 RustDesk 的语音通话把本机话筒送过去（专业模式悬浮球的「麦克风」也是它）
@@ -369,23 +429,26 @@ class _ControlCenterState extends State<_ControlCenter> {
 
   @override
   Widget build(BuildContext context) {
-    return MenuAnchor(
-      controller: _controller,
-      alignmentOffset: const Offset(0, 6),
-      style: ddMenuStyle,
-      menuChildren: _children,
-      builder: (context, controller, _) => _BarButton(
-        tooltip: '',
-        onTap: () {
-          if (controller.isOpen) return controller.close();
-          setState(() => _children = ddControlMenu(context, widget.id, widget.ffi));
-          controller.open();
-        },
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          ddIcon(DdIcon.controlCenter, size: 17),
-          const SizedBox(width: 6),
-          Text(translate('Control center'), style: const TextStyle(fontSize: 13, color: _kText)),
-        ]),
+    return ddMenuTheme(
+      context,
+      child: MenuAnchor(
+        controller: _controller,
+        alignmentOffset: const Offset(0, 6),
+        style: ddMenuStyle,
+        menuChildren: _children,
+        builder: (context, controller, _) => _BarButton(
+          tooltip: '',
+          onTap: () {
+            if (controller.isOpen) return controller.close();
+            setState(() => _children = ddControlMenu(context, widget.id, widget.ffi));
+            controller.open();
+          },
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            ddIcon(DdIcon.controlCenter, size: 20),
+            const SizedBox(width: 6),
+            Text(translate('Control center'), style: const TextStyle(fontSize: 13, color: _kText)),
+          ]),
+        ),
       ),
     );
   }
@@ -398,120 +461,140 @@ List<Widget> ddControlMenu(BuildContext context, String id, FFI ffi, {bool fulls
     final count = pi.displays.length;
     final current = _currentDisplay(id, count);
     final controls = toolbarControls(context, id, ffi);
-    Widget control(String actionId) {
+    Widget control(String actionId, DdIcon icon) {
       final m = controls.firstWhereOrNull((m) => m.actionId == actionId);
-      return m == null ? const SizedBox.shrink() : MenuButton(onPressed: m.onPressed, ffi: ffi, child: m.child);
+      return m == null ? const SizedBox.shrink() : _act(ffi, icon: icon, onPressed: m.onPressed, child: m.child);
     }
 
-    Widget toggles(Future<List<TToggleMenu>> future, List<String> actionIds) => FutureBuilder<List<TToggleMenu>>(
+    // [divider]：这一组前面的分隔线，组里一项都没有时不画（免得剩一条孤零零的线）
+    Widget toggles(Future<List<TToggleMenu>> future, List<String> actionIds, {bool divider = false}) =>
+        FutureBuilder<List<TToggleMenu>>(
           future: future,
-          builder: (_, snap) => Column(mainAxisSize: MainAxisSize.min, children: [
-            for (final a in actionIds)
-              if (snap.data?.firstWhereOrNull((m) => m.actionId == a) case final m?)
-                CkbMenuButton(value: m.value, onChanged: m.onChanged, ffi: ffi, child: m.child),
-          ]),
+          builder: (_, snap) {
+            final items = [
+              for (final a in actionIds)
+                if (snap.data?.firstWhereOrNull((m) => m.actionId == a) case final m?)
+                  // 剪贴板照原型写成正向的「允许同步剪贴板」：选中 = RustDesk 的「禁用剪贴板」没开，点了调同一个回调
+                  if (a == kShortcutActionToggleDisableClipboard)
+                    _pick(ffi,
+                        on: !m.value,
+                        onPressed: m.onChanged == null ? null : () => m.onChanged!(!m.value),
+                        child: Text(translate('Enable clipboard')))
+                  else
+                    _pick(ffi, on: m.value, onPressed: m.onChanged == null ? null : () => m.onChanged!(!m.value), child: m.child),
+            ];
+            return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              if (divider && items.isNotEmpty) const Divider(height: 9),
+              ...items,
+            ]);
+          },
         );
-    Widget radios(Future<List<TRadioMenu<String>>> future) => FutureBuilder<List<TRadioMenu<String>>>(
+    // [head]：这一组的小标题（照原型「画质」「编解码」），组里一项都没有时不写
+    Widget radios(Future<List<TRadioMenu<String>>> future, {String? head, bool divider = false}) =>
+        FutureBuilder<List<TRadioMenu<String>>>(
           future: future,
-          builder: (_, snap) => Column(mainAxisSize: MainAxisSize.min, children: [
-            for (final m in snap.data ?? const <TRadioMenu<String>>[])
-              RdoMenuButton<String>(
-                  value: m.value, groupValue: m.groupValue, onChanged: m.onChanged, ffi: ffi, child: m.child),
-          ]),
+          builder: (_, snap) {
+            final list = snap.data ?? const <TRadioMenu<String>>[];
+            return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              if (list.isNotEmpty) ...[
+                if (divider) const Divider(height: 9),
+                if (head != null) _head(head),
+              ],
+              for (final m in list)
+                _pick(ffi,
+                    on: m.value == m.groupValue,
+                    onPressed: m.onChanged == null ? null : () => m.onChanged!(m.value),
+                    child: m.child),
+            ]);
+          },
         );
     Widget sub(DdIcon icon, String label, List<Widget> children) => SubmenuButton(
           menuStyle: ddMenuStyle,
-          leadingIcon: ddIcon(icon, size: 16),
-          menuChildren: children,
+          leadingIcon: ddIcon(icon),
+          menuChildren: [_kMenuMinWidth, ...children],
           child: Text(label),
         );
     Widget item(DdIcon icon, String label, VoidCallback? onPressed, {Color? color}) => MenuItemButton(
-          leadingIcon: ddIcon(icon, size: 16, color: color ?? _kText),
+          leadingIcon: ddIcon(icon, color: color ?? _kText),
           onPressed: onPressed,
           child: Text(label, style: TextStyle(color: color)),
         );
 
     return [
-      sub(DdIcon.monitor, current < 0 ? translate('Monitor') : '${translate('Screen {${current + 1}}')} (${id.toUpperCase()})', [
+      _kMenuMinWidth,
+      sub(DdIcon.monitor, current < 0 ? translate('Monitor') : translate('Screen {${current + 1}}'), [
         for (var i = 0; i < count; i++)
-          RdoMenuButton<int>(
-            value: i,
-            groupValue: current,
-            ffi: ffi,
-            onChanged: (_) => openMonitorInTheSameTab(i, ffi, pi),
-            child: Text('${translate('Screen {${i + 1}}')}  '
-                '${pi.displays[i].width}×${pi.displays[i].height}'),
+          _pick(ffi,
+            on: i == current,
+            onPressed: () => openMonitorInTheSameTab(i, ffi, pi),
+            extra: Text('${pi.displays[i].width}×${pi.displays[i].height}',
+                style: const TextStyle(fontSize: 12, color: _kText2)),
+            child: Text(translate('Screen {${i + 1}}')),
           ),
       ]),
       item(DdIcon.arrowLeftRight, translate('Switch to next screen'),
           count > 1 ? () => openMonitorInTheSameTab((current + 1) % count, ffi, pi) : null),
       const Divider(height: 9),
       sub(DdIcon.eye, translate('Image Quality'), [
-        radios(toolbarImageQuality(context, id, ffi)),
-        const Divider(height: 9),
-        radios(toolbarCodec(context, id, ffi)),
-        toggles(toolbarDisplayToggle(context, id, ffi), [kShortcutActionToggleTrueColor]),
+        radios(toolbarImageQuality(context, id, ffi), head: translate('Image Quality')),
+        radios(toolbarCodec(context, id, ffi), head: translate('Codec'), divider: true),
+        toggles(toolbarDisplayToggle(context, id, ffi), [kShortcutActionToggleTrueColor], divider: true),
       ]),
-      sub(DdIcon.monitor, translate('Window'), [radios(toolbarViewStyle(context, id, ffi))]),
-      sub(DdIcon.mic, translate('Sound'), [
+      sub(DdIcon.panelTop, translate('Window'), [radios(toolbarViewStyle(context, id, ffi))]),
+      sub(DdIcon.volume, translate('Sound'), [
         toggles(toolbarDisplayToggle(context, id, ffi), [kShortcutActionToggleMute]),
       ]),
-      sub(DdIcon.info, translate('Security'), [
-        control(kShortcutActionInsertLock),
-        control(kShortcutActionToggleBlockInput),
-        toggles(toolbarDisplayToggle(context, id, ffi), [kShortcutActionToggleLockAfterSessionEnd]),
+      sub(DdIcon.lock, translate('Security'), [
+        control(kShortcutActionInsertLock, DdIcon.lock),
+        control(kShortcutActionToggleBlockInput, DdIcon.ban),
+        toggles(toolbarDisplayToggle(context, id, ffi), [kShortcutActionToggleLockAfterSessionEnd], divider: true),
       ]),
-      sub(DdIcon.devices, translate('Peripherals'), [
+      sub(DdIcon.mouse, translate('Peripherals'), [
         _mouseMode(ffi),
         const Divider(height: 9),
         toggles(toolbarDisplayToggle(context, id, ffi),
             [kShortcutActionToggleDisableClipboard, kShortcutActionToggleEnableFileCopyPaste]),
         // 反转滚轮、交换左右键：RustDesk 原样就是按机器存的（菜单项照它的工具栏）
-        if (ffi.ffiModel.keyboard)
-          CkbMenuButton(
-            value: (bind.sessionGetReverseMouseWheelSync(sessionId: ffi.sessionId) ?? '') == 'Y' ||
-                ((bind.sessionGetReverseMouseWheelSync(sessionId: ffi.sessionId) ?? '') == '' &&
-                    bind.mainGetUserDefaultOption(key: kKeyReverseMouseWheel) == 'Y'),
-            ffi: ffi,
-            onChanged: ffi.ffiModel.viewOnly
-                ? null
-                : (v) {
-                    if (v != null) bind.sessionSetReverseMouseWheel(sessionId: ffi.sessionId, value: v ? 'Y' : 'N');
-                  },
-            child: Text(translate('Reverse mouse wheel')),
-          ),
+        if (ffi.ffiModel.keyboard) _reverseWheel(ffi),
         for (final m in toolbarKeyboardToggles(ffi))
           if (m.actionId == kShortcutActionToggleSwapLeftRightMouse)
-            CkbMenuButton(value: m.value, onChanged: m.onChanged, ffi: ffi, child: m.child),
+            _pick(ffi, on: m.value, onPressed: m.onChanged == null ? null : () => m.onChanged!(!m.value), child: m.child),
       ]),
-      sub(DdIcon.terminal, translate('Tools'), [
-        MenuButton(onPressed: () => connect(context, id, isFileTransfer: true), ffi: ffi, child: Text(translate('File transfer'))),
-        MenuButton(onPressed: () => connect(context, id, isTerminal: true), ffi: ffi, child: Text(translate('Terminal'))),
+      sub(DdIcon.wrench, translate('Tools'), [
+        _act(ffi,
+            icon: DdIcon.folderUp,
+            onPressed: () => connect(context, id, isFileTransfer: true),
+            child: Text(translate('File transfer'))),
+        _act(ffi,
+            icon: DdIcon.terminal,
+            onPressed: () => connect(context, id, isTerminal: true),
+            child: Text(translate('Terminal'))),
         // 录屏：桌面端 RustDesk 不放在工具栏菜单里（toolbarControls 只在手机上给），是单独的按钮 _RecordMenu；条件和动作照它
         if (bind.mainGetLocalOption(key: kOptionHideRecordingButton) != 'Y' &&
             (ffi.recordingModel.start || ffi.ffiModel.permissions['recording'] != false))
-          MenuButton(
+          _act(ffi,
+              icon: DdIcon.record,
               onPressed: () => ffi.recordingModel.toggle(),
-              ffi: ffi,
               child: Text(translate(ffi.recordingModel.start ? 'Stop session recording' : 'Start session recording'))),
-        control(kShortcutActionScreenshot),
+        control(kShortcutActionScreenshot, DdIcon.camera),
       ]),
-      sub(DdIcon.menu, translate('More'), [
-        control(kShortcutActionSendCtrlAltDel),
-        control(kShortcutActionRestartRemote),
-        control(kShortcutActionRefresh),
-        toggles(toolbarDisplayToggle(context, id, ffi), [kShortcutActionToggleQualityMonitor]),
-        MenuButton(
+      sub(DdIcon.more, translate('More'), [
+        control(kShortcutActionSendCtrlAltDel, DdIcon.keyboard),
+        control(kShortcutActionRefresh, DdIcon.refresh),
+        control(kShortcutActionRestartRemote, DdIcon.power),
+        toggles(toolbarDisplayToggle(context, id, ffi), [kShortcutActionToggleQualityMonitor], divider: true),
+        const Divider(height: 9),
+        _act(ffi,
+            icon: DdIcon.zap,
             onPressed: () => bind.sessionDdproRetry(sessionId: ffi.sessionId),
-            ffi: ffi,
             child: Text(translate('Switch to pro mode'))),
       ]),
       const Divider(height: 9),
       if (!kDdKiosk)
         fullscreen
-            ? item(DdIcon.arrowUpCircle, translate('Exit Fullscreen'), () => stateGlobal.setFullscreen(false))
-            : item(DdIcon.arrowUpCircle, translate('Fullscreen'), () => stateGlobal.setFullscreen(true)),
-      item(DdIcon.close, translate('End remote control'), () => closeConnection(id: id), color: DdColors.dangerText),
+            ? item(DdIcon.minimize, translate('Exit Fullscreen'), () => stateGlobal.setFullscreen(false))
+            : item(DdIcon.maximize, translate('Fullscreen'), () => stateGlobal.setFullscreen(true)),
+      item(DdIcon.logOut, translate('End remote control'), () => closeConnection(id: id), color: DdColors.dangerText),
     ];
 }
 
@@ -551,21 +634,73 @@ Widget _mouseMode(FFI ffi) {
         bind.sessionSetFlutterOption(sessionId: ffi.sessionId, k: _kDdMouseMode, v: v ? 'remote' : '');
       }
 
-      return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-        RdoMenuButton<bool>(value: false, groupValue: remote, ffi: ffi, onChanged: choose, child: Text(translate('Local mouse'))),
-        RdoMenuButton<bool>(
-            value: true,
-            groupValue: remote,
-            ffi: ffi,
-            onChanged: reason.isEmpty ? choose : null,
-            child: Text(translate('Remote mouse'))),
-        if (reason.isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
-            child: Text(reason, style: const TextStyle(fontSize: 12, color: _kText3)),
+      return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        _head(translate('Mouse mode')),
+        _pick(ffi, on: !remote, onPressed: () => choose(false), child: Text(translate('Local mouse'))),
+        _pick(ffi, on: remote, onPressed: reason.isEmpty ? () => choose(true) : null, child: Text(translate('Remote mouse'))),
+        // 能用时说明什么时候用、怎么退出；用不了时写原因（照原型）。外面的 width: 0 让这段说明不把菜单撑宽：
+        // 量宽度时它算 0，排版时被上面的 stretch 拉到菜单宽、按菜单宽折行
+        SizedBox(
+          width: 0,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(10, 0, 10, 6),
+            child: Text(
+                reason.isNotEmpty
+                    ? reason
+                    : translate('Use the remote mouse to turn the view in games and 3D software; press Ctrl+Alt to exit'),
+                style: const TextStyle(fontSize: 12, height: 1.5, color: _kText2)),
           ),
+        ),
       ]);
     },
+  );
+}
+
+/// 控制中心里可以选中的一项（照 UU，不用复选框、单选框）：选中时文字主色、右边一个对勾；没选中的右边留同样宽的空，文字不跳。
+/// 点了先刷新鼠标位置（照 RustDesk 的复选 / 单选菜单项），再调用它背后的同一个回调（复选：传相反的值；单选：传这一项的值）。
+/// [extra]：对勾左边的灰字（如显示屏的分辨率）
+Widget _pick(FFI ffi, {required bool on, required VoidCallback? onPressed, required Widget child, Widget? extra}) {
+  final check = on ? ddIcon(DdIcon.check, size: 16, color: _kBlue) : const SizedBox(width: 16);
+  return MenuItemButton(
+    onPressed: onPressed == null
+        ? null
+        : () {
+            ffi.inputModel.refreshMousePos();
+            onPressed();
+          },
+    trailingIcon: extra == null ? check : Row(mainAxisSize: MainAxisSize.min, children: [extra, const SizedBox(width: 8), check]),
+    child: on ? DefaultTextStyle.merge(style: const TextStyle(color: _kBlue), child: child) : child,
+  );
+}
+
+/// 控制中心里的一个动作项，左边带图标；点了先让输入模型刷新鼠标位置（照 RustDesk 工具栏的 MenuButton）
+Widget _act(FFI ffi, {required DdIcon icon, required VoidCallback? onPressed, required Widget child}) => MenuItemButton(
+      leadingIcon: ddIcon(icon),
+      onPressed: onPressed == null
+          ? null
+          : () {
+              ffi.inputModel.refreshMousePos();
+              onPressed();
+            },
+      child: child,
+    );
+
+/// 子菜单里一组的小标题（照原型：12 号灰字，和菜单项文字左对齐）
+Widget _head(String text) => Padding(
+      padding: const EdgeInsets.fromLTRB(10, 6, 10, 4),
+      child: Text(text, style: const TextStyle(fontSize: 12, color: _kText2)),
+    );
+
+/// 反转滚轮：RustDesk 原样按机器存，没存过时跟用户默认值（照它工具栏的同一项）
+Widget _reverseWheel(FFI ffi) {
+  final v = bind.sessionGetReverseMouseWheelSync(sessionId: ffi.sessionId) ?? '';
+  final on = v == 'Y' || (v == '' && bind.mainGetUserDefaultOption(key: kKeyReverseMouseWheel) == 'Y');
+  return _pick(ffi,
+    on: on,
+    onPressed: ffi.ffiModel.viewOnly
+        ? null
+        : () => bind.sessionSetReverseMouseWheel(sessionId: ffi.sessionId, value: on ? 'N' : 'Y'),
+    child: Text(translate('Reverse mouse wheel')),
   );
 }
 
@@ -575,5 +710,28 @@ final ddMenuStyle = MenuStyle(
   surfaceTintColor: const WidgetStatePropertyAll(Colors.white),
   elevation: const WidgetStatePropertyAll(8),
   shape: WidgetStatePropertyAll(RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
-  padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(vertical: 6)),
+  padding: const WidgetStatePropertyAll(EdgeInsets.all(6)),
 );
+
+/// 菜单最少 230 宽（照原型）。MenuStyle 的 minimumSize 不管用：Flutter 3.24 的菜单面板外面包了一层只约束竖向的
+/// UnconstrainedBox，子菜单还没法关掉它；所以每个菜单开头放一个这么宽、高 0 的占位，菜单按最宽的一项定宽
+const _kMenuMinWidth = SizedBox(width: 230 - 12);
+
+/// 控制中心菜单项的样式（照原型 RemoteMenu：行高 36、圆角悬停块、字 14），套在菜单的 MenuAnchor 外面，子菜单也跟着用。
+/// 子菜单右边的箭头是 Flutter 写死的 Material 实心三角，换不成原型的细箭头，只能调成次要文字的灰色
+Widget ddMenuTheme(BuildContext context, {required Widget child}) => Theme(
+      data: Theme.of(context).copyWith(
+        menuButtonTheme: MenuButtonThemeData(
+          style: ButtonStyle(
+            visualDensity: VisualDensity.standard,
+            minimumSize: const WidgetStatePropertyAll(Size(0, 36)),
+            padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 10)),
+            textStyle: const WidgetStatePropertyAll(TextStyle(fontSize: 14, fontWeight: FontWeight.normal)),
+            iconColor: const WidgetStatePropertyAll(_kText2),
+            overlayColor: const WidgetStatePropertyAll(DdColors.hover),
+            shape: WidgetStatePropertyAll(RoundedRectangleBorder(borderRadius: BorderRadius.circular(6))),
+          ),
+        ),
+      ),
+      child: child,
+    );

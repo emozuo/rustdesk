@@ -920,5 +920,15 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("No keyboard and mouse permission", "没有键盘鼠标权限"),
         ("Not in pro mode: pro mode works only on the intranet", "非专业模式：专业模式只能在内网使用"),
         ("The pro video channel could not reach the controlled side, and this connection goes through the relay server (for example, from outside the company network). Pro mode works only on the intranet: connect from the intranet or over VPN to use it.", "专业画面通道连不到被控端，而这次连接经中继服务器转发（例如从公司外网连入）。专业模式只能在内网使用：在内网或通过 VPN 连接即可使用。"),
+        ("Device information", "设备信息"),
+        ("IP address", "IP 地址"),
+        ("Operating system", "系统"),
+        ("Hostname", "主机名"),
+        ("Signed-in user", "当前登录"),
+        ("Memory", "内存"),
+        ("Last connected", "最近连接"),
+        ("Copy", "复制"),
+        ("Use the remote mouse to turn the view in games and 3D software; press Ctrl+Alt to exit", "游戏、三维软件里转视角用远程鼠标；按 Ctrl+Alt 退出"),
+        ("{} devices", "{} 台"),
     ].iter().cloned().collect();
 }

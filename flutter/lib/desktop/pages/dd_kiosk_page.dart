@@ -13,6 +13,7 @@ import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/common/hbbs/hbbs.dart';
 import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_tab_page.dart';
+import 'package:flutter_hbb/desktop/widgets/dd_icons.dart';
 import 'package:flutter_hbb/desktop/widgets/dd_kiosk_view.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:flutter_hbb/utils/dd_kiosk.dart';
@@ -489,7 +490,7 @@ class _DdKioskPageState extends State<DdKioskPage> {
           trailing: _phase == _Phase.login || _phase == _Phase.list
               ? DdKioskGhostButton(
                   label: translate('Shut down'),
-                  icon: Icons.power_settings_new,
+                  icon: DdIcon.power,
                   fontSize: 11,
                   onTap: () => setState(() => _confirm = true))
               : null,
@@ -587,7 +588,7 @@ class _DdKioskPageState extends State<DdKioskPage> {
         _reconnect();
       },
       secondaryLabel: translate('Back to list'),
-      secondaryIcon: Icons.arrow_back,
+      secondaryIcon: DdIcon.arrowLeft,
       onSecondary: _showList,
     );
   }

@@ -173,57 +173,60 @@ class _DdFloatingBallState extends State<DdFloatingBall> {
           duration: _dragging ? Duration.zero : _kSlide,
           left: ball.dx,
           top: ball.dy,
-          child: MenuAnchor(
-            controller: _menu,
-            style: ddMenuStyle,
-            alignmentOffset: const Offset(0, 6),
-            menuChildren: _children,
-            onOpen: () => setState(() => _menuOpen = true),
-            onClose: () {
-              setState(() => _menuOpen = false);
-              if (_edge == null) {
-                _scheduleIdleDock();
-              } else {
-                _scheduleTuck();
-              }
-            },
-            child: MouseRegion(
-              cursor: SystemMouseCursors.click,
-              onEnter: (_) => setState(() {
-                _hover = true;
-                _revealed = true;
-              }),
-              onExit: (_) {
-                setState(() => _hover = false);
+          child: ddMenuTheme(
+            context,
+            child: MenuAnchor(
+              controller: _menu,
+              style: ddMenuStyle,
+              alignmentOffset: const Offset(0, 6),
+              menuChildren: _children,
+              onOpen: () => setState(() => _menuOpen = true),
+              onClose: () {
+                setState(() => _menuOpen = false);
                 if (_edge == null) {
                   _scheduleIdleDock();
                 } else {
                   _scheduleTuck();
                 }
               },
-              child: GestureDetector(
-                // 松开时才算点击（拖动过就不算），和专业窗口的球一样
-                onPanStart: (_) => setState(() {
-                  _dragging = true;
-                  _moved = false;
-                  _free = ball;
-                  _edge = null;
+              child: MouseRegion(
+                cursor: SystemMouseCursors.click,
+                onEnter: (_) => setState(() {
+                  _hover = true;
+                  _revealed = true;
                 }),
-                onPanUpdate: (d) => setState(() {
-                  _moved = true;
-                  _free = Offset(_fit(_free.dx + d.delta.dx, size.width - _kBall),
-                      _fit(_free.dy + d.delta.dy, size.height - _kBall));
-                }),
-                onPanEnd: (_) {
-                  if (_moved) {
-                    _onDragEnd(size);
+                onExit: (_) {
+                  setState(() => _hover = false);
+                  if (_edge == null) {
+                    _scheduleIdleDock();
                   } else {
-                    setState(() => _dragging = false);
-                    _toggleMenu();
+                    _scheduleTuck();
                   }
                 },
-                onTap: _toggleMenu,
-                child: _BallFace(hot: _hover || _menuOpen || _dragging),
+                child: GestureDetector(
+                  // 松开时才算点击（拖动过就不算），和专业窗口的球一样
+                  onPanStart: (_) => setState(() {
+                    _dragging = true;
+                    _moved = false;
+                    _free = ball;
+                    _edge = null;
+                  }),
+                  onPanUpdate: (d) => setState(() {
+                    _moved = true;
+                    _free = Offset(_fit(_free.dx + d.delta.dx, size.width - _kBall),
+                        _fit(_free.dy + d.delta.dy, size.height - _kBall));
+                  }),
+                  onPanEnd: (_) {
+                    if (_moved) {
+                      _onDragEnd(size);
+                    } else {
+                      setState(() => _dragging = false);
+                      _toggleMenu();
+                    }
+                  },
+                  onTap: _toggleMenu,
+                  child: _BallFace(hot: _hover || _menuOpen || _dragging),
+                ),
               ),
             ),
           ),
@@ -250,7 +253,7 @@ class _BallFace extends StatelessWidget {
       ),
       alignment: Alignment.center,
       // 图标照专业窗口的球：两条上下叠的胶囊，各带一个错开的小圆点
-      child: ddIcon(DdIcon.controlCenter, size: 22, color: _kBallFg),
+      child: ddIcon(DdIcon.controlCenter, size: 20, color: _kBallFg),
     );
   }
 }

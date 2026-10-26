@@ -7,10 +7,17 @@ import 'package:flutter_hbb/common.dart';
 
 class DdColors {
   DdColors._();
-  static const chrome = Color(0xFFEDEFF3);
-  static const pane = Color(0xFFF7F8FA);
+  // 10-27 照 UU 截图取色（原型 dreamdesk/design/prototype/dd.css）：不是纯灰，带一点蓝
+  static const chrome = Color(0xFFF0F5F8);
+  static const pane = Color(0xFFF7FBFE);
   static const surface = Color(0xFFFFFFFF);
-  static const selected = Color(0xFFE1E4E9);
+  static const selected = Color(0xFFE4E9EC);
+  /// 内容区上边、左边和左栏之间的细线
+  static const paneLine = Color(0xFFEAEEF1);
+  /// 左栏底部「设置」上方的分隔线
+  static const sideDivider = Color(0xFFE4E9EC);
+  /// 远程窗口的标题栏（UU 的远程窗口比主窗口深一档）
+  static const chromeRemote = Color(0xFFD7DCE0);
   static const hover = Color(0x0F000000);
   static const line = Color(0xFFDCDFE4);
   static const lineStrong = Color(0xFF8A9099);
