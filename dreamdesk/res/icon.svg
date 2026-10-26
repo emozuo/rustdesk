@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 63.96 63.96" width="64" height="64">
+  <path fill="#FF2A3D" stroke="#FF2A3D" stroke-width=".3" stroke-linejoin="round" d="M33.78 2.15A2.33 2.33 0 0 1 37.84 0.78L55.38 20.46A4.41 4.41 0 0 1 56.2 24.99L54.4 29.64L31.44 31.43Z"/>
+  <path fill="#14141E" stroke="#14141E" stroke-width=".3" stroke-linejoin="round" d="M54.4 29.64L55.26 29.57A1.9 1.9 0 0 1 56.73 30.1L63.32 36.51A2.09 2.09 0 0 1 62.7 39.93L46.85 46.86Z"/>
+  <path fill="#14141E" stroke="#14141E" stroke-width=".3" stroke-linejoin="round" d="M31.44 31.43L2.15 33.73A2.33 2.33 0 0 0 0.78 37.79L20.43 55.35A4.41 4.41 0 0 0 24.96 56.18L29.61 54.39Z"/>
+  <path fill="#C41E2A" stroke="#C41E2A" stroke-width=".3" stroke-linejoin="round" d="M31.44 31.43L54.4 29.64L46.85 46.86Z"/>
+  <path fill="#05050A" stroke="#05050A" stroke-width=".3" stroke-linejoin="round" d="M31.44 31.43L46.85 46.86L29.61 54.39Z"/>
+  <path fill="#FF2A3D" stroke="#FF2A3D" stroke-width=".3" stroke-linejoin="round" d="M29.61 54.39L46.85 46.86L39.9 62.71A2.09 2.09 0 0 1 36.47 63.32L30.07 56.73A1.9 1.9 0 0 1 29.54 55.25Z"/>
+</svg>
