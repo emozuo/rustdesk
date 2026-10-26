@@ -22,6 +22,7 @@ import '../../models/shortcut_model.dart';
 import '../../common/shared_state.dart';
 import '../../utils/dd_kiosk.dart';
 import '../../utils/image.dart';
+import '../widgets/dd_floating_ball.dart';
 import '../widgets/remote_toolbar.dart';
 import '../widgets/kb_layout_type_chooser.dart';
 import '../widgets/tabbar_widget.dart';
@@ -784,15 +785,20 @@ class _RemotePageState extends State<RemotePage>
               // Use Overlay to enable rebuild every time on menu button click.
               // Hide toolbar when relative mouse mode is active to prevent
               // cursor from escaping to toolbar area.
-              // DreamDesk 受管版：操作在标题栏的「控制中心」里，不要悬浮工具栏；全屏（标题栏收起）和 kiosk 下悬浮球做好之前先留着它
-              Obx(() => _ffi.inputModel.relativeMouseMode.value ||
-                      (kDdManaged && !kDdKiosk && !stateGlobal.fullscreen.value)
+              // DreamDesk 受管版不要悬浮工具栏：操作在标题栏的「控制中心」里，全屏（标题栏收起）和 kiosk 下用悬浮球
+              Obx(() => _ffi.inputModel.relativeMouseMode.value
                   ? const Offstage()
-                  : _ffi.ffiModel.pi.isSet.isTrue
-                      ? Overlay(initialEntries: [
-                          OverlayEntry(builder: remoteToolbar)
-                        ])
-                      : remoteToolbar(context)),
+                  : kDdManaged
+                      ? (kDdKiosk || stateGlobal.fullscreen.value) && _ffi.ffiModel.pi.isSet.isTrue
+                          ? Overlay(initialEntries: [
+                              OverlayEntry(builder: (_) => DdFloatingBall(id: widget.id, ffi: _ffi))
+                            ])
+                          : const Offstage()
+                      : _ffi.ffiModel.pi.isSet.isTrue
+                          ? Overlay(initialEntries: [
+                              OverlayEntry(builder: remoteToolbar)
+                            ])
+                          : remoteToolbar(context)),
               _ffi.ffiModel.pi.isSet.isFalse ? emptyOverlay() : Offstage(),
             ],
           ),

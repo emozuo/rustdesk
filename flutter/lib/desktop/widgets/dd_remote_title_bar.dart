@@ -17,6 +17,7 @@ import 'package:flutter_hbb/models/chat_model.dart';
 import 'package:flutter_hbb/models/model.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:flutter_hbb/models/state_model.dart';
+import 'package:flutter_hbb/utils/dd_kiosk.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:get/get.dart';
 
@@ -322,13 +323,13 @@ class _ControlCenterState extends State<_ControlCenter> {
     return MenuAnchor(
       controller: _controller,
       alignmentOffset: const Offset(0, 6),
-      style: _menuStyle,
+      style: ddMenuStyle,
       menuChildren: _children,
       builder: (context, controller, _) => _BarButton(
         tooltip: '',
         onTap: () {
           if (controller.isOpen) return controller.close();
-          setState(() => _children = _menu(context));
+          setState(() => _children = ddControlMenu(context, widget.id, widget.ffi));
           controller.open();
         },
         child: Row(mainAxisSize: MainAxisSize.min, children: [
@@ -339,10 +340,11 @@ class _ControlCenterState extends State<_ControlCenter> {
       ),
     );
   }
+}
 
-  List<Widget> _menu(BuildContext context) {
-    final id = widget.id;
-    final ffi = widget.ffi;
+/// 控制中心的菜单（标题栏的「控制中心」和全屏时的悬浮球共用一份）。[fullscreen]：在悬浮球上（全屏时），「全屏」换成「退出全屏」；
+/// kiosk 始终全屏，不给这一项
+List<Widget> ddControlMenu(BuildContext context, String id, FFI ffi, {bool fullscreen = false}) {
     final pi = ffi.ffiModel.pi;
     final count = pi.displays.length;
     final current = CurrentDisplayState.find(id).value;
@@ -369,7 +371,7 @@ class _ControlCenterState extends State<_ControlCenter> {
           ]),
         );
     Widget sub(DdIcon icon, String label, List<Widget> children) => SubmenuButton(
-          menuStyle: _menuStyle,
+          menuStyle: ddMenuStyle,
           leadingIcon: ddIcon(icon, size: 16),
           menuChildren: children,
           child: Text(label),
@@ -439,13 +441,16 @@ class _ControlCenterState extends State<_ControlCenter> {
             child: Text(translate('Switch to pro mode'))),
       ]),
       const Divider(height: 9),
-      item(DdIcon.arrowUpCircle, translate('Fullscreen'), () => stateGlobal.setFullscreen(true)),
+      if (!kDdKiosk)
+        fullscreen
+            ? item(DdIcon.arrowUpCircle, translate('Exit Fullscreen'), () => stateGlobal.setFullscreen(false))
+            : item(DdIcon.arrowUpCircle, translate('Fullscreen'), () => stateGlobal.setFullscreen(true)),
       item(DdIcon.close, translate('End remote control'), () => closeConnection(id: id), color: const Color(0xFFE5484D)),
     ];
-  }
 }
 
-final _menuStyle = MenuStyle(
+/// 控制中心菜单的样式（白底圆角，照 UU），悬浮球的菜单也用它
+final ddMenuStyle = MenuStyle(
   backgroundColor: const WidgetStatePropertyAll(Colors.white),
   surfaceTintColor: const WidgetStatePropertyAll(Colors.white),
   elevation: const WidgetStatePropertyAll(8),
