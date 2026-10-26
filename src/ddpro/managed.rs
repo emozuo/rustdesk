@@ -1,17 +1,16 @@
-//! 受管模式（dreamdesk-gateway 仓库 docs/协议-连接票与设备签名.md 第二、六节）：被控端只认服务端签发的连接票和离线应急票，
+//! 受管模式（dreamdesk-gateway 仓库 docs/协议-连接票与设备签名.md 第二、六节）：被控端只认服务端签发的连接票，
 //! RustDesk 原有的口令、点击接受、近期会话复用、切换方向、二次验证、登录界面口令、终端系统账号登录一律不认。
 //!
 //! 作为 `server::connection` 的子模块编进去（要用 `Connection` 的私有字段和方法），只在 `dd-managed` 下编译；
 //! 不开时被控端照旧走 RustDesk 原有认证。
 
 use super::*;
-use ddpro::ticket::{self, SubKind, Ticket};
-use std::io::Write;
+use ddpro::ticket::{self, Ticket};
 
 /// 编进来就受管。钩子写成 `if MANAGED { return ... }`，是为了让钩子后面 RustDesk 原有的代码不被报「执行不到」
 pub(super) const MANAGED: bool = true;
 
-/// 产品预置的受信任公钥（钥匙编号, Ed25519 公钥十六进制）。密钥仪式后填入当前钥、备用钥和应急钥
+/// 产品预置的受信任公钥（钥匙编号, Ed25519 公钥十六进制）。密钥仪式后填入当前钥和备用钥
 const PRODUCT_KEYS: &[(&str, &str)] = &[];
 // 正式受管版没有产品钥就不许编出来：编出来的被控端谁的票都不认，装上去就没人连得上
 #[cfg(not(feature = "dd-managed-dev"))]
@@ -23,22 +22,14 @@ const _: () = assert!(
 #[cfg(feature = "dd-managed-dev")]
 const DEV_KEYS: &[(&str, &str)] = &[
     ("devsrv1", "d6b608d34808ded7ecad1dbc57017723211fd45ec52a82bc5b4b33425de56252"),
-    ("emgdev1", "0df235d9b9be02314edf20e72a3c724392f9ff5d3316f34242f44f518d802938"),
 ];
 #[cfg(not(feature = "dd-managed-dev"))]
 const DEV_KEYS: &[(&str, &str)] = &[];
-
-/// 用过的应急票编号，一行一个（应急票不绑挑战值，靠它保证只能用一次）
-const EMERGENCY_USED_FILE: &str = "dd_emergency_used";
 
 const LOG_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
 
 const MSG_TICKET_REQUIRED: &str = "This device only accepts connections authorized by the server";
 const MSG_TICKET_REJECTED: &str = "Connection authorization rejected";
-
-lazy_static::lazy_static! {
-    static ref EMERGENCY_LOCK: Mutex<()> = Default::default();
-}
 
 impl Connection {
     /// 受管时登录请求在这里走完：验票通过就接上 RustDesk 原有的认证成功后续（发登录回复、起连接管理），否则拒绝并断开。
@@ -46,30 +37,14 @@ impl Connection {
     pub(super) async fn dd_managed_login(&mut self) -> bool {
         let lr = self.lr.clone();
         // 被拒的登录由对端想发多少就发多少，日志要节流
-        // 空口令、不带票：主控端要不到票（服务端连不上、没登录）时照 RustDesk 原样先发一个空口令的登录、弹口令框等输入。
-        // 受管时口令框是粘贴离线应急票的地方，所以不断开，回「要口令」等它再发（未认证连接照常有超时）
-        if lr.dd_ticket.is_empty() && lr.password.is_empty() {
-            self.send_login_error(crate::client::LOGIN_MSG_PASSWORD_EMPTY).await;
-            return true;
-        }
+        // 不带票的（普通 RustDesk 主控端、按 IP 直连没加密的）直接拒：受管时没有能输口令的地方，不回「要口令」弹口令框
         if lr.dd_ticket.is_empty() {
             hbb_common::throttled_log!(LOG_INTERVAL, warn, "dd-managed: login from {} without ticket refused", lr.my_id);
             self.send_login_error(MSG_TICKET_REQUIRED).await;
             sleep(1.).await;
             return false;
         }
-        let mut checked = self.dd_check_ticket(&lr);
-        // 应急票记「已用」要写盘（先写盘再放行），放到阻塞线程上做
-        if let Some(t) = checked.as_ref().ok().filter(|t| t.sub_kind == SubKind::Emergency) {
-            let jti = t.jti_hex();
-            if let Err(e) = hbb_common::tokio::task::spawn_blocking(move || claim_emergency(&jti))
-                .await
-                .unwrap_or_else(|e| Err(e.to_string()))
-            {
-                checked = Err(e);
-            }
-        }
-        let t = match checked {
+        let t = match self.dd_check_ticket(&lr) {
             Ok(t) => t,
             Err(e) => {
                 hbb_common::throttled_log!(LOG_INTERVAL, warn, "dd-managed: ticket from {} refused: {e}", lr.my_id);
@@ -86,26 +61,6 @@ impl Connection {
             t.sub,
             lr.my_id
         );
-        if t.sub_kind == SubKind::Emergency {
-            log::warn!("dd-managed: EMERGENCY ticket {jti} ({}) used by {}", t.sub, lr.my_id);
-            let rec = json!({
-                "jti": jti,
-                "kid": t.kid,
-                "sub": t.sub,
-                "sub_name": t.sub_name,
-                "peer_id": lr.my_id,
-                "peer_name": lr.my_name,
-                "conn_type": t.conn_type,
-                "at": hbb_common::get_time() / 1000,
-                "exp": t.exp,
-            });
-            // 记待补传也要写盘
-            if let Err(e) =
-                hbb_common::tokio::task::spawn_blocking(move || crate::ddpro::emergency_audit::record(rec)).await
-            {
-                log::error!("dd-managed: emergency audit not recorded: {e}");
-            }
-        }
         let id = self.inner.id();
         // 连着期间一直记着（连接审计和每拍心跳都带），连接关闭时在 ddpro::server::on_conn_closed 里删
         crate::ddpro::ticket_conns::insert(id, jti);
@@ -169,26 +124,4 @@ fn trusted_keys() -> Vec<(&'static str, Vec<u8>)> {
             }
         })
         .collect()
-}
-
-/// 应急票只能用一次：没用过就先记进本机文件（落盘后）再放行
-fn claim_emergency(jti: &str) -> Result<(), String> {
-    let _guard = EMERGENCY_LOCK.lock().unwrap();
-    let path = Config::path(EMERGENCY_USED_FILE);
-    let used = match std::fs::read_to_string(&path) {
-        Ok(s) => s,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(e) => return Err(format!("read {}: {e}", path.display())),
-    };
-    if used.lines().any(|l| l.trim() == jti) {
-        return Err(format!("emergency ticket {jti} already used"));
-    }
-    let mut f = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .map_err(|e| format!("open {}: {e}", path.display()))?;
-    writeln!(f, "{jti}")
-        .and_then(|_| f.sync_all())
-        .map_err(|e| format!("write {}: {e}", path.display()))
 }

@@ -1,10 +1,10 @@
 //! 被控端验票用例对齐：读 dreamdesk-gateway 的 tools/acceptance/testdata/host-verify-cases.json（服务端独立实现生成），
-//! 按被控端 src/ddpro/managed.rs 的顺序逐条跑（连接没加密先拒 → 验签 → 核对用途 → 应急票查是否用过），和期望的结论比对。
+//! 按被控端 src/ddpro/managed.rs 的顺序逐条跑（连接没加密先拒 → 验签 → 核对用途），和期望的结论比对。
 //!
 //!   cargo run -p ddpro-ticket --example host_cases -- <host-verify-cases.json>
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
-use ddpro_ticket::{verify, Error, SubKind};
+use ddpro_ticket::{verify, Error};
 
 fn reason(e: &Error) -> &'static str {
     match e {
@@ -16,7 +16,6 @@ fn reason(e: &Error) -> &'static str {
         Error::WrongConnType => "wrong_conn_type",
         Error::Expired => "expired",
         Error::NotYetValid => "not_yet_valid",
-        Error::EmergencyMismatch => "emergency_mismatch",
         Error::LifetimeTooLong => "lifetime_too_long",
     }
 }
@@ -45,10 +44,6 @@ fn main() {
             let conn_type = c["conn_type"].as_u64().unwrap_or(0) as u8;
             t.check(&my_pk, &s("challenge"), conn_type, c["now"].as_i64().unwrap_or(0))
                 .map_err(|e| reason(&e))?;
-            let used = c["used_emergency_jti_hex"].as_array().cloned().unwrap_or_default();
-            if t.sub_kind == SubKind::Emergency && used.iter().any(|u| u.as_str() == Some(&t.jti_hex())) {
-                return Err("emergency_reused");
-            }
             Ok(())
         })();
         let want = if s("expect") == "accept" { Ok(()) } else { Err(s("reason")) };

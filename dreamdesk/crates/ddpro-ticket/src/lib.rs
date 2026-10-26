@@ -18,18 +18,14 @@ const SIG_LEN: usize = 64;
 pub const MAX_TICKET_LEN: usize = 1024;
 /// 被控端容忍的时钟差（秒）
 pub const CLOCK_SKEW: i64 = 60;
-/// 应急钥的钥匙编号前缀
-pub const EMERGENCY_KID_PREFIX: &str = "emg";
-/// 有效期上限（exp − iat，秒）：普通票 120 秒，应急票 4 小时
+/// 有效期上限（exp − iat，秒）
 pub const MAX_LIFETIME: i64 = 120;
-pub const MAX_EMERGENCY_LIFETIME: i64 = 4 * 3600;
 
-/// 票的主体
+/// 票的主体。3 是撤掉的应急票，不再复用（老的应急票按格式错误拒）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SubKind {
     User = 1,
     Seat = 2,
-    Emergency = 3,
 }
 
 impl SubKind {
@@ -37,7 +33,6 @@ impl SubKind {
         match v {
             1 => Some(Self::User),
             2 => Some(Self::Seat),
-            3 => Some(Self::Emergency),
             _ => None,
         }
     }
@@ -77,9 +72,7 @@ pub enum Error {
     Expired,
     /// 签发时间在未来（超出时钟容忍）
     NotYetValid,
-    /// 应急票：主体和钥匙编号对不上
-    EmergencyMismatch,
-    /// 有效期比协议允许的长（普通票 120 秒、应急票 4 小时）：签发方出错或钥匙被滥用
+    /// 有效期比协议允许的长：签发方出错或钥匙被滥用
     LifetimeTooLong,
 }
 
@@ -94,7 +87,6 @@ impl std::fmt::Display for Error {
             Error::WrongConnType => write!(f, "the ticket is for another kind of connection"),
             Error::Expired => write!(f, "the ticket has expired"),
             Error::NotYetValid => write!(f, "the ticket is not valid yet (clock difference too large)"),
-            Error::EmergencyMismatch => write!(f, "emergency ticket and key do not match"),
             Error::LifetimeTooLong => write!(f, "the ticket is valid for longer than allowed"),
         }
     }
@@ -139,24 +131,18 @@ impl Ticket {
         Ok(out)
     }
 
-    /// 被控端核对票的用途：发给本机（`my_pk`）、这次连接（`challenge`、`conn_type`）、在有效期内（`now`，Unix 秒）。
-    /// 应急票不核对挑战值，但要求钥匙编号也是应急钥（单次使用由调用方用本机文件记）
+    /// 被控端核对票的用途：发给本机（`my_pk`）、这次连接（`challenge`、`conn_type`）、在有效期内（`now`，Unix 秒）
     pub fn check(&self, my_pk: &[u8], challenge: &str, conn_type: u8, now: i64) -> Result<(), Error> {
         if self.target_pk[..] != *my_pk {
             return Err(Error::WrongTarget);
         }
-        let emergency_key = self.kid.starts_with(EMERGENCY_KID_PREFIX);
-        if (self.sub_kind == SubKind::Emergency) != emergency_key {
-            return Err(Error::EmergencyMismatch);
-        }
-        if self.sub_kind != SubKind::Emergency && self.challenge != challenge {
+        if self.challenge != challenge {
             return Err(Error::WrongChallenge);
         }
         if self.conn_type != conn_type {
             return Err(Error::WrongConnType);
         }
-        let max = if emergency_key { MAX_EMERGENCY_LIFETIME } else { MAX_LIFETIME };
-        if self.exp.saturating_sub(self.iat) > max {
+        if self.exp.saturating_sub(self.iat) > MAX_LIFETIME {
             return Err(Error::LifetimeTooLong);
         }
         if now > self.exp.saturating_add(CLOCK_SKEW) {
@@ -215,7 +201,7 @@ pub fn verify(ticket: &[u8], trusted: &[(&str, &[u8])]) -> Result<Ticket, Error>
     Ok(t)
 }
 
-/// 只解析、不验签：主控端判断粘贴进口令框的是不是一张票用，真伪由被控端验
+/// 只解析、不验签：主控端核对服务端给的票是不是发给这次连上的那台，真伪由被控端验
 pub fn parse_unverified(ticket: &[u8]) -> Result<Ticket, Error> {
     split_parse(ticket).map(|(t, _, _)| t)
 }

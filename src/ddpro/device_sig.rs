@@ -3,7 +3,7 @@
 //! 不用改各个调用点。
 
 /// 被控端服务进程发的这几条一律签
-const SIGNED_PATHS: &[&str] = &["/api/sysinfo", "/api/heartbeat", "/api/audit/conn", "/api/dd/emergency-audit"];
+const SIGNED_PATHS: &[&str] = &["/api/sysinfo", "/api/heartbeat", "/api/audit/conn"];
 /// 座位（不登录的主控端，例如 kiosk 瘦客户机）要票、问绑定：不带登录令牌时签，服务端凭设备公钥认座位；带了令牌的是用户，不签
 const SEAT_PATHS: &[&str] = &["/api/dd/ticket", "/api/dd/seat/target"];
 

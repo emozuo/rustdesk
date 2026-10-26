@@ -53,9 +53,6 @@ pub mod server_tls;
 // 受管模式：被控端服务启动时按物理网卡地址自查克隆，是克隆就换设备号和设备密钥
 #[cfg(feature = "dd-managed")]
 pub mod clone_check;
-// 受管模式：应急连接在本机记账，服务端恢复后补传
-#[cfg(feature = "dd-managed")]
-pub mod emergency_audit;
 // 受管模式：凭票认证的连接 → 票编号，连接审计和每拍心跳都带
 #[cfg(feature = "dd-managed")]
 pub mod ticket_conns;
