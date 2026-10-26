@@ -25,6 +25,7 @@ import 'package:window_manager/window_manager.dart';
 
 import 'common.dart';
 import 'consts.dart';
+import 'desktop/pages/dd_home_page.dart';
 import 'desktop/pages/dd_kiosk_page.dart';
 import 'utils/dd_kiosk.dart';
 import 'mobile/pages/home_page.dart';
@@ -506,7 +507,9 @@ class _AppState extends State<App> with WidgetsBindingObserver {
           darkTheme: MyTheme.darkTheme,
           themeMode: MyTheme.currentThemeMode(),
           home: isDesktop
-              ? (kDdKiosk ? const DdKioskPage() : const DesktopTabPage())
+              ? (kDdKiosk
+                  ? const DdKioskPage()
+                  : (kDdManaged ? const DdHomePage() : const DesktopTabPage()))
               : isWeb
                   ? WebHomePage()
                   : HomePage(),

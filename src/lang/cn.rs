@@ -890,5 +890,16 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Number keys to choose · Enter to connect", "数字键选择 · ENTER 连接"),
         ("Cannot verify the identity of the remote device", "无法核实对方设备的身份"),
         ("Please sign in first", "请先登录"),
+        ("My devices", "我的设备"),
+        ("All devices", "全部设备"),
+        ("Sign in now", "立即登录"),
+        ("Sign in to see the workstations assigned to you.", "登录后查看授权给你的工作站"),
+        ("Enter desktop", "进入桌面"),
+        ("Online", "在线"),
+        ("File transfer", "文件传输"),
+        ("Port mapping", "端口映射"),
+        ("Sign in with your domain account", "域账号登录"),
+        ("Check for updates", "检查更新"),
+        ("Online updates are not available yet. New versions are installed by IT.", "暂时没有在线升级，新版本由 IT 统一安装。"),
     ].iter().cloned().collect();
 }
