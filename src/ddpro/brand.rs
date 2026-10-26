@@ -8,7 +8,7 @@
 //! 产品版只在内网用（企业内部禁止连外网）：RustDesk 默认会连官方注册 / 中继 / 账号服务器和写死的公网
 //! STUN，这里把服务器预置成内网的（RustDesk 的「默认设置」，官方定制客户端用的同一层：没改过就用它，
 //! 设置里「ID/中继服务器」照样能改——用户 2026-10-21 要求放开，原来用「强制设置」锁死、那一栏是灰的），
-//! 并强制关掉会去连公网 STUN 的两项。
+//! 并强制关掉会去连公网 STUN 的两项。受管版另外锁定，见 `managed_lock`。
 
 use base::config::keys;
 use hbb_common::config;
@@ -40,6 +40,28 @@ pub fn apply() {
     // 注册服务器不是官方的时候 RustDesk 已把这两项默认关掉，但用户手动打开后仍会去连写死的公网 STUN，所以强制关
     config::OVERWRITE_LOCAL_SETTINGS.write().unwrap().extend(
         [keys::OPTION_ENABLE_IPV6_PUNCH, keys::OPTION_ENABLE_WEBRTC].map(|k| (k.to_owned(), "N".to_owned())),
+    );
+    #[cfg(feature = "dd-managed")]
+    managed_lock();
+}
+
+/// 受管版内置锁定（用户 10-26 定，dreamdesk/docs/M-受管版方案.md 第 2 步）：连接只能从网关列出的工作站发起、按设备号走，
+/// 所以不开按 IP 直连、不做局域网发现；设备号只是内部的连接号码，不能改；不显示服务器设置。
+/// 正式版连服务器地址也锁死（10-21 放开的「ID 服务器可改」在受管版收回）；开发版留着，好用 --option 指到联调网关
+#[cfg(feature = "dd-managed")]
+fn managed_lock() {
+    #[allow(unused_mut)]
+    let mut forced = vec![(keys::OPTION_DIRECT_SERVER, "N"), (keys::OPTION_ENABLE_LAN_DISCOVERY, "N")];
+    #[cfg(not(feature = "dd-managed-dev"))]
+    forced.extend([
+        (keys::OPTION_CUSTOM_RENDEZVOUS_SERVER, INTRANET_SERVER),
+        (keys::OPTION_RELAY_SERVER, INTRANET_SERVER),
+        (keys::OPTION_KEY, INTRANET_SERVER_KEY),
+        (keys::OPTION_API_SERVER, INTRANET_API),
+    ]);
+    config::OVERWRITE_SETTINGS.write().unwrap().extend(forced.into_iter().map(|(k, v)| (k.to_owned(), v.to_owned())));
+    config::BUILTIN_SETTINGS.write().unwrap().extend(
+        [keys::OPTION_DISABLE_CHANGE_ID, keys::OPTION_HIDE_SERVER_SETTINGS].map(|k| (k.to_owned(), "Y".to_owned())),
     );
 }
 
