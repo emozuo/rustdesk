@@ -190,14 +190,23 @@ class _DisplayTabs extends StatelessWidget {
       final count = pi.displays.length;
       final current = CurrentDisplayState.find(id).value;
       if (count == 0) return const SizedBox.shrink();
+      // 把一块屏拖出去（或右键「在新窗口打开」）：用 RustDesk 的「显示器开到新窗口」，同一条连接、不另连。
+      // 拖的是正在看的这块就先让这个窗口换去看下一块，免得两个窗口看同一块；只有一块屏时不能拖出
+      void openOut(int i) {
+        if (count < 2) return;
+        if (i == current) openMonitorInTheSameTab((i + 1) % count, ffi, pi);
+        openMonitorInNewTabOrWindow(i, id, pi);
+      }
+
       return SingleChildScrollView(
         scrollDirection: Axis.horizontal,
         child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
           for (var i = 0; i < count; i++)
             _DisplayTab(
-              label: translate('Screen {}').replaceAll('{}', '${i + 1}'),
+              label: translate('Screen {${i + 1}}'),
               selected: i == current,
               onTap: i == current ? null : () => openMonitorInTheSameTab(i, ffi, pi),
+              onOpenOut: count < 2 ? null : () => openOut(i),
             ),
         ]),
       );
@@ -209,7 +218,9 @@ class _DisplayTab extends StatefulWidget {
   final String label;
   final bool selected;
   final VoidCallback? onTap;
-  const _DisplayTab({required this.label, required this.selected, this.onTap});
+  /// 拖出标题栏松手、或右键菜单「在新窗口打开」时调用；null 表示不能拖出（只有一块屏）
+  final VoidCallback? onOpenOut;
+  const _DisplayTab({required this.label, required this.selected, this.onTap, this.onOpenOut});
 
   @override
   State<_DisplayTab> createState() => _DisplayTabState();
@@ -217,16 +228,45 @@ class _DisplayTab extends StatefulWidget {
 
 class _DisplayTabState extends State<_DisplayTab> {
   bool _hover = false;
+  /// 拖着时标签跟着鼠标走的位移；往下拖出标题栏（超过这么多）松手就开新窗口
+  Offset _drag = Offset.zero;
+  static const _dragOut = 24.0;
+
+  void _menu(TapDownDetails d) {
+    final open = widget.onOpenOut;
+    if (open == null) return;
+    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+    showMenu<int>(
+      context: context,
+      position: RelativeRect.fromRect(d.globalPosition & const Size(1, 1), Offset.zero & overlay.size),
+      items: [PopupMenuItem<int>(value: 1, height: 36, child: Text(translate('Open in new window')))],
+    ).then((v) {
+      if (v == 1) open();
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
     final bg = widget.selected ? _kTabSelected : (_hover ? _kHover : Colors.transparent);
+    final canDrag = widget.onOpenOut != null;
     return MouseRegion(
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
       child: GestureDetector(
         onTap: widget.onTap,
-        child: Container(
+        onSecondaryTapDown: _menu,
+        onPanUpdate: canDrag ? (d) => setState(() => _drag += d.delta) : null,
+        onPanEnd: canDrag
+            ? (_) {
+                final out = _drag.dy > _dragOut;
+                setState(() => _drag = Offset.zero);
+                if (out) widget.onOpenOut!();
+              }
+            : null,
+        onPanCancel: canDrag ? () => setState(() => _drag = Offset.zero) : null,
+        child: Transform.translate(
+          offset: _drag,
+          child: Container(
           height: 34,
           margin: const EdgeInsets.only(top: 6, right: 2),
           padding: const EdgeInsets.symmetric(horizontal: 14),
@@ -239,6 +279,7 @@ class _DisplayTabState extends State<_DisplayTab> {
             const SizedBox(width: 6),
             Text(widget.label, style: const TextStyle(fontSize: 13, color: _kText)),
           ]),
+          ),
         ),
       ),
     );
@@ -384,14 +425,14 @@ List<Widget> ddControlMenu(BuildContext context, String id, FFI ffi, {bool fulls
         );
 
     return [
-      sub(DdIcon.monitor, '${translate('Screen {}').replaceAll('{}', '${current + 1}')} (${id.toUpperCase()})', [
+      sub(DdIcon.monitor, '${translate('Screen {${current + 1}}')} (${id.toUpperCase()})', [
         for (var i = 0; i < count; i++)
           RdoMenuButton<int>(
             value: i,
             groupValue: current,
             ffi: ffi,
             onChanged: (_) => openMonitorInTheSameTab(i, ffi, pi),
-            child: Text('${translate('Screen {}').replaceAll('{}', '${i + 1}')}  '
+            child: Text('${translate('Screen {${i + 1}}')}  '
                 '${pi.displays[i].width}×${pi.displays[i].height}'),
           ),
       ]),
