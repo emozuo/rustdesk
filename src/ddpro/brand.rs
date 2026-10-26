@@ -65,6 +65,21 @@ fn managed_lock() {
     );
 }
 
+/// Windows 托盘图标：从界面资源里的 icon.ico（dreamdesk/scripts/gen-icons.py 生成，16–256 各尺寸都缩好了）挑和系统托盘一样大的那一帧。
+/// RustDesk 原来把 256 像素的 icon.png 交给托盘，Windows 缩到 16–24 像素时缩得粗糙：细的几块断开、边缘起锯齿。拿不到就照原样
+#[cfg(windows)]
+pub fn tray_icon() -> Option<tray_icon::Icon> {
+    use winapi::um::winuser::{GetSystemMetrics, SM_CXSMICON, SM_CYSMICON};
+    let path = std::env::current_exe().ok()?.parent()?.join(r"data\flutter_assets\assets\icon.ico");
+    if !path.exists() {
+        return None;
+    }
+    let size = unsafe { (GetSystemMetrics(SM_CXSMICON) as u32, GetSystemMetrics(SM_CYSMICON) as u32) };
+    tray_icon::Icon::from_path(&path, Some(size))
+        .map_err(|e| hbb_common::log::warn!("ddpro: tray icon from {}: {e}", path.display()))
+        .ok()
+}
+
 /// 产品版只维护简体中文和英文（用户 2026-10-19 定）：设置页的语言列表只给这两种。
 pub fn lang_offered(code: &str) -> bool {
     matches!(code, "en" | "zh-cn")

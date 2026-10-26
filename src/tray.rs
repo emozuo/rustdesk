@@ -60,6 +60,8 @@ fn make_tray() -> hbb_common::ResultType<()> {
     };
     let icon = tray_icon::Icon::from_rgba(icon_rgba, icon_width, icon_height)
         .context("Failed to open icon")?;
+    #[cfg(all(windows, feature = "dd-brand"))]
+    let icon = crate::ddpro::brand::tray_icon().unwrap_or(icon);
 
     let mut event_loop = EventLoopBuilder::new().build();
 
