@@ -7,7 +7,9 @@ use crate::{
     ddpro::wire::{wrap, PEER_LOG_INTERVAL},
     ui_session_interface::{InvokeUiSession, Session},
 };
-use base::message_proto::{DisplayInfo, Message, PeerInfo};
+#[cfg(feature = "flutter")]
+use base::message_proto::DisplayInfo;
+use base::message_proto::{Message, PeerInfo};
 use ddpro::{dd_pro, DisplayCaps, FormatCaps};
 use hbb_common::{log, throttled_log, tokio::sync::mpsc::UnboundedSender};
 use serde_json::Value;

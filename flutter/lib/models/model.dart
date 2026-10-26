@@ -850,6 +850,8 @@ class FfiModel with ChangeNotifier {
             evt['original_height'] ?? kInvalidResolutionValue.toString()) ??
         kInvalidResolutionValue;
     newDisplay._scale = _pi.scaleOfDisplay(display);
+    // DreamDesk：切屏消息不带显示器型号，沿用这块屏原来的
+    newDisplay.ddLabel = _pi.displays[display].ddLabel;
     _pi.displays[display] = newDisplay;
 
     if (!_pi.isSupportMultiUiSession || _pi.currentDisplay == display) {

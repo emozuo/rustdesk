@@ -49,9 +49,23 @@ pub fn holds_display(server: &crate::server::Server, name: &str, conn_id: i32) -
 /// 发给主控端的屏幕信息里这块屏的显示器型号名（`DisplayInfo.dd_label`，主控端屏幕标签写「显示屏 1（VX2723）」）。
 /// RustDesk 每 300 毫秒（有连接时）重建一次屏幕列表，这里跟着查一次系统显示配置（实测每块屏几十微秒，
 /// `cargo run -p ddpro-enc --example display_names`）；查不到给空串
+/// 偶尔查不到（换显示模式那一下系统显示配置会短暂查失败）时沿用这块屏上次查到的：型号一变 RustDesk 就当屏幕变了，
+/// 给所有主控端重发整份屏幕列表，标签也会闪一下。代价是同一个接口换上一台报不出型号的显示器时，标签还写着旧型号
 #[cfg(windows)]
 pub fn display_label(name: &str) -> String {
-    ddpro::enc::friendly_name(name).unwrap_or_default()
+    lazy_static::lazy_static! {
+        static ref LAST: std::sync::Mutex<std::collections::HashMap<String, String>> = Default::default();
+    }
+    let mut last = LAST.lock().unwrap();
+    match ddpro::enc::friendly_name(name) {
+        Some(label) => {
+            if last.get(name) != Some(&label) {
+                last.insert(name.to_owned(), label.clone());
+            }
+            label
+        }
+        None => last.get(name).cloned().unwrap_or_default(),
+    }
 }
 
 /// 登录应答的名片：只写专业协议版本，详细能力在请求 / 答复里谈。

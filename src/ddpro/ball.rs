@@ -149,7 +149,7 @@ fn row_top(i: usize) -> f32 {
     PAD + i as f32 * ROW_H + DIVIDER_AFTER.iter().filter(|&&d| d < i).count() as f32 * DIVIDER_H
 }
 
-/// 子菜单的一行：文字、是不是当前选中的（前面一个圆点）、点了做什么（None = 点了只关菜单）
+/// 子菜单的一行：文字、是不是当前选中的（主色字、右边对勾）、点了做什么（None = 点了只关菜单）
 struct SubEntry {
     label: String,
     current: bool,
@@ -190,6 +190,8 @@ enum Target {
     SubRow(usize, usize),
     /// 菜单开着时点在外面：关菜单，这一下不发给远程
     Outside,
+    /// 点在菜单面板上、但不在任何一行上（分隔线、上下留白）：什么也不做
+    Panel,
 }
 
 struct Press {
@@ -406,6 +408,9 @@ impl Ball {
                 Target::Row(r)
             } else if let (Some(r), Some(m)) = (self.sub_row_at(), self.sub_open) {
                 Target::SubRow(m, r)
+            } else if self.menu_open && self.over_ui() {
+                // 面板上不是任何一行的地方（分隔线、上下留白）：不关菜单、也不发给远程
+                Target::Panel
             } else if self.menu_open {
                 Target::Outside
             } else {

@@ -152,10 +152,17 @@ class _DdHomePageState extends State<DdHomePage> {
         if (mounted) setState(() => _expired = true);
         return;
       }
-      final body = jsonDecode(resp.body) as Map<String, dynamic>;
-      if (resp.statusCode != 200) {
+      // 服务器回了话就不是「连不上」：回的不是 JSON（如反向代理的 502 网页）也按服务器出错报，不落到下面的网络错误
+      Map<String, dynamic>? parsed;
+      try {
+        parsed = jsonDecode(resp.body) as Map<String, dynamic>;
+      } catch (e) {
+        debugPrint('dd-home: workstation list is not JSON (HTTP ${resp.statusCode}): $e');
+      }
+      final body = parsed;
+      if (resp.statusCode != 200 || body == null) {
         setState(() {
-          _error = body['error'] as String? ?? translate('Could not load your workstations');
+          _error = body?['error'] as String? ?? translate('Could not load your workstations');
           _netError = false;
         });
         return;
@@ -204,8 +211,9 @@ class _DdHomePageState extends State<DdHomePage> {
 
   Future<void> _connect(_Ws w, {bool fileTransfer = false, bool terminal = false, bool tunnel = false}) async {
     if (!w.connectable) return;
-    // 远程窗口左上角写的是这台机器的备注名（RustDesk 的 alias）：先记成网关给的工作站名，和用户在列表里点的一致
-    if (w.name.isNotEmpty && bind.mainGetPeerOptionSync(id: w.id, key: 'alias') != w.name) {
+    // 远程窗口左上角写的是这台机器的备注名（RustDesk 的 alias）：先记成网关给的工作站名，和用户在列表里点的一致。
+    // 网关没给名字时列表里显示的是设备号，那就不记（左上角照旧取主机名）
+    if (w.name != w.id && bind.mainGetPeerOptionSync(id: w.id, key: 'alias') != w.name) {
       await bind.mainSetPeerAlias(id: w.id, alias: w.name);
     }
     if (!mounted) return;

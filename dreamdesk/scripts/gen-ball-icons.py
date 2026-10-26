@@ -95,10 +95,11 @@ def parse_path(d):
         return v
 
     def flag():
-        # 圆弧的两个标志可能挤在一起（如 "01"）：逐字符取
+        # 圆弧的标志只能是一个字符 0 / 1，可能和后面的数挤在一起（如 "01"、"01.5" 是 0、1、.5）：只取第一个字符，剩下的留给下一个数
         nonlocal i
         t = toks[i]
-        if len(t) > 1 and t[0] in '01' and not t.startswith(('0.', '1.')):
+        assert t[0] in '01', f'bad arc flag {t}'
+        if len(t) > 1:
             toks[i] = t[1:]
             return int(t[0])
         i += 1

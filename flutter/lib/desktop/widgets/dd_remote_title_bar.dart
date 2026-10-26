@@ -639,11 +639,10 @@ Future<void> ddApplyRememberedMouseMode(FFI ffi) async {
 
 Widget _mouseMode(FFI ffi) {
   final reason = _remoteMouseUnavailable(ffi);
-  return FutureBuilder<bool>(
-    future: _remoteMouseRemembered(ffi),
-    builder: (_, snap) {
-      // 记住的是远程鼠标、这次却用不了（没权限、Wayland、对端太旧）时连上就没打开，实际是本地鼠标，按实际的标
-      final remote = (snap.data ?? false) && reason.isEmpty;
+  return Builder(
+    builder: (_) {
+      // 按此刻实际在用的标（不是记住的）：记住远程鼠标、这次却没打开（用不了、按 Ctrl+Alt 临时退出、出错被 RustDesk 关掉）时实际是本地鼠标
+      final remote = ffi.inputModel.relativeMouseMode.value;
       void choose(bool? v) {
         if (v == null) return;
         // 开不成（画面尺寸还没量好、对端不支持；RustDesk 自己会提示）就不记，免得以后每次连上都再试、再提示
