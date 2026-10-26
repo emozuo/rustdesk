@@ -65,10 +65,12 @@ fn main() {
         verify(&ticket, &[("other", srv_pk.as_slice())]).map(|_| ()),
         Err(Error::UnknownKey("dev1".to_owned())),
     );
-    // 主体 3 是撤掉的应急票：按格式错误拒
-    let mut retired = ticket.clone();
-    retired[2 + t.kid.len()] = 3;
-    expect("retired emergency sub_kind", verify(&retired, &trusted).map(|_| ()), Err(Error::Malformed("sub_kind")));
+    // 主体 2（座位）、3（应急）已撤掉：按格式错误拒
+    for (name, kind) in [("retired seat sub_kind", 2u8), ("retired emergency sub_kind", 3)] {
+        let mut retired = ticket.clone();
+        retired[2 + t.kid.len()] = kind;
+        expect(name, verify(&retired, &trusted).map(|_| ()), Err(Error::Malformed("sub_kind")));
+    }
     // 有效期上限 120 秒，多一秒就拒
     let mut long = t.clone();
     long.exp = long.iat + 121;

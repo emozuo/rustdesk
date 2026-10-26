@@ -21,18 +21,17 @@ pub const CLOCK_SKEW: i64 = 60;
 /// 有效期上限（exp − iat，秒）
 pub const MAX_LIFETIME: i64 = 120;
 
-/// 票的主体。3 是撤掉的应急票，不再复用（老的应急票按格式错误拒）
+/// 票的主体：只有登录了的人（用户 10-26 定所有客户端都必须登录）。2（座位）、3（应急）已撤掉，不再复用，
+/// 收到按格式错误拒
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SubKind {
     User = 1,
-    Seat = 2,
 }
 
 impl SubKind {
     fn from_u8(v: u8) -> Option<Self> {
         match v {
             1 => Some(Self::User),
-            2 => Some(Self::Seat),
             _ => None,
         }
     }
