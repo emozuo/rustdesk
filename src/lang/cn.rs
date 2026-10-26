@@ -888,5 +888,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Connected from elsewhere", "你在别处连着"),
         ("In use by someone else", "别人在用"),
         ("Number keys to choose · Enter to connect", "数字键选择 · ENTER 连接"),
+        ("Cannot verify the identity of the remote device", "无法核实对方设备的身份"),
+        ("Please sign in first", "请先登录"),
     ].iter().cloned().collect();
 }

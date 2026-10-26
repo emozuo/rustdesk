@@ -1512,9 +1512,8 @@ fn parse_simple_header(header: &str) -> Vec<HeaderEntry> {
 }
 
 #[cfg(feature = "dd-managed")]
-fn dd_signed_header_entries(url: &str, header: &str, body: &str) -> Vec<HeaderEntry> {
-    let user_auth = header.to_ascii_lowercase().starts_with("authorization:");
-    crate::ddpro::device_sig::headers("POST", url, user_auth, body.as_bytes())
+fn dd_signed_header_entries(url: &str, body: &str) -> Vec<HeaderEntry> {
+    crate::ddpro::device_sig::headers("POST", url, body.as_bytes())
         .into_iter()
         .map(|(name, value)| HeaderEntry {
             name,
@@ -1528,7 +1527,7 @@ fn dd_signed_header_entries(url: &str, header: &str, body: &str) -> Vec<HeaderEn
 async fn post_request_via_tcp_proxy(url: &str, body: &str, header: &str) -> ResultType<String> {
     let headers = parse_simple_header(header);
     #[cfg(feature = "dd-managed")]
-    let headers = [headers, dd_signed_header_entries(url, header, body)].concat();
+    let headers = [headers, dd_signed_header_entries(url, body)].concat();
     let resp = tcp_proxy_request("POST", url, body.as_bytes(), headers).await?;
     if !resp.error.is_empty() {
         bail!("TCP proxy error: {}", resp.error);
@@ -1670,7 +1669,7 @@ async fn post_request_via_tcp_proxy_status(
 ) -> ResultType<(u16, String)> {
     let headers = parse_simple_header(header);
     #[cfg(feature = "dd-managed")]
-    let headers = [headers, dd_signed_header_entries(url, header, body)].concat();
+    let headers = [headers, dd_signed_header_entries(url, body)].concat();
     let resp = tcp_proxy_request("POST", url, body.as_bytes(), headers).await?;
     if !resp.error.is_empty() {
         bail!("TCP proxy error: {}", resp.error);
@@ -1748,12 +1747,7 @@ async fn post_request_(
     }
     req = req.header("Content-Type", "application/json");
     #[cfg(feature = "dd-managed")]
-    for (k, v) in crate::ddpro::device_sig::headers(
-        "POST",
-        url,
-        header.to_ascii_lowercase().starts_with("authorization:"),
-        body.as_bytes(),
-    ) {
+    for (k, v) in crate::ddpro::device_sig::headers("POST", url, body.as_bytes()) {
         req = req.header(k, v);
     }
     let to = std::time::Duration::from_secs(12);
@@ -1863,7 +1857,6 @@ async fn get_http_response_async(
     for (k, v) in crate::ddpro::device_sig::headers(
         &normalized_method.to_ascii_uppercase(),
         url,
-        header.to_ascii_lowercase().contains("\"authorization\""),
         body.as_deref().unwrap_or_default().as_bytes(),
     ) {
         http_client = http_client.header(k, v);

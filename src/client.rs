@@ -4684,8 +4684,8 @@ pub async fn handle_hash(
         }
     }
     #[cfg(feature = "dd-managed")]
-    if let Some(keep) = managed_client::login_with_ticket(&lc, &hash, interface, peer).await {
-        return keep;
+    if managed_client::MANAGED {
+        return managed_client::login_with_ticket(&lc, &hash, interface, peer).await;
     }
     // last password
     let mut password = lc.read().unwrap().password.clone();
