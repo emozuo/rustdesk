@@ -818,6 +818,8 @@ class _WallpaperPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final rect = Offset.zero & size;
+    // 色块的圆比画布大，不裁会画到下面的白色名字栏、操作栏上
+    canvas.clipRect(rect);
     canvas.drawRect(
       rect,
       Paint()
