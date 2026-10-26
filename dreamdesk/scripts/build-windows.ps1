@@ -12,6 +12,8 @@
 param(
   [string[]] $BuildPyFlags = @('--hwcodec', '--vram')
 )
+# 用 powershell -File 跑时，逗号隔开的 -BuildPyFlags 进来是一整个字符串（只有 -Command 才拆成数组）：这里自己拆
+$BuildPyFlags = @($BuildPyFlags | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 # 外部程序（cargo、flutter、python）把进度写到 stderr，PowerShell 5.1 在 Stop 下会把它当致命错误；
 # 所以全局用 Continue，外部程序只看退出码（Invoke-Checked），文件操作各自 -ErrorAction Stop。
 $ErrorActionPreference = 'Continue'
