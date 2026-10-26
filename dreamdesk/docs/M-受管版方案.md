@@ -95,3 +95,13 @@ kiosk 瘦客户机另见 [K-kiosk方案.md](K-kiosk方案.md)。
 - 屏幕编号：`translate` 的占位符要写成 `Screen {2}`（编号写在括号里），之前写 `Screen {}` 再替换，编号被替成空，标签只显示「显示屏」。
 - 实测（本机连 209.32，两块屏）：拖第 2 块、右键第 1 块（当前屏）各一次，新窗口和原窗口各显示对的那块屏。新窗口和原窗口叠在
   同一位置（RustDesk 原样）。
+
+### 第 5 步：打包默认受管版（10-26）
+
+- Linux（`build-linux.sh`）、Windows（`build-windows.ps1`）打包总是带 `--dd-managed`，不再编得出不受管的包。
+- `build.py` 加 `--dd-managed-dev`（受管 + 另信任开发测试钥），测试包用它：`build-linux.sh --dd-managed-dev`、
+  `build-windows.ps1 -BuildPyFlags --hwcodec,--vram,--dd-managed-dev`（Linux 原来的 `EXTRA_FEATURES=dd-managed-dev` 照样能用）。
+- 正式包要等产品钥（PRODUCT_KEYS、PRODUCT_ROOTS）填进 `src/ddpro/managed.rs`：没填时编译直接报错停下（实测 `cargo check` 两条报错），
+  不会悄悄编出只认测试钥的包。
+- 核对：`build.py ... --dd-managed --print-features` 打出 `hwcodec,flutter,dd-pro,dd-brand,dd-managed`，加 `--dd-managed-dev` 多一个
+  `dd-managed-dev`；两个脚本语法检查通过。

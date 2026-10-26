@@ -5,7 +5,8 @@
 #
 # 前置：VS、Flutter 3.24.5、Python 3、Rust、vcpkg（见仓库根的 BUILD-DEPLOY.md）。
 # 用法：powershell -File dreamdesk\scripts\build-windows.ps1
-#       受管版：powershell -File dreamdesk\scripts\build-windows.ps1 -BuildPyFlags --hwcodec,--vram,--dd-managed
+#       测试包（另信任开发测试钥）：powershell -File dreamdesk\scripts\build-windows.ps1 -BuildPyFlags --hwcodec,--vram,--dd-managed-dev
+# 只出受管版：总是带 --dd-managed。正式包要先把产品钥填进 src/ddpro/managed.rs 的 PRODUCT_KEYS，没填时编译直接报错停下。
 # 默认 --hwcodec --vram：和官方 Windows x64 发布版的构建参数一致（.github/workflows/flutter-build.yml），
 # 通用模式因此和官方原版一样；专业模式的采集要用 vram 带来的「直接输出显卡纹理」。
 param(
@@ -181,7 +182,8 @@ function Add-UsbipInstaller([string] $Dest, [string] $File) {
 }
 
 $Version = ((Select-String -Path Cargo.toml -Pattern '^version = "(.+)"' | Select-Object -First 1).Matches[0].Groups[1].Value)
-$BuildPyFlags += @('--dd-pro', '--dd-brand')
+# 只出受管版（M-受管版方案第 5 步）：dd-managed 总是开
+$BuildPyFlags += @('--dd-pro', '--dd-brand', '--dd-managed')
 Write-Host "version $Version"
 $Payload = Get-OfficialPayload
 $UsbipInstaller = Get-UsbipInstaller
