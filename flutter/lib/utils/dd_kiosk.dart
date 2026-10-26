@@ -10,8 +10,8 @@ import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:flutter_hbb/utils/multi_window_manager.dart';
 
 /// 本进程是不是以 `--kiosk` 启动的。读进程自己的启动参数、不由 main() 设：远程窗口跑在同一进程的另一个 Dart 环境里，
-/// main() 设的全局变量它看不到。kiosk 只有 Linux 版
-final bool kDdKiosk = isLinux && _cmdline().contains('--kiosk');
+/// main() 设的全局变量它看不到。kiosk 只有 Linux 的受管版：不开 DreamDesk 开关编的程序带 `--kiosk` 启动也是 RustDesk 原样
+final bool kDdKiosk = isLinux && kDdManaged && _cmdline().contains('--kiosk');
 
 /// 受管版（产品只有受管版，dreamdesk/docs/M-受管版方案.md）：主窗口首页是「我的设备」（desktop/pages/dd_home_page.dart）
 final bool kDdManaged = isDesktop && bind.mainGetCommonSync(key: 'dd-managed') == 'Y';
