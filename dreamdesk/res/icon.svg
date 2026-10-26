@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <!-- DreamDesk 图标：首页（kiosk / 桌面版）左上角的菱形标识放在深色圆角底上。改它要同时改 dreamdesk/scripts/gen-icons.py 里的几何 -->
+  <defs>
+    <radialGradient id="glow" cx="50%" cy="100%" r="75%">
+      <stop offset="0" stop-color="#ff2a3d" stop-opacity="0.32"/>
+      <stop offset="1" stop-color="#ff2a3d" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="256" height="256" rx="56" fill="#05050a"/>
+  <rect width="256" height="256" rx="56" fill="url(#glow)"/>
+  <polygon points="128,41 215,128 128,215 41,128" fill="none" stroke="#ff2a3d" stroke-width="9.2"/>
+  <polygon points="128,84.5 171.5,128 128,171.5 84.5,128" fill="#ff2a3d"/>
+</svg>
