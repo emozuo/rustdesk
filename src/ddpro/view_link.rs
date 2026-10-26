@@ -174,15 +174,16 @@ impl Notice {
         }
     }
 
-    /// 主控端自己推测的通道原因（等 3 秒没画面）：被控端随后报来的确切原因可以替换它
+    /// 主控端自己推测的通道原因（等 3 秒没画面）：被控端随后报来的确切原因可以替换它。
+    /// 「只能在内网用」也是推测（通道打不通 + 走中继）：内网走中继时通道偶尔断一下也会挂上它
     fn is_guess(self) -> bool {
-        matches!(self, Notice::Lost | Notice::ChannelFailed)
+        matches!(self, Notice::Lost | Notice::ChannelFailed | Notice::Relayed)
     }
 
     /// 值得再请求一次（用户切到别的屏、或点「重新进入专业模式」）：和这块屏、这次通道有关的故障。
-    /// 本机不支持、版本不一致，再请求也一样
+    /// 本机不支持、版本不一致，再请求也一样。「只能在内网用」照样能再试：内网走中继时可能只是一次通道故障
     fn retryable(self) -> bool {
-        !matches!(self, Notice::Unsupported | Notice::Version | Notice::Relayed)
+        !matches!(self, Notice::Unsupported | Notice::Version)
     }
 }
 
