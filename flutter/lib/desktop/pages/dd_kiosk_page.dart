@@ -519,8 +519,8 @@ class _DdKioskPageState extends State<DdKioskPage> {
     } else if (total == 0) {
       sub = translate('No workstation has been assigned to you yet. Please contact IT.');
     } else {
-      sub = '${translate('You have {} workstations').replaceAll('{}', '$total')} · '
-          '${translate('{} available').replaceAll('{}', '$ready')}';
+      // translate 的占位符写成 {值}（src/lang.rs 的 extract_placeholder），写 {} 再替换会被替成空
+      sub = '${translate('You have {$total} workstations')} · ${translate('{$ready} available')}';
     }
     return DdKioskWorkstations(
       texts: DdKioskWsTexts(
@@ -552,7 +552,7 @@ class _DdKioskPageState extends State<DdKioskPage> {
       _Cat.peer => (
           translate('Disconnected'),
           translate('Ended from the workstation'),
-          translate('Someone at {} ended this session.').replaceAll('{}', name)
+          translate('Someone at {$name} ended this session.')
         ),
     };
     return DdKioskCard(
@@ -562,8 +562,8 @@ class _DdKioskPageState extends State<DdKioskPage> {
       target: name.isNotEmpty ? DdKioskTarget(translate('Workstation'), name, null, '', '') : null,
       countdown: _cat.auto && _countdown > 0
           ? DdKioskCountdown(
-              translate('Retrying in {} s').replaceAll('{}', '$_countdown'),
-              translate('Tried {} times').replaceAll('{}', '$_failures'),
+              translate('Retrying in {$_countdown} s'),
+              translate('Tried {$_failures} times'),
               _countdown / _countdownTotal)
           : null,
       cta: translate(_cat.auto ? 'Reconnect now' : 'Reconnect'),
