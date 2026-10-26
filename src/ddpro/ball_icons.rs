@@ -3,6 +3,7 @@
 //! 形状不改），由 `ball.rs` 用 tiny-skia 画。
 //! - Lucide（lucide-static 0.460.0，ISC 许可）：描边图标，24 格，线宽按界面规范 1.5
 //! - Fluent UI System Icons（@fluentui/svg-icons 1.1.292，MIT 许可）：填色图标，20 号原图
+//!
 //! 两个库的许可声明原文在文件末尾。
 
 /// 一段路径指令（坐标在图标自己的格子里）
