@@ -3,12 +3,16 @@
 //! 点开两级菜单），改掉审查发现的问题（P1 实施记录第 2 节）：动作在松开时才执行；鼠标在球 / 菜单上时移动、按键、
 //! 滚轮都不发给远程；Esc 关菜单；只在状态变化时重画、只画球和菜单那么大。
 //!
-//! 样式（尺寸、配色、投影、图标、字体）照旧 DreamDesk 的 `client/src/dd_ui_ball.c`（用户 2026-10-20 要求）。
+//! 球的尺寸、投影、字体照旧 DreamDesk 的 `client/src/dd_ui_ball.c`（用户 2026-10-20 要求）；菜单的尺寸、配色、选中样式和图标
+//! 10-27 改成界面原型（dreamdesk/design/prototype/ProBall.html），和通用窗口的控制中心一致，图标都是图标库原图（`ball_icons.rs`）。
 //! 右下角的网络状态块（菜单开关，默认隐藏）显示的是 RustDesk 质量面板在专业模式下的同一份实测值。
 //!
 //! 本模块只管布局、绘制和交互；画出来的图交给专业窗口的叠加图层（`ddpro::view::Window::set_layer`）。
 //! 画法照 RustDesk 白板功能（`src/whiteboard`）：tiny-skia 画形状，ttf-parser 取字形轮廓。
 //! 按窗口坐标（逻辑像素）画：屏幕缩放不是 100% 时由合成器放大（会发虚），专业画面那时本来也不逐像素（质量面板会标「Scaled」）。
+
+#[path = "ball_icons.rs"]
+mod icons;
 
 use ddpro::view::LayerImage;
 use hbb_common::log;
@@ -36,28 +40,40 @@ const DRAG_SLOP: f32 = 3.0;
 const REVEAL: f32 = 24.0;
 /// 停在屏幕中间、没人碰多久就回到顶边
 const IDLE_DOCK: Duration = Duration::from_secs(1);
-// 面板尺寸、配色、字号都照旧 DreamDesk（`client/src/dd_ui_ball.c`，浅色）
-const MENU_W: f32 = 238.0;
+// 面板尺寸、配色、字号照界面原型（dreamdesk/design/prototype/ProBall.html，和通用窗口的控制中心菜单同一套：
+// 宽 230、行高 36、行左右各缩进 6 的圆角悬停块、图标 18、字 14；选中项主色字加右边对勾）
+const MENU_W: f32 = 230.0;
 const SUB_W: f32 = 200.0;
-/// 子菜单文字左边距（前面留给「当前项」的圆点）
-const SUB_TEXT_X: f32 = 34.0;
-const ROW_H: f32 = 34.0;
+/// 行的悬停块离面板左右边的距离，和行里内容的左右内边距
+const ROW_INSET: f32 = 6.0;
+const ROW_PAD: f32 = 10.0;
+/// 子菜单没有图标，文字从行内边距起
+const SUB_TEXT_X: f32 = ROW_INSET + ROW_PAD;
+const ROW_H: f32 = 36.0;
+/// 分组之间的分隔线占的高度（线在正中）
+const DIVIDER_H: f32 = 9.0;
 const PAD: f32 = 6.0;
-const PANEL_RADIUS: f32 = 10.0;
+const PANEL_RADIUS: f32 = 8.0;
 /// 投影向外扩散的像素（球和面板都有）
 const SHADOW: f32 = 10.0;
 const GAP: f32 = 8.0;
+const ICON: f32 = 18.0;
 /// 图标中心、文字左起距面板左边
-const ICON_X: f32 = 16.0;
-const TEXT_X: f32 = 40.0;
-/// 11 号字（Pango 的 11pt ≈ 14.7 像素），思源黑体 DemiLight
-const FONT_PX: f32 = 14.67;
+const ICON_X: f32 = ROW_INSET + ROW_PAD + ICON / 2.0;
+const TEXT_X: f32 = ROW_INSET + ROW_PAD + ICON + 10.0;
+/// 右边的子菜单箭头、对勾（16 像素）中心离面板右边
+const MARK_X: f32 = ROW_INSET + ROW_PAD + 8.0;
+const FONT_PX: f32 = 14.0;
 
-const C_PANEL: [u8; 4] = [255, 255, 255, 250];
-const C_TEXT: [u8; 4] = [41, 41, 46, 255];
-const C_DIM: [u8; 4] = [140, 140, 148, 255];
-const C_HOVER: [u8; 4] = [237, 237, 240, 255];
-const C_DANGER: [u8; 4] = [217, 61, 61, 255];
+// 配色和通用窗口一致（flutter/lib/desktop/widgets/dd_theme.dart）
+const C_PANEL: [u8; 4] = [255, 255, 255, 255];
+const C_TEXT: [u8; 4] = [31, 35, 41, 255];
+const C_TEXT2: [u8; 4] = [100, 106, 115, 255];
+const C_DIM: [u8; 4] = [154, 160, 168, 255];
+const C_HOVER: [u8; 4] = [0, 0, 0, 15];
+const C_LINE: [u8; 4] = [220, 223, 228, 255];
+const C_ACCENT: [u8; 4] = [47, 111, 234, 255];
+const C_DANGER: [u8; 4] = [209, 52, 56, 255];
 /// 球：常态浅灰底 + 浅灰带状边框；悬停时底转白、边框叠蓝。图标颜色始终不变
 const C_BALL: [u8; 4] = [241, 241, 242, 247];
 const C_BALL_H: [u8; 4] = [255, 255, 255, 252];
@@ -113,17 +129,25 @@ enum Item {
     Disconnect,
 }
 
+/// 按组排（照原型的分组：屏幕 / 画面 / 操作 / 退出），组之间一条分隔线，见 [`DIVIDER_AFTER`]
 const ITEMS: [Item; 9] = [
     Item::SwitchDisplay,
     Item::Resolution,
+    Item::Hdr,
     Item::Status,
     Item::Mic,
-    Item::Hdr,
-    Item::General,
     Item::CtrlAltDel,
     Item::Lock,
+    Item::General,
     Item::Disconnect,
 ];
+/// 这几行（[`ITEMS`] 的下标）后面画分隔线
+const DIVIDER_AFTER: [usize; 3] = [0, 3, 7];
+
+/// 主菜单第 `i` 行的上沿离面板上沿多远（算上它前面的分隔线）
+fn row_top(i: usize) -> f32 {
+    PAD + i as f32 * ROW_H + DIVIDER_AFTER.iter().filter(|&&d| d < i).count() as f32 * DIVIDER_H
+}
 
 /// 子菜单的一行：文字、是不是当前选中的（前面一个圆点）、点了做什么（None = 点了只关菜单）
 struct SubEntry {
@@ -146,7 +170,8 @@ impl Item {
                 Item::General => "Switch to general mode",
                 Item::CtrlAltDel => "Insert Ctrl + Alt + Del",
                 Item::Lock => "Insert Lock",
-                Item::Disconnect => "Disconnect",
+                // 和通用窗口控制中心的同一项同名
+                Item::Disconnect => "End remote control",
             }
             .to_owned(),
         )
@@ -286,20 +311,20 @@ impl Ball {
         let mut out = Vec::new();
         match item {
             Item::SwitchDisplay => {
-                let monitor = crate::lang::translate("Monitor".to_owned());
                 for i in 0..self.display_count as i32 {
                     if self.display_fixed && i != self.display_index {
                         continue;
                     }
                     out.push(SubEntry {
-                        label: format!("{monitor} {}", i + 1),
+                        label: screen_name(i),
                         current: i == self.display_index,
                         action: (i != self.display_index).then_some(Action::SwitchDisplay(i)),
                     });
                 }
             }
             Item::Resolution => {
-                let size = |(w, h): (u32, u32)| format!("{w}x{h}");
+                // 和通用窗口控制中心写法一致（乘号）
+                let size = |(w, h): (u32, u32)| format!("{w}×{h}");
                 let change = |r: (u32, u32)| (r != self.remote_size).then_some(Action::ChangeResolution(r.0, r.1));
                 let original = self.original;
                 if original.0 > 0 && original != self.remote_size && self.resolutions.contains(&original) {
@@ -655,7 +680,7 @@ impl Ball {
     /// 主菜单面板（不含投影）
     fn main_rect(&self) -> (f32, f32, f32, f32) {
         let (bx, by) = self.ball_pos();
-        let h = ITEMS.len() as f32 * ROW_H + 2.0 * PAD;
+        let h = row_top(ITEMS.len()) + PAD;
         let x = if bx + BALL / 2.0 < self.screen.0 / 2.0 { bx } else { bx + BALL - MENU_W };
         let mut y = by.max(0.0) + BALL + GAP;
         if y + h > self.screen.1 {
@@ -679,9 +704,10 @@ impl Ball {
             .face
             .as_ref()
             .map_or(0.0, |f| entries.iter().map(|e| text_width(f, &e.label, FONT_PX)).fold(0.0, f32::max));
-        let w = SUB_W.max((SUB_TEXT_X + text + 20.0).ceil());
+        // 右边留出对勾的位置
+        let w = SUB_W.max((SUB_TEXT_X + text + 16.0 + 2.0 * MARK_X).ceil());
         let x = if mx + mw + 4.0 + w <= self.screen.0 { mx + mw + 4.0 } else { mx - 4.0 - w };
-        let y = (my + r as f32 * ROW_H).clamp(0.0, (self.screen.1 - h).max(0.0));
+        let y = (my + row_top(r) - PAD).clamp(0.0, (self.screen.1 - h).max(0.0));
         Some((x.max(0.0), y, w, h))
     }
 
@@ -689,12 +715,9 @@ impl Ball {
         if !self.menu_open {
             return None;
         }
-        let (x, y, w, h) = self.main_rect();
-        if !inside(self.pointer, x, y + PAD, w, h - 2.0 * PAD) {
-            return None;
-        }
-        let r = ((self.pointer.1 - y - PAD) / ROW_H) as usize;
-        (r < ITEMS.len()).then_some(r)
+        let (x, y, w, _) = self.main_rect();
+        // 落在分隔线上不算任何一行
+        (0..ITEMS.len()).find(|&i| inside(self.pointer, x, y + row_top(i), w, ROW_H))
     }
 
     fn sub_row_at(&self) -> Option<usize> {
@@ -720,16 +743,8 @@ impl Ball {
         if hot {
             stroke(&mut pm, band, C_BAND_H, BORDER);
         }
-        // 图标：两条上下叠的胶囊，各带一个错开的小圆点，颜色不随悬停变
-        let (cw, ch, gap) = (17.0, 6.6, 3.0);
-        let (cx, cy) = (l + BALL / 2.0, t + BALL / 2.0);
-        let (x0, y0) = (cx - cw / 2.0, cy - (ch * 2.0 + gap) / 2.0);
-        for r in 0..2 {
-            let ry = y0 + r as f32 * (ch + gap);
-            stroke(&mut pm, rounded(x0, ry, cw, ch, ch / 2.0), C_BALL_FG, 1.4);
-            let dx = if r == 0 { x0 + cw - ch / 2.0 } else { x0 + ch / 2.0 };
-            fill(&mut pm, PathBuilder::from_circle(dx, ry + ch / 2.0, 1.4), C_BALL_FG);
-        }
+        // 图标：控制中心（和通用窗口标题栏的「控制中心」、全屏悬浮球同一个 Fluent 图标，20 号原尺寸），颜色不随悬停变
+        draw_svg(&mut pm, &icons::BALL, l + BALL / 2.0, t + BALL / 2.0, 20.0, C_BALL_FG);
         let (x, y) = self.ball_pos();
         Some(to_layer(&pm, (x - SHADOW).round() as i32, (y - SHADOW).round() as i32))
     }
@@ -761,31 +776,34 @@ impl Ball {
         }
 
         let (x, y, w, _) = main;
+        for &d in &DIVIDER_AFTER {
+            let ly = (y + row_top(d) + ROW_H + DIVIDER_H / 2.0).floor();
+            fill(&mut pm, Rect::from_xywh(x, ly, w, 1.0).map(PathBuilder::from_rect), C_LINE);
+        }
         for (i, item) in ITEMS.iter().enumerate() {
-            let ry = y + PAD + i as f32 * ROW_H;
+            let ry = y + row_top(i);
             if self.hover_row == Some(i) || self.sub_open == Some(i) {
-                fill(&mut pm, rounded(x + 4.0, ry, w - 8.0, ROW_H - 2.0, 7.0), C_HOVER);
+                fill(&mut pm, rounded(x + ROW_INSET, ry, w - 2.0 * ROW_INSET, ROW_H, 6.0), C_HOVER);
             }
+            // 开关项开着时照控制中心：文字主色、右边一个对勾（不用复选框）
+            let on = (*item == Item::Status && self.show_status) || (*item == Item::Mic && self.mic) || (*item == Item::Hdr && self.hdr);
             let fg = match item {
                 Item::Disconnect => C_DANGER,
                 Item::Hdr if !self.hdr_available => C_DIM,
+                _ if on => C_ACCENT,
                 _ => C_TEXT,
             };
             let cy = ry + ROW_H / 2.0;
-            draw_icon(&mut pm, *item, x + ICON_X, cy, fg);
+            draw_svg(&mut pm, item.icon(), x + ICON_X, cy, ICON, fg);
             if let Some(face) = &self.face {
-                draw_text(&mut pm, face, &item.label(), x + TEXT_X, cy, fg, FONT_PX);
+                // 屏幕那一项写正在看的是哪块屏（和通用窗口控制中心一样）
+                let label = if *item == Item::SwitchDisplay { screen_name(self.display_index) } else { item.label() };
+                draw_text(&mut pm, face, &label, x + TEXT_X, cy, fg, FONT_PX);
             }
             if item.has_sub() {
-                chevron(&mut pm, x + w - 16.0, cy, C_DIM);
-            }
-            // 开关项：开着时右边一个对勾
-            if (*item == Item::Status && self.show_status) || (*item == Item::Mic && self.mic) || (*item == Item::Hdr && self.hdr) {
-                let mut pb = PathBuilder::new();
-                pb.move_to(x + w - 21.0, cy);
-                pb.line_to(x + w - 17.5, cy + 3.5);
-                pb.line_to(x + w - 11.0, cy - 4.0);
-                stroke(&mut pm, pb.finish(), C_TEXT, 1.6);
+                draw_svg(&mut pm, &icons::CHEVRON_RIGHT, x + w - MARK_X, cy, 16.0, C_TEXT2);
+            } else if on {
+                draw_svg(&mut pm, &icons::CHECK, x + w - MARK_X, cy, 16.0, C_ACCENT);
             }
         }
 
@@ -793,15 +811,16 @@ impl Ball {
             for (i, e) in self.sub_entries().iter().enumerate() {
                 let ry = sy + PAD + i as f32 * ROW_H;
                 if self.hover_sub == Some(i) {
-                    fill(&mut pm, rounded(sx + 4.0, ry, sw - 8.0, ROW_H - 2.0, 7.0), C_HOVER);
+                    fill(&mut pm, rounded(sx + ROW_INSET, ry, sw - 2.0 * ROW_INSET, ROW_H, 6.0), C_HOVER);
                 }
                 let cy = ry + ROW_H / 2.0;
-                // 当前那一项（看的那块屏、现在的分辨率）前面一个圆点
-                if e.current {
-                    fill(&mut pm, PathBuilder::from_circle(sx + 18.0, cy, 3.2), C_TEXT);
-                }
+                // 当前那一项（看的那块屏、现在的分辨率）：主色字、右边对勾
+                let fg = if e.current { C_ACCENT } else { C_TEXT };
                 if let Some(face) = &self.face {
-                    draw_text(&mut pm, face, &e.label, sx + SUB_TEXT_X, cy, C_TEXT, FONT_PX);
+                    draw_text(&mut pm, face, &e.label, sx + SUB_TEXT_X, cy, fg, FONT_PX);
+                }
+                if e.current {
+                    draw_svg(&mut pm, &icons::CHECK, sx + sw - MARK_X, cy, 16.0, C_ACCENT);
                 }
             }
         }
@@ -870,133 +889,56 @@ fn soft_shadow(pm: &mut Pixmap, x: f32, y: f32, w: f32, h: f32, r: f32) {
     }
 }
 
-/// 子菜单箭头 ›
-fn chevron(pm: &mut Pixmap, cx: f32, cy: f32, color: [u8; 4]) {
-    let mut pb = PathBuilder::new();
-    pb.move_to(cx - 2.5, cy - 4.0);
-    pb.line_to(cx + 2.0, cy);
-    pb.line_to(cx - 2.5, cy + 4.0);
-    stroke(pm, pb.finish(), color, 1.6);
-}
-
-/// 每项左边的线性单色小图标（照旧实现的风格，用路径画，不用图标资源）
-fn draw_icon(pm: &mut Pixmap, item: Item, cx: f32, cy: f32, color: [u8; 4]) {
-    let lw = 1.5;
-    match item {
-        // 屏幕 + 右向箭头（旧实现「切换下一个屏幕」的图标）
-        Item::SwitchDisplay => {
-            stroke(pm, rounded(cx - 7.0, cy - 5.5, 11.0, 10.0, 1.6), color, lw);
-            let mut pb = PathBuilder::new();
-            pb.move_to(cx + 2.0, cy);
-            pb.line_to(cx + 7.0, cy);
-            pb.move_to(cx + 4.5, cy - 2.5);
-            pb.line_to(cx + 7.0, cy);
-            pb.line_to(cx + 4.5, cy + 2.5);
-            stroke(pm, pb.finish(), color, lw);
-        }
-        // 屏幕外框 + 一条斜向双头箭头：改尺寸
-        Item::Resolution => {
-            stroke(pm, rounded(cx - 7.5, cy - 5.5, 15.0, 11.0, 1.6), color, lw);
-            let mut pb = PathBuilder::new();
-            pb.move_to(cx - 3.5, cy + 2.5);
-            pb.line_to(cx + 3.5, cy - 2.5);
-            pb.move_to(cx + 0.5, cy - 2.5);
-            pb.line_to(cx + 3.5, cy - 2.5);
-            pb.line_to(cx + 3.5, cy + 0.3);
-            pb.move_to(cx - 0.5, cy + 2.5);
-            pb.line_to(cx - 3.5, cy + 2.5);
-            pb.line_to(cx - 3.5, cy - 0.3);
-            stroke(pm, pb.finish(), color, 1.3);
-        }
-        // 键盘：圆角外框 + 两排键点 + 一条空格键
-        Item::CtrlAltDel => {
-            stroke(pm, rounded(cx - 7.5, cy - 5.0, 15.0, 10.0, 1.8), color, lw);
-            for row in 0..2 {
-                for col in 0..4 {
-                    let (kx, ky) = (cx - 4.5 + col as f32 * 3.0, cy - 2.2 + row as f32 * 2.6);
-                    fill(pm, PathBuilder::from_circle(kx, ky, 0.75), color);
-                }
-            }
-            let mut pb = PathBuilder::new();
-            pb.move_to(cx - 3.0, cy + 2.8);
-            pb.line_to(cx + 3.0, cy + 2.8);
-            stroke(pm, pb.finish(), color, 1.2);
-        }
-        // 挂锁：锁身 + 半圆锁梁 + 锁孔
-        Item::Lock => {
-            stroke(pm, rounded(cx - 5.5, cy - 1.0, 11.0, 8.0, 1.6), color, lw);
-            let mut pb = PathBuilder::new();
-            pb.move_to(cx - 3.5, cy - 1.0);
-            pb.line_to(cx - 3.5, cy - 3.5);
-            pb.quad_to(cx - 3.5, cy - 7.5, cx, cy - 7.5);
-            pb.quad_to(cx + 3.5, cy - 7.5, cx + 3.5, cy - 3.5);
-            pb.line_to(cx + 3.5, cy - 1.0);
-            stroke(pm, pb.finish(), color, lw);
-            fill(pm, PathBuilder::from_circle(cx, cy + 3.0, 1.1), color);
-        }
-        // 信号条（旧实现「网络状态」的图标）
-        Item::Status => {
-            for i in 0..3 {
-                let bh = 3.0 + i as f32 * 3.0;
-                fill(pm, Rect::from_xywh(cx - 6.0 + i as f32 * 4.5, cy + 5.0 - bh, 2.6, bh).map(PathBuilder::from_rect), color);
-            }
-        }
-        // 话筒：胶囊形头 + U 形托架 + 立杆和底座
-        Item::Mic => {
-            stroke(pm, rounded(cx - 2.6, cy - 7.0, 5.2, 9.0, 2.6), color, lw);
-            let mut pb = PathBuilder::new();
-            pb.move_to(cx - 5.0, cy - 1.0);
-            pb.quad_to(cx - 5.0, cy + 4.5, cx, cy + 4.5);
-            pb.quad_to(cx + 5.0, cy + 4.5, cx + 5.0, cy - 1.0);
-            pb.move_to(cx, cy + 4.5);
-            pb.line_to(cx, cy + 7.0);
-            pb.move_to(cx - 3.0, cy + 7.0);
-            pb.line_to(cx + 3.0, cy + 7.0);
-            stroke(pm, pb.finish(), color, lw);
-        }
-        // 圆圈、右半边涂满：明暗对比（亮度范围）
-        Item::Hdr => {
-            let (r, k) = (6.5, 0.5523 * 6.5);
-            let mut pb = PathBuilder::new();
-            pb.push_circle(cx, cy, r);
-            stroke(pm, pb.finish(), color, lw);
-            let mut pb = PathBuilder::new();
-            pb.move_to(cx, cy - r);
-            pb.cubic_to(cx + k, cy - r, cx + r, cy - k, cx + r, cy);
-            pb.cubic_to(cx + r, cy + k, cx + k, cy + r, cx, cy + r);
-            pb.close();
-            fill(pm, pb.finish(), color);
-        }
-        // 上下两条反向箭头：在两种模式之间切换
-        Item::General => {
-            let mut pb = PathBuilder::new();
-            pb.move_to(cx - 6.5, cy - 3.0);
-            pb.line_to(cx + 6.5, cy - 3.0);
-            pb.move_to(cx + 4.0, cy - 5.5);
-            pb.line_to(cx + 6.5, cy - 3.0);
-            pb.line_to(cx + 4.0, cy - 0.5);
-            pb.move_to(cx + 6.5, cy + 3.5);
-            pb.line_to(cx - 6.5, cy + 3.5);
-            pb.move_to(cx - 4.0, cy + 1.0);
-            pb.line_to(cx - 6.5, cy + 3.5);
-            pb.line_to(cx - 4.0, cy + 6.0);
-            stroke(pm, pb.finish(), color, lw);
-        }
-        // 向右出门的箭头（旧实现「退出远控」的图标）
-        Item::Disconnect => {
-            let mut pb = PathBuilder::new();
-            pb.move_to(cx + 1.0, cy - 6.0);
-            pb.line_to(cx - 6.0, cy - 6.0);
-            pb.line_to(cx - 6.0, cy + 6.0);
-            pb.line_to(cx + 1.0, cy + 6.0);
-            pb.move_to(cx + 2.0, cy);
-            pb.line_to(cx + 7.0, cy);
-            pb.move_to(cx + 4.5, cy - 2.5);
-            pb.line_to(cx + 7.0, cy);
-            pb.line_to(cx + 4.5, cy + 2.5);
-            stroke(pm, pb.finish(), color, lw);
+impl Item {
+    /// 每项左边的图标（图标库原图，见 `ball_icons.rs`；和通用窗口控制中心用的同一批）
+    fn icon(self) -> &'static icons::Icon {
+        match self {
+            Item::SwitchDisplay => &icons::MONITOR,
+            Item::Resolution => &icons::RESOLUTION,
+            Item::Status => &icons::SIGNAL,
+            Item::Mic => &icons::MIC,
+            Item::Hdr => &icons::HDR,
+            // 切到通用模式：通用模式就是普通的远程画面，原型里用显示器图标
+            Item::General => &icons::MONITOR,
+            Item::CtrlAltDel => &icons::KEYBOARD,
+            Item::Lock => &icons::LOCK,
+            Item::Disconnect => &icons::LOG_OUT,
         }
     }
+}
+
+/// 以 (cx, cy) 为中心、边长 `size` 画一个图标：描边图标线宽 1.5（图标格子里的单位，和通用窗口一样随尺寸缩放）、圆头圆角
+fn draw_svg(pm: &mut Pixmap, icon: &icons::Icon, cx: f32, cy: f32, size: f32, color: [u8; 4]) {
+    let mut pb = PathBuilder::new();
+    for seg in icon.segs {
+        match *seg {
+            icons::Seg::M(x, y) => pb.move_to(x, y),
+            icons::Seg::L(x, y) => pb.line_to(x, y),
+            icons::Seg::C(x1, y1, x2, y2, x, y) => pb.cubic_to(x1, y1, x2, y2, x, y),
+            icons::Seg::Z => pb.close(),
+        }
+    }
+    let Some(path) = pb.finish() else {
+        return;
+    };
+    let k = size / icon.grid;
+    let t = Transform::from_row(k, 0.0, 0.0, k, cx - size / 2.0, cy - size / 2.0);
+    if icon.fill {
+        pm.fill_path(&path, &paint(color), FillRule::Winding, t, None);
+    } else {
+        let s = Stroke {
+            width: 1.5,
+            line_cap: LineCap::Round,
+            line_join: LineJoin::Round,
+            ..Stroke::default()
+        };
+        pm.stroke_path(&path, &paint(color), &s, t, None);
+    }
+}
+
+/// 「显示屏 1」（和通用窗口的屏幕标签、控制中心同一个词条）
+fn screen_name(index: i32) -> String {
+    crate::lang::translate(format!("Screen {{{}}}", index + 1))
 }
 
 fn inside((px, py): (f32, f32), x: f32, y: f32, w: f32, h: f32) -> bool {
