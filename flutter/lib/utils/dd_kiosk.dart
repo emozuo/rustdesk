@@ -19,12 +19,13 @@ List<String> _cmdline() {
   }
 }
 
-/// 远程窗口 → 主窗口：这次连接因为出错结束了（参数是 JSON：reason 给人看的原因，manual 是不是被人手动断开的）
+/// 远程窗口 → 主窗口：这次连接因为出错结束了（参数是 JSON：reason 给人看的原因，manual 是不是工作站上的人断开的，
+/// refused 是不是被拒）
 const String kWindowDdKioskSessionEnded = 'dd_kiosk_session_ended';
 
 /// 远程窗口里调用（提示框入口）：kiosk 下远程窗口不自己重试，连接类的错误（连接出错、登录被拒、要票被拒）和没人能填的口令框
-/// 一出来，就把原因交给主窗口的状态页、关掉这个连接，由状态页过一会儿重新问绑定再连——座位改绑了能跟上，被拒时不会每次重试都
-/// 要一张票。返回 true 表示已接手、不弹提示框
+/// 一出来，就把原因交给主窗口、关掉这个连接，由主窗口的状态卡片决定：掉线的过一会儿重连同一台，被拒的停住（再试也一样，
+/// 免得每次重试都要一张票）。返回 true 表示已接手、不弹提示框
 bool ddKioskTakeOverMsgBox(String type, String title, String text,
     SessionID sessionId, String peerId, void Function() reconnectViaRelay) {
   if (!kDdKiosk) return false;
@@ -35,23 +36,27 @@ bool ddKioskTakeOverMsgBox(String type, String title, String text,
     return true;
   }
   final String reason;
+  // 被拒（要票被拒、被控端不认票、没人能填的口令框）：再试也一样，状态页不自动重连
+  var refused = false;
   if (type == 'error' &&
       (title == 'Connection Error' ||
           title == 'Login Error' ||
           title == 'Error' ||
           title == 'Connection authorization failed')) {
     reason = translate(text);
+    refused = title != 'Connection Error' && title != 'Error';
   } else if (type == 'input-password' || type == 're-input-password') {
     reason = translate('Connection authorization failed');
+    refused = true;
   } else {
     return false;
   }
-  // 只有工作站上的人断开的（「Closed manually by the peer」）才停住；「… by web console」是服务端经心跳要断的，
-  // 收回授权、解绑、改绑、退役、控制台单独断开都是这一句，照常退避后重新问绑定（绑定没变就连回原工作站）
+  // 只有工作站上的人断开的（「Closed manually by the peer」）才停住；「… by web console」是服务端经心跳要断的
+  // （收回授权、控制台单独断开等都是这一句），照掉线处理：退避后重连，授权真收回了，那次要票会被拒、停在卡片上
   final manual = text.toLowerCase().contains('manually by the peer');
   () async {
     await rustDeskWinManager.call(WindowType.Main, kWindowDdKioskSessionEnded,
-        jsonEncode({'reason': reason, 'manual': manual}));
+        jsonEncode({'reason': reason, 'manual': manual, 'refused': refused}));
     // 和专业模式关窗同一套收尾：专业画面开着时这个窗口是藏着的，只移除标签关不掉会话和窗口（见那里的说明）；
     // 关窗走子窗口的关闭流程，会通知主窗口把它移出活动名单
     onDdproWindowEvent(sessionId, peerId, {'action': 'close'});
@@ -62,7 +67,8 @@ bool ddKioskTakeOverMsgBox(String type, String title, String text,
 class DdKioskSessionEnd {
   final String reason;
   final bool manual;
-  DdKioskSessionEnd(this.reason, this.manual);
+  final bool refused;
+  DdKioskSessionEnd(this.reason, this.manual, this.refused);
 }
 
 /// 主窗口收到的最近一次「连接出错结束」；状态页看到远程窗口关了时取走它，取不到就是用户自己断开的
@@ -73,7 +79,7 @@ void ddKioskOnSessionEnded(dynamic args) {
   try {
     final m = jsonDecode(args as String) as Map<String, dynamic>;
     ddKioskLastEnd.value =
-        DdKioskSessionEnd(m['reason'] as String? ?? '', m['manual'] == true);
+        DdKioskSessionEnd(m['reason'] as String? ?? '', m['manual'] == true, m['refused'] == true);
   } catch (e) {
     debugPrint('dd-kiosk: bad session-ended message: $e');
   }

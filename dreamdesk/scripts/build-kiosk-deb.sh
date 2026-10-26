@@ -48,8 +48,8 @@ Priority: optional
 Version: $DEB_VERSION
 Architecture: all
 Maintainer: $MAINTAINER
-Depends: $APP, gnome-kiosk, gdm3, accountsservice, dconf-cli, openssh-server
-Description: DreamDesk kiosk: boots straight into a full-screen connection to the bound workstation.
+Depends: $APP, gnome-kiosk, gdm3, accountsservice, dconf-cli, openssh-server, fonts-noto-cjk
+Description: DreamDesk kiosk: boots into a sign-in page, then a full-screen connection to the user's workstation.
 
 EOF
 (cd "$D" && find usr -type f -exec md5sum {} + >DEBIAN/md5sums)

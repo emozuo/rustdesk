@@ -172,6 +172,8 @@ void runMainApp(bool startService) async {
     windowManager.setTitle(getWindowName());
     // Do not use `windowManager.setResizable()` here.
     setResizable(!bind.isIncomingOnly());
+    // kiosk 页要全屏：得在窗口显示、恢复完位置之后设，页面建起来时设会被这一段盖掉
+    if (kDdKiosk) windowManager.setFullScreen(true);
   });
 }
 
