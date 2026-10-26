@@ -127,7 +127,6 @@ class _DdKioskPageState extends State<DdKioskPage> {
     if (_sessionOpen && !open) _onSessionClosed();
     if (!_sessionOpen && open) {
       _openedAt = DateTime.now();
-      _lastInput = DateTime.now();
       setState(() => _phase = _Phase.session);
     }
     _sessionOpen = open;
@@ -137,7 +136,8 @@ class _DdKioskPageState extends State<DdKioskPage> {
     }
     if (_phase == _Phase.list && DateTime.now().difference(_lastListFetch) >= _listRefresh) _fetchList();
     final idle = DateTime.now().difference(_lastInput) >= _idleSignOut;
-    if (idle && _phase == _Phase.list) {
+    // 状态卡片也算：人走了、卡片停着（或掉线类一直自己重试），不能让下一个坐下的人接着用上一个人的身份
+    if (idle && (_phase == _Phase.list || _phase == _Phase.card)) {
       debugPrint('dd-kiosk: idle, signing out');
       _signOut(message: translate('Signed out after 15 minutes of inactivity.'));
     } else if (idle && _phase == _Phase.login) {
@@ -150,10 +150,12 @@ class _DdKioskPageState extends State<DdKioskPage> {
     final end = ddKioskLastEnd.value;
     ddKioskLastEnd.value = null;
     final opened = _openedAt;
+    // 连上用了一阵才算有人在（远程窗口里的操作这里看不到）：闲置从会话结束算起。自动重试开了又很快关掉的不算，
+    // 不然掉线类卡片一直自己重试、永远到不了闲置退出
     if (opened != null && DateTime.now().difference(opened) >= _stableSession) {
       _failures = 0;
+      _lastInput = DateTime.now();
     }
-    _lastInput = DateTime.now();
     if (end == null) {
       debugPrint('dd-kiosk: session closed by the user');
       _showList();
@@ -209,7 +211,8 @@ class _DdKioskPageState extends State<DdKioskPage> {
       if (!mounted) return;
       setState(() {
         _lastUser = user;
-        _userName = resp.user?.name ?? user;
+        // 网关没给名字（空串）也要有名字：顶栏的用户菜单（退出登录）靠它才出来
+        _userName = (resp.user?.name ?? '').isNotEmpty ? resp.user!.name : user;
         _displayName = resp.user?.displayName ?? '';
         _loginBusy = false;
         _items = [];
@@ -272,10 +275,14 @@ class _DdKioskPageState extends State<DdKioskPage> {
 
   Future<void> _fetchList() async {
     _lastListFetch = DateTime.now();
+    final token = bind.mainGetLocalOption(key: 'access_token');
+    // 请求在路上时换了人（退出、别人登录）：晚回来的结果是上一个人的，丢掉（不然显示上一个人的工作站，
+    // 或者拿上一个人已注销的令牌被拒、把刚登录的人踢下线）
+    bool stale() => !mounted || bind.mainGetLocalOption(key: 'access_token') != token;
     try {
       final api = await bind.mainGetApiServer();
       final resp = await http.get(Uri.parse('$api/api/dd/workstations'), headers: getHttpHeaders());
-      if (!mounted) return;
+      if (stale()) return;
       if (resp.statusCode == 401) {
         debugPrint('dd-kiosk: token rejected while listing workstations');
         _signOut(message: translate('Your sign-in has expired. Please sign in again.'));
@@ -310,7 +317,7 @@ class _DdKioskPageState extends State<DdKioskPage> {
       });
     } catch (e) {
       debugPrint('dd-kiosk: listing workstations failed: $e');
-      if (mounted) setState(() => _listError = translate('Cannot reach the server'));
+      if (!stale()) setState(() => _listError = translate('Cannot reach the server'));
     }
   }
 
@@ -331,6 +338,8 @@ class _DdKioskPageState extends State<DdKioskPage> {
   Future<void> _connect() async {
     final w = _target;
     if (w == null || _sessionOpen) return;
+    // 退出登录要等几步才切回登录页：期间倒计时到点的重连不能再开出上一个人的会话
+    if (bind.mainGetLocalOption(key: 'access_token').isEmpty) return;
     final seq = ++_seq;
     setState(() {
       _phase = _Phase.connecting;
@@ -361,11 +370,17 @@ class _DdKioskPageState extends State<DdKioskPage> {
       _confirm = false;
       _phase = _Phase.shuttingDown;
     });
-    final r = await Process.run('systemctl', ['poweroff']);
-    if (r.exitCode != 0 && mounted) {
-      debugPrint('dd-kiosk: poweroff failed: ${r.stderr}');
-      setState(() => _phase = _userName.isEmpty ? _Phase.login : _Phase.list);
+    // 起不了进程（找不到 systemctl 等）也要退回去：关机页上没有别的按钮，停在那里只能按电源键
+    String failure;
+    try {
+      final r = await Process.run('systemctl', ['poweroff']);
+      if (r.exitCode == 0) return;
+      failure = '${r.stderr}';
+    } catch (e) {
+      failure = '$e';
     }
+    debugPrint('dd-kiosk: poweroff failed: $failure');
+    if (mounted) setState(() => _phase = _userName.isEmpty ? _Phase.login : _Phase.list);
   }
 
   bool get _zh {
