@@ -1,4 +1,4 @@
-//! 专业窗口悬浮球的图标：全部是开源图标库的原图（清单见 dreamdesk/design/图标清单.md），本文件由草稿脚本从原文件生成，不手改。
+//! 专业窗口悬浮球的图标：全部是开源图标库的原图（清单见 dreamdesk/design/图标清单.md），本文件由 dreamdesk/scripts/gen-ball-icons.py 从原文件生成，不手改。
 //! SVG 的路径、圆、矩形、直线、折线换算成绝对坐标的 移到 / 直线 / 三次曲线 / 闭合（圆弧按 SVG 规范换成三次曲线逼近，
 //! 形状不改），由 `ball.rs` 用 tiny-skia 画。
 //! - Lucide（lucide-static 0.460.0，ISC 许可）：描边图标，24 格，线宽按界面规范 1.5

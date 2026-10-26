@@ -1,5 +1,5 @@
 // DreamDesk 受管版界面的图标，全部是开源图标库的原图（路径照抄、不手改），清单见 dreamdesk/design/图标清单.md。
-// 本文件由草稿脚本从图标库原文件生成（各库的许可声明原文在文件末尾）：
+// 本文件由 dreamdesk/scripts/gen-dd-icons.py 从图标库原文件生成（各库的许可声明原文在文件末尾）：
 // - Lucide（lucide-static 0.460.0，ISC 许可）：描边图标，线宽统一 1.5（界面规范；Lucide 支持调线宽，路径不动）
 // - Fluent UI System Icons（@fluentui/svg-icons 1.1.292，MIT 许可）：填色图标，按显示尺寸用对应号的原图，不缩放
 // - Font Awesome Free 6.6.0 品牌图标（CC BY 4.0 许可，https://fontawesome.com/license/free）：系统标志
