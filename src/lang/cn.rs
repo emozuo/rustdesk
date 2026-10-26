@@ -912,5 +912,6 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("End remote control", "退出远控"),
         ("Turn on the microphone", "打开麦克风"),
         ("Turn off the microphone", "关闭麦克风"),
+        ("These settings will be removed: remote settings are now changed in each machine's Control center and remembered per machine. They are kept here, read-only, for comparison.", "这一页将移除：远程相关的设置改在每台机器的「控制中心」里调，按机器记住。这里先留着对照，不能修改。"),
     ].iter().cloned().collect();
 }

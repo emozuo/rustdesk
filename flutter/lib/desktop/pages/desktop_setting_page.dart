@@ -9,6 +9,7 @@ import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/common/widgets/audio_input.dart';
 import 'package:flutter_hbb/common/widgets/setting_widgets.dart';
 import 'package:flutter_hbb/consts.dart';
+import 'package:flutter_hbb/utils/dd_kiosk.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_home_page.dart';
 import 'package:flutter_hbb/common/widgets/keyboard_shortcuts/page_body.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_keyboard_shortcuts_page.dart';
@@ -1987,7 +1988,7 @@ class _DisplayState extends State<_Display> {
   @override
   Widget build(BuildContext context) {
     final scrollController = ScrollController();
-    return ListView(controller: scrollController, children: [
+    final cards = [
       viewStyle(context),
       scrollStyle(context),
       imageQuality(context),
@@ -1995,6 +1996,21 @@ class _DisplayState extends State<_Display> {
       if (isDesktop) trackpadSpeed(context),
       if (!isWeb) privacyModeImpl(context),
       other(context),
+    ];
+    // DreamDesk 受管版：远程相关的设置改在每台机器的「控制中心」里、按机器记（用户 10-26 定，照 UU），这一页要去掉；
+    // 用户想先留着对照，所以先置灰、不能改，顶上说明
+    return ListView(controller: scrollController, children: [
+      if (kDdManaged) ...[
+        _Card(title: 'Display', children: [
+          Text(
+                  translate(
+                      'These settings will be removed: remote settings are now changed in each machine\'s Control center and remembered per machine. They are kept here, read-only, for comparison.'),
+                  style: const TextStyle(height: 1.6))
+              .marginOnly(left: 4, right: 4, bottom: 8),
+        ]),
+        IgnorePointer(child: Opacity(opacity: 0.45, child: Column(children: cards))),
+      ] else
+        ...cards,
     ]).marginOnly(bottom: _kListViewBottomMargin);
   }
 
