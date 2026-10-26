@@ -26,6 +26,7 @@ import 'package:window_manager/window_manager.dart';
 import 'common.dart';
 import 'consts.dart';
 import 'desktop/pages/dd_home_page.dart';
+import 'desktop/widgets/dd_theme.dart';
 import 'desktop/pages/dd_kiosk_page.dart';
 import 'utils/dd_kiosk.dart';
 import 'mobile/pages/home_page.dart';
@@ -366,9 +367,10 @@ void _runApp(
       navigatorKey: globalKey,
       debugShowCheckedModeBanner: false,
       title: title,
-      theme: MyTheme.lightTheme,
+      // DreamDesk 受管版：整体换成界面规范的主题（desktop/widgets/dd_theme.dart），先固定浅色
+      theme: kDdManaged ? ddLightTheme() : MyTheme.lightTheme,
       darkTheme: MyTheme.darkTheme,
-      themeMode: themeMode,
+      themeMode: kDdManaged ? ThemeMode.light : themeMode,
       home: home,
       localizationsDelegates: const [
         GlobalMaterialLocalizations.delegate,
@@ -503,9 +505,9 @@ class _AppState extends State<App> with WidgetsBindingObserver {
           title: isWeb
               ? '${bind.mainGetAppNameSync()} Web Client V2 (Preview)'
               : bind.mainGetAppNameSync(),
-          theme: MyTheme.lightTheme,
+          theme: kDdManaged ? ddLightTheme() : MyTheme.lightTheme,
           darkTheme: MyTheme.darkTheme,
-          themeMode: MyTheme.currentThemeMode(),
+          themeMode: kDdManaged ? ThemeMode.light : MyTheme.currentThemeMode(),
           home: isDesktop
               ? (kDdKiosk
                   ? const DdKioskPage()

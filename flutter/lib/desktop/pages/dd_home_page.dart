@@ -15,6 +15,7 @@ import 'package:flutter_hbb/common/hbbs/hbbs.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_setting_page.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_tab_page.dart';
 import 'package:flutter_hbb/desktop/widgets/dd_icons.dart';
+import 'package:flutter_hbb/desktop/widgets/dd_theme.dart';
 import 'package:flutter_hbb/desktop/widgets/tabbar_widget.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:flutter_hbb/models/state_model.dart';
@@ -23,15 +24,15 @@ import 'package:get/get.dart';
 import 'package:window_manager/window_manager.dart';
 
 // UU 的配色：标题栏和左栏同一个浅灰，内容区更浅，选中项再深一点，主色是蓝
-const _kChrome = Color(0xFFEDEFF3);
-const _kPane = Color(0xFFF7F8FA);
-const _kSelected = Color(0xFFE1E4E9);
-const _kBlue = Color(0xFF3B7BF6);
-const _kText = Color(0xFF1F2329);
-const _kText2 = Color(0xFF646A73);
-const _kText3 = Color(0xFF9AA0A8);
-const _kLine = Color(0xFFDCDFE4);
-const _kGreen = Color(0xFF22C55E);
+const _kChrome = DdColors.chrome;
+const _kPane = DdColors.pane;
+const _kSelected = DdColors.selected;
+const _kBlue = DdColors.accent;
+const _kText = DdColors.ink;
+const _kText2 = DdColors.ink2;
+const _kText3 = DdColors.ink3;
+const _kLine = DdColors.line;
+const _kGreen = DdColors.online;
 
 enum _WsState { available, mine, busy, offline }
 
@@ -296,7 +297,7 @@ class _DdHomePageState extends State<DdHomePage> {
               style: const TextStyle(fontSize: 15, color: _kText)),
           if (_error.isNotEmpty) ...[
             const SizedBox(height: 8),
-            Text(_error, style: const TextStyle(fontSize: 13, color: Color(0xFFE5484D))),
+            Text(_error, style: const TextStyle(fontSize: 13, color: DdColors.dangerText)),
           ],
           const SizedBox(height: 18),
           _BlueButton(label: translate('Sign in now'), onTap: () => _showLogin(context)),
@@ -359,7 +360,7 @@ class _DdHomePageState extends State<DdHomePage> {
             decoration: BoxDecoration(
               color: Colors.white,
               borderRadius: BorderRadius.circular(8),
-              boxShadow: const [BoxShadow(color: Color(0x14000000), blurRadius: 10, offset: Offset(0, 2))],
+              boxShadow: DdShadow.card,
             ),
             clipBehavior: Clip.antiAlias,
             child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
@@ -396,14 +397,14 @@ class _DdHomePageState extends State<DdHomePage> {
 
   Color _stateColor(_WsState s) => switch (s) {
         _WsState.available => _kGreen,
-        _WsState.mine => const Color(0xFF14B8A6),
-        _WsState.busy => const Color(0xFFF97316),
+        _WsState.mine => DdColors.mine,
+        _WsState.busy => DdColors.busy,
         _WsState.offline => _kText3,
       };
 }
 
 void _showLogin(BuildContext context) {
-  showDialog(context: context, barrierColor: const Color(0x66000000), builder: (_) => const _LoginDialog());
+  showDialog(context: context, barrierColor: DdColors.scrim, builder: (_) => const _LoginDialog());
 }
 
 /// 标题栏：左边图标和程序名，右边账户、菜单、最小化 / 关闭（照 UU，没有最大化按钮，双击标题栏照样最大化）。
@@ -644,7 +645,7 @@ class _SideRow extends StatelessWidget {
             borderRadius: BorderRadius.circular(6),
             child: InkWell(
               borderRadius: BorderRadius.circular(6),
-              hoverColor: const Color(0x0F000000),
+              hoverColor: DdColors.hover,
               onTap: () {
                 onTap();
                 if (onDoubleTap != null && _Clicks.isDouble('side:$label')) onDoubleTap!();
@@ -688,15 +689,15 @@ class _OsBadge extends StatelessWidget {
   Widget build(BuildContext context) {
     final p = os.toLowerCase();
     final (IconData icon, Color color) = p.startsWith('linux')
-        ? (Icons.terminal, const Color(0xFFF08A24))
+        ? (Icons.terminal, DdColors.osLinux)
         : p.startsWith('mac')
-            ? (Icons.apple, const Color(0xFF1F2329))
-            : (Icons.window, const Color(0xFF3B7BF6));
+            ? (Icons.apple, DdColors.osMac)
+            : (Icons.window, DdColors.osWindows);
     return Container(
       width: size,
       height: size,
       decoration: BoxDecoration(
-        color: online ? color : const Color(0xFFB8BDC5),
+        color: online ? color : DdColors.offline,
         borderRadius: BorderRadius.circular(size * 0.22),
       ),
       child: Icon(icon, size: size * 0.66, color: Colors.white),
@@ -736,7 +737,7 @@ class _StatePill extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.fromLTRB(8, 3, 10, 3),
-      decoration: BoxDecoration(color: const Color(0xFF1F2329), borderRadius: BorderRadius.circular(12)),
+      decoration: BoxDecoration(color: DdColors.pill, borderRadius: BorderRadius.circular(DdRadius.pill)),
       child: Row(mainAxisSize: MainAxisSize.min, children: [
         Container(width: 7, height: 7, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
         const SizedBox(width: 5),
@@ -760,7 +761,7 @@ class _BlueButton extends StatelessWidget {
       child: TextButton(
         onPressed: onTap,
         style: TextButton.styleFrom(
-          backgroundColor: onTap == null ? const Color(0xFFC9CDD4) : _kBlue,
+          backgroundColor: onTap == null ? DdColors.disabledFill : _kBlue,
           foregroundColor: Colors.white,
           disabledForegroundColor: Colors.white,
           padding: const EdgeInsets.symmetric(horizontal: 24),
@@ -1117,7 +1118,7 @@ class _LoginDialogState extends State<_LoginDialog> {
               colors: [Color(0xFFDCE8FF), Colors.white],
               stops: [0, 0.45],
             ),
-            boxShadow: const [BoxShadow(color: Color(0x33000000), blurRadius: 30, offset: Offset(0, 10))],
+            boxShadow: DdShadow.dialog,
           ),
           child: Stack(children: [
             Positioned(
@@ -1167,7 +1168,7 @@ class _LoginDialogState extends State<_LoginDialog> {
                   height: 34,
                   child: Align(
                     alignment: Alignment.centerLeft,
-                    child: Text(_error, style: const TextStyle(fontSize: 12, color: Color(0xFFE5484D))),
+                    child: Text(_error, style: const TextStyle(fontSize: 12, color: DdColors.dangerText)),
                   ),
                 ),
                 _BlueButton(label: translate(_busy ? 'Loading...' : 'Login'), onTap: _ready ? _submit : null, expand: true),

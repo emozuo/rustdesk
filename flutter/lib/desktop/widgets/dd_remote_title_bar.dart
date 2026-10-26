@@ -11,6 +11,7 @@ import 'package:flutter_hbb/common/widgets/toolbar.dart';
 import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/desktop/pages/remote_page.dart';
 import 'package:flutter_hbb/desktop/widgets/dd_icons.dart';
+import 'package:flutter_hbb/desktop/widgets/dd_theme.dart';
 import 'package:flutter_hbb/desktop/widgets/remote_toolbar.dart';
 import 'package:flutter_hbb/desktop/widgets/tabbar_widget.dart';
 import 'package:flutter_hbb/models/chat_model.dart';
@@ -22,15 +23,15 @@ import 'package:flutter_svg/flutter_svg.dart';
 import 'package:get/get.dart';
 
 // 和主窗口首页同一套 UU 的浅色
-const _kChrome = Color(0xFFEDEFF3);
-const _kTabSelected = Color(0xFFFFFFFF);
-const _kHover = Color(0x0F000000);
-const _kText = Color(0xFF1F2329);
-const _kText2 = Color(0xFF646A73);
-const _kText3 = Color(0xFF9AA0A8);
-const _kLine = Color(0xFFDCDFE4);
-const _kBlue = Color(0xFF3B7BF6);
-const _kGreen = Color(0xFF22C55E);
+const _kChrome = DdColors.chrome;
+const _kTabSelected = DdColors.surface;
+const _kHover = DdColors.hover;
+const _kText = DdColors.ink;
+const _kText2 = DdColors.ink2;
+const _kText3 = DdColors.ink3;
+const _kLine = DdColors.line;
+const _kBlue = DdColors.accent;
+const _kGreen = DdColors.online;
 
 class DdRemoteTitleBar extends StatefulWidget {
   final DesktopTabController tabController;
@@ -456,7 +457,7 @@ List<Widget> ddControlMenu(BuildContext context, String id, FFI ffi, {bool fulls
         fullscreen
             ? item(DdIcon.arrowUpCircle, translate('Exit Fullscreen'), () => stateGlobal.setFullscreen(false))
             : item(DdIcon.arrowUpCircle, translate('Fullscreen'), () => stateGlobal.setFullscreen(true)),
-      item(DdIcon.close, translate('End remote control'), () => closeConnection(id: id), color: const Color(0xFFE5484D)),
+      item(DdIcon.close, translate('End remote control'), () => closeConnection(id: id), color: DdColors.dangerText),
     ];
 }
 

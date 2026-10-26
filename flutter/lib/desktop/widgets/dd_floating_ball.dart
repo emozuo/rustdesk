@@ -7,6 +7,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_hbb/desktop/widgets/dd_icons.dart';
+import 'package:flutter_hbb/desktop/widgets/dd_theme.dart';
 import 'package:flutter_hbb/desktop/widgets/dd_remote_title_bar.dart';
 import 'package:flutter_hbb/models/model.dart';
 
@@ -23,11 +24,11 @@ const _kReveal = 24.0;
 const _kIdleDock = Duration(seconds: 1);
 const _kSlide = Duration(milliseconds: 150);
 // 配色照专业窗口的球
-const _kBallBg = Color.fromARGB(247, 241, 241, 242);
-const _kBallBgHot = Color.fromARGB(252, 255, 255, 255);
-const _kBand = Color.fromARGB(255, 227, 227, 230);
-const _kBandHot = Color.fromARGB(255, 177, 203, 255);
-const _kBallFg = Color.fromARGB(255, 71, 77, 87);
+const _kBallBg = DdColors.ball;
+const _kBallBgHot = DdColors.surface;
+const _kBand = DdColors.ballBand;
+const _kBandHot = DdColors.ballBandHot;
+const _kBallFg = DdColors.ballInk;
 
 enum _Edge { top, left, right }
 
@@ -245,7 +246,7 @@ class _BallFace extends StatelessWidget {
         color: hot ? _kBallBgHot : _kBallBg,
         borderRadius: BorderRadius.circular(_kRadius),
         border: Border.all(color: hot ? _kBandHot : _kBand, width: _kBorder),
-        boxShadow: const [BoxShadow(color: Color(0x33000000), blurRadius: 10, offset: Offset(0, 2))],
+        boxShadow: DdShadow.ball,
       ),
       alignment: Alignment.center,
       // 图标照专业窗口的球：两条上下叠的胶囊，各带一个错开的小圆点
