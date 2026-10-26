@@ -32,6 +32,8 @@ crlf "$SRC/systemd-user/gnome-session-manager@$PKG.service.d/kiosk.conf" \
     "$D/usr/lib/systemd/user/gnome-session-manager@$PKG.service.d/kiosk.conf"
 crlf "$SRC/dconf/00-$PKG" "$D/usr/share/$PKG/dconf/00-$PKG"
 crlf "$SRC/masked-user-units" "$D/usr/share/$PKG/masked-user-units"
+# 记号：本机是座位，被控端服务看到它就不登记、不监听（src/ddpro/seat.rs）
+: >"$D/usr/share/$PKG/seat"
 mkdir -p "$D/usr/bin"
 crlf "$SRC/$PKG" "$D/usr/bin/$PKG"
 chmod 755 "$D/usr/bin/$PKG"

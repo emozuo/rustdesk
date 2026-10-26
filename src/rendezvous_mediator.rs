@@ -279,6 +279,14 @@ impl RendezvousMediator {
             }
         }
         crate::hbbs_http::sync::start();
+        // DreamDesk：座位不当被控端——和网关的心跳照旧，不登记、不监听
+        #[cfg(all(feature = "dd-managed", target_os = "linux"))]
+        if crate::ddpro::seat::is_seat() {
+            log::info!("dd-managed: this device is a seat, no incoming connections");
+            loop {
+                sleep(1.).await;
+            }
+        }
         #[cfg(target_os = "windows")]
         if crate::platform::is_installed() && crate::is_server() {
             crate::updater::start_auto_update();

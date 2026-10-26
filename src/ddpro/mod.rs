@@ -59,6 +59,9 @@ pub mod emergency_audit;
 // 受管模式：凭票认证的连接 → 票编号，连接审计和每拍心跳都带
 #[cfg(feature = "dd-managed")]
 pub mod ticket_conns;
+// 受管模式：座位（kiosk 瘦客户机）不当被控端
+#[cfg(all(feature = "dd-managed", target_os = "linux"))]
+pub mod seat;
 #[cfg(feature = "dd-pro")]
 pub mod server;
 // 专业视频要采集模块直接输出显卡纹理，这在 RustDesk 里绑在 vram 功能上（官方 Windows 版本来就开着）

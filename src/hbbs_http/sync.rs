@@ -177,6 +177,11 @@ async fn start_hbbs_sync_async() {
                     if !note.is_empty() {
                         v[keys::OPTION_PRESET_NOTE] = json!(note);
                     }
+                    // DreamDesk：kiosk 瘦客户机上报「我是座位」，服务端据此预选类型（确认仍由管理员做）
+                    #[cfg(all(feature = "dd-managed", target_os = "linux"))]
+                    if crate::ddpro::seat::is_seat() {
+                        v["dd_kind"] = json!("seat");
+                    }
                     let v = v.to_string();
                     let mut hash = "".to_owned();
                     if crate::is_public(&url) {
