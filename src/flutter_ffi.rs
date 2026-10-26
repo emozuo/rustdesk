@@ -2777,11 +2777,6 @@ pub fn main_get_common(key: String) -> String {
 }
 
 pub fn main_get_common_sync(key: String) -> SyncReturn<String> {
-    // DreamDesk 受管版：主窗口首页换成登录页 + 我的工作站（flutter/lib/utils/dd_kiosk.dart 的 kDdManaged）
-    #[cfg(feature = "dd-managed")]
-    if key == "dd-managed" {
-        return SyncReturn("Y".to_owned());
-    }
     if let Some(args) = key.strip_prefix("resolve-api-server:") {
         let response = match serde_json::from_str::<(String, String)>(args) {
             Ok((api, custom)) => serde_json::json!({"url": crate::get_api_server(api, custom)}),

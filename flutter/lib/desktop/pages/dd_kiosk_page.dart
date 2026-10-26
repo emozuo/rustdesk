@@ -3,9 +3,6 @@
 // （要票在 Rust 里按登录的用户自动做）。画面在 widgets/dd_kiosk_view.dart。
 // 远程窗口出了连接类错误不自己重试，把原因交过来、关掉自己（utils/dd_kiosk.dart）：掉线这类按退避自动重连同一台，被拒的停在卡片上；
 // 远程窗口关了却没交原因的是用户自己断开的（悬浮球的「断开」），回工作站列表。
-// 受管版的桌面主窗口也用这一页（dreamdesk/docs/M-受管版方案.md 第 3 步），和 kiosk 的不同：普通窗口、页面自己画标题栏；
-// 记住登录（重开程序不用再登）、不因闲置退出、没有关机；连上以后连接的出错和重连由远程窗口照 RustDesk 原样处理，首页一直停在列表；
-// 用户菜单里能进设置。
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -15,16 +12,12 @@ import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/common/hbbs/hbbs.dart';
 import 'package:flutter_hbb/consts.dart';
-import 'package:flutter_hbb/desktop/pages/desktop_setting_page.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_tab_page.dart';
 import 'package:flutter_hbb/desktop/widgets/dd_kiosk_view.dart';
-import 'package:flutter_hbb/desktop/widgets/tabbar_widget.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
-import 'package:flutter_hbb/models/state_model.dart';
 import 'package:flutter_hbb/utils/dd_kiosk.dart';
 import 'package:flutter_hbb/utils/http_service.dart' as http;
 import 'package:flutter_hbb/utils/multi_window_manager.dart';
-import 'package:get/get.dart';
 
 /// 连接没成的几种情况。auto = 按退避自动重连同一台
 enum _Cat {
@@ -92,10 +85,6 @@ class _DdKioskPageState extends State<DdKioskPage> {
 
   final _focus = FocusNode();
   final _loginKey = GlobalKey<DdKioskLoginState>();
-  /// 桌面版：设置页盖在首页上
-  bool _settings = false;
-
-  bool get _kiosk => kDdKiosk;
 
   @override
   void initState() {
@@ -104,27 +93,8 @@ class _DdKioskPageState extends State<DdKioskPage> {
     _loadInfo();
     // 每秒看一次：远程窗口还在不在、倒计时到没到、闲置多久了
     _tick = Timer.periodic(const Duration(seconds: 1), (_) => _onTick());
-    if (bind.mainGetLocalOption(key: 'access_token').isNotEmpty) {
-      if (_kiosk) {
-        // kiosk 开机总是从登录页开始：上次没退出的登录（断电、程序被杀）先作废
-        _signOut();
-      } else {
-        _resumeSignIn();
-      }
-    }
-  }
-
-  /// 桌面版接着用上次的登录：用户名从 RustDesk 登录时存下的用户信息里取；令牌失效的话，取列表时服务端回 401、退回登录页
-  void _resumeSignIn() {
-    try {
-      final info = jsonDecode(bind.mainGetLocalOption(key: 'user_info')) as Map<String, dynamic>;
-      _userName = info['name'] as String? ?? '';
-      _displayName = info['display_name'] as String? ?? '';
-    } catch (_) {}
-    if (_userName.isEmpty) _userName = _lastUser;
-    _selectedId = bind.mainGetLocalOption(key: _kLastWs);
-    _phase = _Phase.list;
-    WidgetsBinding.instance.addPostFrameCallback((_) => _fetchList());
+    // 开机总是从登录页开始：上次没退出的登录（断电、程序被杀）先作废
+    if (bind.mainGetLocalOption(key: 'access_token').isNotEmpty) _signOut();
   }
 
   @override
@@ -153,10 +123,6 @@ class _DdKioskPageState extends State<DdKioskPage> {
 
   void _onTick() {
     if (!mounted) return;
-    if (!_kiosk) {
-      if (_phase == _Phase.list && DateTime.now().difference(_lastListFetch) >= _listRefresh) _fetchList();
-      return;
-    }
     final open = _sessionWindowOpen();
     if (_sessionOpen && !open) _onSessionClosed();
     if (!_sessionOpen && open) {
@@ -351,15 +317,9 @@ class _DdKioskPageState extends State<DdKioskPage> {
   void _connectTo(String id) {
     final w = _items.where((w) => w.id == id).firstOrNull;
     if (w == null || !w.selectable) return;
-    bind.mainSetLocalOption(key: _kLastWs, value: id);
-    if (!_kiosk) {
-      // 桌面版：开远程窗口就完了，出错、重连由远程窗口自己处理；可以同时连几台
-      setState(() => _userMenu = false);
-      connect(context, id);
-      return;
-    }
     _failures = 0;
     _target = w;
+    bind.mainSetLocalOption(key: _kLastWs, value: id);
     _connect();
   }
 
@@ -425,7 +385,6 @@ class _DdKioskPageState extends State<DdKioskPage> {
     _lastInput = DateTime.now();
     if (e is! KeyDownEvent) return KeyEventResult.ignored;
     final key = e.logicalKey;
-    if (_settings) return KeyEventResult.ignored;
     if (key == LogicalKeyboardKey.escape) {
       if (_confirm || _userMenu) {
         setState(() {
@@ -466,7 +425,10 @@ class _DdKioskPageState extends State<DdKioskPage> {
   @override
   Widget build(BuildContext context) {
     final signedIn = _userName.isNotEmpty && _phase != _Phase.login;
-    final page = Listener(
+    // 原来的主窗口页照样建起来、只是不显示：远程窗口要靠它应答主窗口的那套请求（屏幕列表、窗口激活登记等）
+    return Stack(children: [
+      const Offstage(child: DesktopTabPage()),
+      Listener(
         onPointerDown: (_) => _lastInput = DateTime.now(),
         onPointerHover: (_) => _lastInput = DateTime.now(),
         child: Focus(
@@ -498,34 +460,9 @@ class _DdKioskPageState extends State<DdKioskPage> {
             if (_phase == _Phase.shuttingDown) DdKioskShuttingDown(text: translate('Shutting down...')),
           ]),
         ),
-      );
-    // 原来的主窗口页照样建起来、只是不显示：远程窗口要靠它应答主窗口的那套请求（屏幕列表、窗口激活登记等），
-    // 设置页也要它登记的东西（服务停没停）
-    return Stack(children: [
-      const Offstage(child: DesktopTabPage()),
-      if (_kiosk)
-        page
-      else
-        Column(children: [
-          const _DdTitleBar(),
-          Expanded(child: Stack(children: [page, if (_settings) _settingsView()])),
-        ]),
+      ),
     ]);
   }
-
-  Widget _settingsView() => Material(
-        child: Column(children: [
-          Align(
-            alignment: Alignment.centerLeft,
-            child: TextButton.icon(
-              onPressed: () => setState(() => _settings = false),
-              icon: const Icon(Icons.arrow_back, size: 16),
-              label: Text(translate('Back to list')),
-            ),
-          ),
-          Expanded(child: DesktopSettingPage(initialTabkey: SettingsTabKey.general)),
-        ]),
-      );
 
   /// 顶栏和底栏放在最后画：用户菜单从顶栏往下展开，要压在页面内容上面
   List<Widget> _chrome(bool signedIn) => [
@@ -534,7 +471,7 @@ class _DdKioskPageState extends State<DdKioskPage> {
             if (_deviceId.isNotEmpty) '${translate('This device')} $_deviceId',
             if (_server.isNotEmpty) '${translate('Server')} $_server',
           ],
-          trailing: _kiosk && (_phase == _Phase.login || _phase == _Phase.list)
+          trailing: _phase == _Phase.login || _phase == _Phase.list
               ? DdKioskGhostButton(
                   label: translate('Shut down'),
                   icon: Icons.power_settings_new,
@@ -553,13 +490,6 @@ class _DdKioskPageState extends State<DdKioskPage> {
           userMenuOpen: _userMenu,
           onUserTap: () => setState(() => _userMenu = !_userMenu),
           onSignOut: () => _signOut(),
-          settings: translate('Settings'),
-          onSettings: _kiosk
-              ? null
-              : () => setState(() {
-                    _userMenu = false;
-                    _settings = true;
-                  }),
         ),
       ];
 
@@ -644,40 +574,6 @@ class _DdKioskPageState extends State<DdKioskPage> {
       secondaryLabel: translate('Back to list'),
       secondaryIcon: Icons.arrow_back,
       onSecondary: _showList,
-    );
-  }
-}
-
-/// 桌面版的标题栏：主窗口是无边框的，原来的标题栏是首页标签栏画的（那一页现在不显示）。拖动、双击最大化照标签栏的做法，
-/// 最小化 / 最大化 / 关闭沿用 RustDesk 主窗口的那组按钮（关闭时的「藏到托盘」等处理都在里面）
-class _DdTitleBar extends StatelessWidget {
-  const _DdTitleBar();
-
-  @override
-  Widget build(BuildContext context) {
-    final tabController = Get.find<DesktopTabController>();
-    return Theme(
-      data: MyTheme.darkTheme,
-      child: Container(
-        height: kDesktopRemoteTabBarHeight,
-        color: const Color(0xFF05050A),
-        child: Row(children: [
-          Expanded(
-            child: GestureDetector(
-              behavior: HitTestBehavior.translucent,
-              onDoubleTap: () => toggleMaximize(true).then((v) => stateGlobal.setMaximized(v)),
-              onPanStart: (_) => startDragging(true),
-              child: const SizedBox.expand(),
-            ),
-          ),
-          WindowActionPanel(
-            isMainWindow: true,
-            state: tabController.state,
-            tabController: tabController,
-            invisibleTabKeys: RxList<String>.empty(),
-          ),
-        ]),
-      ),
     );
   }
 }

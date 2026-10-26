@@ -124,9 +124,6 @@ class DdKioskTopBar extends StatelessWidget {
   final bool userMenuOpen;
   final VoidCallback? onUserTap;
   final VoidCallback? onSignOut;
-  /// 菜单里的「设置」（桌面版才有，kiosk 不给用户改设置）
-  final String settings;
-  final VoidCallback? onSettings;
   const DdKioskTopBar({
     Key? key,
     required this.tagline,
@@ -139,8 +136,6 @@ class DdKioskTopBar extends StatelessWidget {
     this.userMenuOpen = false,
     this.onUserTap,
     this.onSignOut,
-    this.settings = '',
-    this.onSettings,
   }) : super(key: key);
 
   @override
@@ -182,9 +177,7 @@ class DdKioskTopBar extends StatelessWidget {
               signedInAs: signedInAs,
               signOut: signOut,
               onTap: onUserTap,
-              onSignOut: onSignOut,
-              settings: settings,
-              onSettings: onSettings),
+              onSignOut: onSignOut),
         ],
         const SizedBox(width: 16),
         Container(
@@ -232,17 +225,8 @@ class _UserChip extends StatelessWidget {
   final String signOut;
   final VoidCallback? onTap;
   final VoidCallback? onSignOut;
-  final String settings;
-  final VoidCallback? onSettings;
   const _UserChip(
-      {required this.name,
-      required this.open,
-      required this.signedInAs,
-      required this.signOut,
-      this.onTap,
-      this.onSignOut,
-      this.settings = '',
-      this.onSettings});
+      {required this.name, required this.open, required this.signedInAs, required this.signOut, this.onTap, this.onSignOut});
 
   @override
   Widget build(BuildContext context) {
@@ -292,22 +276,6 @@ class _UserChip extends StatelessWidget {
                   Text(name, style: _body(12)),
                 ]),
               ),
-              if (onSettings != null)
-                MouseRegion(
-                  cursor: SystemMouseCursors.click,
-                  child: GestureDetector(
-                    onTap: onSettings,
-                    child: Container(
-                      color: Colors.transparent,
-                      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-                      child: Row(children: [
-                        Icon(Icons.settings_outlined, size: 14, color: _white(0.8)),
-                        const SizedBox(width: 8),
-                        Text(settings, style: _body(12)),
-                      ]),
-                    ),
-                  ),
-                ),
               MouseRegion(
                 cursor: SystemMouseCursors.click,
                 child: GestureDetector(
