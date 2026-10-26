@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/common/widgets/ddpro_mode_badge.dart';
+import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:flutter_hbb/utils/multi_window_manager.dart';
 
@@ -14,6 +15,10 @@ final bool kDdKiosk = isLinux && _cmdline().contains('--kiosk');
 
 /// 受管版（产品只有受管版，dreamdesk/docs/M-受管版方案.md）：主窗口首页是「我的设备」（desktop/pages/dd_home_page.dart）
 final bool kDdManaged = isDesktop && bind.mainGetCommonSync(key: 'dd-managed') == 'Y';
+
+/// 远程窗口标题栏的高度：受管版换成照 UU 的标题栏（desktop/widgets/dd_remote_title_bar.dart），比 RustDesk 原来的标签栏高。
+/// 画面位置的计算（CanvasModel 的上边距）和「窗口贴合画面」都要用同一个值，不然鼠标位置会差这一截
+double get kDdTabBarHeight => kDdManaged ? 40.0 : kDesktopRemoteTabBarHeight;
 
 List<String> _cmdline() {
   try {

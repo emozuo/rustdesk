@@ -252,6 +252,9 @@ class DesktopTab extends StatefulWidget {
   final Color? selectedTabBackgroundColor;
   final Color? unSelectedTabBackgroundColor;
   final Color? selectedBorderColor;
+  /// DreamDesk：整条标签栏换成这个（受管版的远程窗口照 UU 的标题栏），高度用 [customBarHeight]；关窗、最大化等照旧由这里管
+  final Widget Function()? customBar;
+  final double? customBarHeight;
 
   final DesktopTabController controller;
 
@@ -277,6 +280,8 @@ class DesktopTab extends StatefulWidget {
     this.selectedTabBackgroundColor,
     this.unSelectedTabBackgroundColor,
     this.selectedBorderColor,
+    this.customBar,
+    this.customBarHeight,
   }) : super(key: key);
 
   static RxString tablabelGetter(String peerId) {
@@ -524,6 +529,10 @@ class _DesktopTabState extends State<DesktopTab>
       Obx(() {
         if (stateGlobal.showTabBar.isTrue &&
             !(kUseCompatibleUiMode && isHideSingleItem())) {
+          final customBar = widget.customBar;
+          if (customBar != null) {
+            return SizedBox(height: widget.customBarHeight ?? _kTabBarHeight, child: customBar());
+          }
           final showBottomDivider = _showTabBarBottomDivider(tabType);
           return SizedBox(
             height: _kTabBarHeight,

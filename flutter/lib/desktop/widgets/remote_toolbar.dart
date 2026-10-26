@@ -1547,7 +1547,7 @@ class ScreenAdjustor {
             : 0.0;
         final windowEdge = kWindowBorderWidth + resizePadding;
         horizontalEdges = windowEdge * 2;
-        verticalEdges = kDesktopRemoteTabBarHeight + windowEdge * 2;
+        verticalEdges = kDdTabBarHeight + windowEdge * 2;
       } else {
         horizontalEdges = CanvasModel.leftToEdge + CanvasModel.rightToEdge;
         verticalEdges = CanvasModel.topToEdge + CanvasModel.bottomToEdge;

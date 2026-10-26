@@ -10,6 +10,7 @@ import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/models/input_model.dart';
 import 'package:flutter_hbb/models/state_model.dart';
 import 'package:flutter_hbb/desktop/pages/remote_page.dart';
+import 'package:flutter_hbb/desktop/widgets/dd_remote_title_bar.dart';
 import 'package:flutter_hbb/desktop/widgets/remote_toolbar.dart';
 import 'package:flutter_hbb/desktop/widgets/tabbar_widget.dart';
 import 'package:flutter_hbb/desktop/widgets/material_mod_popup_menu.dart'
@@ -136,6 +137,11 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
       body: DesktopTab(
         controller: tabController,
         onWindowCloseButton: handleWindowCloseButton,
+        // DreamDesk 受管版：标题栏照 UU（一台机器一个窗口，标签是这台的各块屏，操作在「控制中心」）
+        customBar: kDdManaged
+            ? () => DdRemoteTitleBar(tabController: tabController, onClose: handleWindowCloseButton)
+            : null,
+        customBarHeight: kDdManaged ? kDdTabBarHeight : null,
         tail: Row(
           mainAxisSize: MainAxisSize.min,
           children: [

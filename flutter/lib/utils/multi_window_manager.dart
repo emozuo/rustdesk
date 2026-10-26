@@ -8,6 +8,7 @@ import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/main.dart';
 import 'package:flutter_hbb/models/input_model.dart';
+import 'package:flutter_hbb/utils/dd_kiosk.dart';
 
 /// must keep the order
 // ignore: constant_identifier_names
@@ -252,8 +253,9 @@ class RustDeskMultiWindowManager {
     final msg = jsonEncode(params);
 
     // separate window for file transfer is not supported
+    // DreamDesk 受管版：一台机器一个窗口（照 UU），不开在同一个窗口的标签里
     bool openInTabs = type != WindowType.RemoteDesktop ||
-        mainGetLocalBoolOptionSync(kOptionOpenNewConnInTabs);
+        (mainGetLocalBoolOptionSync(kOptionOpenNewConnInTabs) && !kDdManaged);
 
     if (windows.length > 1 || !openInTabs) {
       for (final windowId in windows) {

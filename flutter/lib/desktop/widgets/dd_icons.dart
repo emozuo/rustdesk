@@ -21,6 +21,11 @@ enum DdIcon {
   close,
   eye,
   eyeOff,
+  monitor,
+  mic,
+  micOff,
+  controlCenter,
+  signal,
 }
 
 const _head =
@@ -51,6 +56,16 @@ const Map<DdIcon, String> _body = {
   DdIcon.eye: '<path d="M2.06 12.35a1 1 0 0 1 0-.7 10.75 10.75 0 0 1 19.88 0 1 1 0 0 1 0 .7 10.75 10.75 0 0 1-19.88 0"/><circle cx="12" cy="12" r="3"/>',
   DdIcon.eyeOff:
       '<path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c4.4 0 8.2 2.9 9.94 6.65a1 1 0 0 1 0 .7 10.8 10.8 0 0 1-1.44 2.49"/><path d="M14.08 14.16a3 3 0 0 1-4.17-4.17"/><path d="M17.48 17.5A10.45 10.45 0 0 1 12 19c-4.4 0-8.2-2.9-9.94-6.65a1 1 0 0 1 0-.7 10.75 10.75 0 0 1 4.45-5.14"/><path d="m2 2 20 20"/>',
+  DdIcon.monitor: '<rect width="20" height="14" x="2" y="3" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/>',
+  DdIcon.mic:
+      '<path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/>',
+  DdIcon.micOff:
+      '<path d="m2 2 20 20"/><path d="M18.89 13.23A7.12 7.12 0 0 0 19 12v-2"/><path d="M5 10v2a7 7 0 0 0 12 5"/><path d="M15 9.34V5a3 3 0 0 0-5.68-1.33"/><path d="M9 9v3a3 3 0 0 0 5.12 2.12"/><path d="M12 19v3"/>',
+  // 照 UU「控制中心」：上下两个拨动开关
+  DdIcon.controlCenter:
+      '<rect x="3" y="4" width="18" height="7" rx="3.5"/><circle cx="7.5" cy="7.5" r="1.5"/><rect x="3" y="13" width="18" height="7" rx="3.5"/><circle cx="16.5" cy="16.5" r="1.5"/>',
+  // 信号格（先占位，以后按连接质量点亮几格）
+  DdIcon.signal: '<g stroke-width="2.5"><path d="M6 19v-3"/><path d="M12 19v-7"/><path d="M18 19V8"/></g>',
 };
 
 Widget ddIcon(DdIcon icon, {double size = 18, Color color = const Color(0xFF1F2329)}) => SvgPicture.string(

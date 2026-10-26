@@ -901,5 +901,16 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Sign in with your domain account", "域账号登录"),
         ("Check for updates", "检查更新"),
         ("Online updates are not available yet. New versions are installed by IT.", "暂时没有在线升级，新版本由 IT 统一安装。"),
+        ("Screen {}", "显示屏 {}"),
+        ("Control center", "控制中心"),
+        ("Switch to next screen", "切换下一个屏幕"),
+        ("Window", "窗口"),
+        ("Sound", "声音"),
+        ("Peripherals", "外设"),
+        ("Tools", "工具"),
+        ("Switch to pro mode", "切到专业模式"),
+        ("End remote control", "退出远控"),
+        ("Turn on the microphone", "打开麦克风"),
+        ("Turn off the microphone", "关闭麦克风"),
     ].iter().cloned().collect();
 }
