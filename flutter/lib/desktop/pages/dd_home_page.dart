@@ -117,11 +117,15 @@ class _DdHomePageState extends State<DdHomePage> {
   }
 
   Future<void> _fetch() async {
-    if (!_signedIn) return;
+    final token = bind.mainGetLocalOption(key: 'access_token');
+    if (token.isEmpty) return;
+    // 请求在路上时换了人（退出、别人登录）：晚回来的结果是上一个人的，丢掉（不然会显示上一个人的工作站，
+    // 或者拿上一个人已注销的令牌被拒、把刚登录的人踢下线）
+    bool stale() => !mounted || bind.mainGetLocalOption(key: 'access_token') != token;
     try {
       final api = await bind.mainGetApiServer();
       final resp = await http.get(Uri.parse('$api/api/dd/workstations'), headers: getHttpHeaders());
-      if (!mounted) return;
+      if (stale()) return;
       if (resp.statusCode == 401) {
         debugPrint('dd-home: token rejected while listing workstations');
         await gFFI.userModel.reset(resetOther: true);
@@ -157,7 +161,7 @@ class _DdHomePageState extends State<DdHomePage> {
       });
     } catch (e) {
       debugPrint('dd-home: listing workstations failed: $e');
-      if (mounted) setState(() => _error = translate('Cannot reach the server'));
+      if (!stale()) setState(() => _error = translate('Cannot reach the server'));
     }
   }
 
@@ -238,6 +242,7 @@ class _DdHomePageState extends State<DdHomePage> {
                   selected: _selected == w.id,
                   onTap: () => setState(() => _selected = w.id),
                   onDoubleTap: () => _connect(w),
+                  clickId: w.id,
                 ),
             _SideRow(
               indent: true,
@@ -614,6 +619,8 @@ class _SideRow extends StatelessWidget {
   final bool dim;
   final VoidCallback onTap;
   final VoidCallback? onDoubleTap;
+  /// 认双击用的：两台工作站可能同名，按设备号认，不然先点一台、马上点另一台会被当成双击
+  final String? clickId;
   const _SideRow(
       {required this.icon,
       required this.label,
@@ -623,7 +630,8 @@ class _SideRow extends StatelessWidget {
       this.indent = false,
       this.dim = false,
       required this.onTap,
-      this.onDoubleTap});
+      this.onDoubleTap,
+      this.clickId});
 
   @override
   Widget build(BuildContext context) {
@@ -648,7 +656,7 @@ class _SideRow extends StatelessWidget {
               hoverColor: DdColors.hover,
               onTap: () {
                 onTap();
-                if (onDoubleTap != null && _Clicks.isDouble('side:$label')) onDoubleTap!();
+                if (onDoubleTap != null && _Clicks.isDouble('side:${clickId ?? label}')) onDoubleTap!();
               },
               child: Padding(
                 padding: EdgeInsets.only(left: indent ? 18 : 8, right: 8),
@@ -1072,6 +1080,8 @@ class _LoginDialogState extends State<_LoginDialog> {
       await bind.mainSetLocalOption(key: 'access_token', value: token);
       await bind.mainSetLocalOption(key: 'user_info', value: jsonEncode(resp.user ?? {}));
       await bind.mainSetLocalOption(key: _kLastUser, value: user);
+      // login() 里先改了用户名、首页那时去取列表还没有令牌（取不到就等 15 秒后的定时刷新）：令牌存好后再通知一次
+      gFFI.userModel.userName.refresh();
       if (mounted) Navigator.of(context).pop();
     } on RequestException catch (e) {
       _failed(e.cause.isNotEmpty ? translate(e.cause) : translate('Sign-in failed'));
