@@ -506,7 +506,7 @@ class _AppState extends State<App> with WidgetsBindingObserver {
           darkTheme: MyTheme.darkTheme,
           themeMode: MyTheme.currentThemeMode(),
           home: isDesktop
-              ? (kDdKiosk ? const DdKioskPage() : const DesktopTabPage())
+              ? (kDdKiosk || kDdManaged ? const DdKioskPage() : const DesktopTabPage())
               : isWeb
                   ? WebHomePage()
                   : HomePage(),

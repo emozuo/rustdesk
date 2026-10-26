@@ -5,11 +5,15 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/common/widgets/ddpro_mode_badge.dart';
+import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:flutter_hbb/utils/multi_window_manager.dart';
 
 /// 本进程是不是以 `--kiosk` 启动的。读进程自己的启动参数、不由 main() 设：远程窗口跑在同一进程的另一个 Dart 环境里，
 /// main() 设的全局变量它看不到。kiosk 只有 Linux 版
 final bool kDdKiosk = isLinux && _cmdline().contains('--kiosk');
+
+/// 受管版（dreamdesk/docs/M-受管版方案.md）：必须登录、只连网关列出的工作站，桌面主窗口首页也换成 kiosk 那套登录页 + 我的工作站
+final bool kDdManaged = isDesktop && bind.mainGetCommonSync(key: 'dd-managed') == 'Y';
 
 List<String> _cmdline() {
   try {
