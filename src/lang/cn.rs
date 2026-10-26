@@ -931,5 +931,9 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Use the remote mouse to turn the view in games and 3D software; press {} to exit", "游戏、三维软件里转视角用远程鼠标；按 {} 退出"),
         ("{} in total", "{} 台"),
         (" ({})", "（{}）"),
+        ("No workstation has been assigned to you yet", "还没有给你分配工作站"),
+        ("Please contact IT", "请联系 IT"),
+        ("Check the network and try again", "检查网络后重试"),
+        ("Sign in again", "重新登录"),
     ].iter().cloned().collect();
 }

@@ -90,6 +90,10 @@ class _DdHomePageState extends State<DdHomePage> {
   List<_Ws> _items = [];
   bool _loaded = false;
   String _error = '';
+  /// [_error] 是连不上服务器（网络问题，提示检查网络），不是服务器回的错
+  bool _netError = false;
+  /// 令牌被拒、登录被清掉了：没登录时的页面写「登录已过期」，而不是普通的登录提示
+  bool _expired = false;
   Timer? _timer;
   late final Worker _loginWorker;
 
@@ -117,7 +121,17 @@ class _DdHomePageState extends State<DdHomePage> {
       _items = [];
       _loaded = false;
       _error = '';
+      // 「登录已过期」留到重新登录为止（令牌被拒时登录状态先被清掉，这里会跟着走一遍）
+      if (_signedIn) _expired = false;
       if (_selected != _kSettings) _selected = _kAll;
+    });
+    _fetch();
+  }
+
+  void _retry() {
+    setState(() {
+      _error = '';
+      _loaded = false;
     });
     _fetch();
   }
@@ -135,12 +149,15 @@ class _DdHomePageState extends State<DdHomePage> {
       if (resp.statusCode == 401) {
         debugPrint('dd-home: token rejected while listing workstations');
         await gFFI.userModel.reset(resetOther: true);
-        if (mounted) setState(() => _error = translate('Your sign-in has expired. Please sign in again.'));
+        if (mounted) setState(() => _expired = true);
         return;
       }
       final body = jsonDecode(resp.body) as Map<String, dynamic>;
       if (resp.statusCode != 200) {
-        setState(() => _error = body['error'] as String? ?? translate('Could not load your workstations'));
+        setState(() {
+          _error = body['error'] as String? ?? translate('Could not load your workstations');
+          _netError = false;
+        });
         return;
       }
       final items = <_Ws>[];
@@ -171,7 +188,12 @@ class _DdHomePageState extends State<DdHomePage> {
       });
     } catch (e) {
       debugPrint('dd-home: listing workstations failed: $e');
-      if (!stale()) setState(() => _error = translate('Cannot reach the server'));
+      if (!stale()) {
+        setState(() {
+          _error = translate('Cannot reach the server');
+          _netError = true;
+        });
+      }
     }
   }
 
@@ -318,33 +340,48 @@ class _DdHomePageState extends State<DdHomePage> {
   Widget _signInPrompt() {
     return _page(
       title: _heading(translate('All devices')),
-      child: Center(
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          const _Illustration(),
-          const SizedBox(height: 26),
-          Text(translate('Sign in to see the workstations assigned to you.'),
-              style: const TextStyle(fontSize: 15, color: _kText)),
-          if (_error.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            Text(_error, style: const TextStyle(fontSize: 13, color: DdColors.dangerText)),
-          ],
-          const SizedBox(height: 18),
-          _BlueButton(label: translate('Sign in now'), onTap: () => _showLogin(context)),
-        ]),
-      ),
+      child: _expired
+          ? _StateView(
+              icon: ddIcon(DdIcon.lock, size: 40, color: _kText3),
+              title: translate('Your sign-in has expired. Please sign in again.'),
+              action: _BlueButton(label: translate('Sign in again'), compact: true, onTap: () => _showLogin(context)),
+            )
+          : Center(
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                const _Illustration(),
+                const SizedBox(height: 26),
+                Text(translate('Sign in to see the workstations assigned to you.'),
+                    style: const TextStyle(fontSize: 15, color: _kText)),
+                const SizedBox(height: 18),
+                _BlueButton(label: translate('Sign in now'), onTap: () => _showLogin(context)),
+              ]),
+            ),
     );
   }
 
   Widget _allDevices() {
     final Widget body;
+    // 加载中 / 出错 / 没有授权的工作站：照原型 HomeStates，图标 + 一句话（+ 说明）（+ 按钮）
     if (_error.isNotEmpty) {
-      body = Center(child: Text(_error, style: const TextStyle(color: _kText2)));
+      body = _StateView(
+        icon: ddIcon(_netError ? DdIcon.wifiOff : DdIcon.circleAlert, size: 40, color: _kText3),
+        title: _error,
+        subtitle: _netError ? translate('Check the network and try again') : null,
+        action: _OutlineButton(label: translate('Retry'), onTap: _retry),
+      );
     } else if (!_loaded) {
-      body = Center(child: Text(translate('Loading...'), style: const TextStyle(color: _kText2)));
+      body = _StateView(
+        icon: const SizedBox(
+            width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2, color: _kBlue)),
+        title: translate('Loading...'),
+        dim: true,
+      );
     } else if (_items.isEmpty) {
-      body = Center(
-          child: Text(translate('No workstation has been assigned to you yet. Please contact IT.'),
-              style: const TextStyle(color: _kText2)));
+      body = _StateView(
+        icon: ddIcon(DdIcon.monitor, size: 40, color: _kText3),
+        title: translate('No workstation has been assigned to you yet'),
+        subtitle: translate('Please contact IT'),
+      );
     } else {
       body = SingleChildScrollView(
         child: Wrap(spacing: 16, runSpacing: 16, children: [
@@ -362,7 +399,7 @@ class _DdHomePageState extends State<DdHomePage> {
       // 标题后面写台数（照原型）
       title: Row(crossAxisAlignment: CrossAxisAlignment.baseline, textBaseline: TextBaseline.alphabetic, children: [
         _heading(translate('All devices')),
-        if (_loaded && _items.isNotEmpty) ...[
+        if (_loaded && _error.isEmpty && _items.isNotEmpty) ...[
           const SizedBox(width: 8),
           // 英文写成「1 in total」，不用分单复数
           Text(translate('{${_items.length}} in total'), style: const TextStyle(fontSize: 13, color: _kText2)),
@@ -841,28 +878,81 @@ class _StatePill extends StatelessWidget {
   }
 }
 
+/// [compact]：小号（高 30、字 13，照原型 dd-btn--compact），放在状态页里
 class _BlueButton extends StatelessWidget {
   final String label;
   final VoidCallback? onTap;
   final bool expand;
-  const _BlueButton({required this.label, this.onTap, this.expand = false});
+  final bool compact;
+  const _BlueButton({required this.label, this.onTap, this.expand = false, this.compact = false});
 
   @override
   Widget build(BuildContext context) {
     return SizedBox(
       width: expand ? double.infinity : null,
-      height: 36,
+      height: compact ? 30 : 36,
       child: TextButton(
         onPressed: onTap,
         style: TextButton.styleFrom(
           backgroundColor: onTap == null ? DdColors.disabledFill : _kBlue,
           foregroundColor: Colors.white,
           disabledForegroundColor: Colors.white,
-          padding: const EdgeInsets.symmetric(horizontal: 24),
+          padding: EdgeInsets.symmetric(horizontal: compact ? 14 : 24),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
         ),
-        child: Text(label, style: const TextStyle(fontSize: 14)),
+        child: Text(label, style: TextStyle(fontSize: compact ? 13 : 14)),
       ),
+    );
+  }
+}
+
+/// 白底细边框的小按钮（照原型 dd-btn--secondary dd-btn--compact），如状态页的「再试」
+class _OutlineButton extends StatelessWidget {
+  final String label;
+  final VoidCallback onTap;
+  const _OutlineButton({required this.label, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 30,
+      child: OutlinedButton(
+        onPressed: onTap,
+        style: OutlinedButton.styleFrom(
+          backgroundColor: Colors.white,
+          foregroundColor: _kText,
+          side: const BorderSide(color: _kLine),
+          padding: const EdgeInsets.symmetric(horizontal: 14),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+        ),
+        child: Text(label, style: const TextStyle(fontSize: 13)),
+      ),
+    );
+  }
+}
+
+/// 内容区居中的一个状态（照原型 HomeStates）：图标、一句话、（灰色说明）、（按钮），间距 12。[dim]：那句话也用灰色（加载中）
+class _StateView extends StatelessWidget {
+  final Widget icon;
+  final String title;
+  final String? subtitle;
+  final Widget? action;
+  final bool dim;
+  const _StateView({required this.icon, required this.title, this.subtitle, this.action, this.dim = false});
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        icon,
+        const SizedBox(height: 12),
+        Text(title, textAlign: TextAlign.center, style: TextStyle(fontSize: 14, color: dim ? _kText2 : _kText)),
+        if (subtitle != null) ...[
+          const SizedBox(height: 12),
+          Text(subtitle!, textAlign: TextAlign.center, style: const TextStyle(fontSize: 12, color: _kText2)),
+        ],
+        if (action != null) ...[const SizedBox(height: 12), action!],
+      ]),
     );
   }
 }
