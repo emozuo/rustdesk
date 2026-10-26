@@ -180,8 +180,13 @@ class _DdHomePageState extends State<DdHomePage> {
         _settingsTab = tab;
       });
 
-  void _connect(_Ws w, {bool fileTransfer = false, bool terminal = false, bool tunnel = false}) {
+  Future<void> _connect(_Ws w, {bool fileTransfer = false, bool terminal = false, bool tunnel = false}) async {
     if (!w.connectable) return;
+    // 远程窗口左上角写的是这台机器的备注名（RustDesk 的 alias）：先记成网关给的工作站名，和用户在列表里点的一致
+    if (w.name.isNotEmpty && bind.mainGetPeerOptionSync(id: w.id, key: 'alias') != w.name) {
+      await bind.mainSetPeerAlias(id: w.id, alias: w.name);
+    }
+    if (!mounted) return;
     connect(context, w.id, isFileTransfer: fileTransfer, isTerminal: terminal, isTcpTunneling: tunnel);
   }
 
@@ -359,7 +364,8 @@ class _DdHomePageState extends State<DdHomePage> {
         _heading(translate('All devices')),
         if (_loaded && _items.isNotEmpty) ...[
           const SizedBox(width: 8),
-          Text(translate('{${_items.length}} devices'), style: const TextStyle(fontSize: 13, color: _kText2)),
+          // 英文写成「1 in total」，不用分单复数
+          Text(translate('{${_items.length}} in total'), style: const TextStyle(fontSize: 13, color: _kText2)),
         ],
       ]),
       child: body,
@@ -905,7 +911,9 @@ class _EnterDesktopState extends State<_EnterDesktop> {
                       ddIcon(DdIcon.arrowRight),
                     ]),
                   )
-                : Text(widget.label, style: const TextStyle(color: Colors.white, fontSize: 16, letterSpacing: 1)),
+                // 离线时底是浅灰，白字看不清，用深色字
+                : Text(widget.label,
+                    style: TextStyle(color: widget.online ? Colors.white : _kText2, fontSize: 16, letterSpacing: 1)),
           ),
         ]),
       ),
@@ -1026,9 +1034,9 @@ class _DeviceInfo extends StatelessWidget {
       if (i['last_connected'] != null) (translate('Last connected'), _time(i['last_connected']!), false),
     ];
     if (rows.isEmpty) return const SizedBox.shrink();
-    Widget cell((String, String, bool) r) => Row(children: [
-          SizedBox(width: 72, child: Text(r.$1, style: const TextStyle(fontSize: 13, color: _kText2))),
-          const SizedBox(width: 12),
+    Widget label((String, String, bool) r) =>
+        Padding(padding: const EdgeInsets.only(right: 12), child: Text(r.$1, style: const TextStyle(fontSize: 13, color: _kText2)));
+    Widget value((String, String, bool) r) => Row(children: [
           Flexible(child: Text(r.$2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13, color: _kText))),
           if (r.$3)
             TextButton(
@@ -1047,22 +1055,34 @@ class _DeviceInfo extends StatelessWidget {
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         Text(translate('Device information'), style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: _kText)),
         const SizedBox(height: 12),
-        // 两列，按行往下排；窗口窄（默认 800 宽）时两列放不下 IP，改成一列
+        // 两列，按行往下排；窗口窄（默认 800 宽）时两列放不下 IP，改成一列。
+        // 名称列至少 72 宽（照原型），英文名称更长时按最长的那个放宽，同一列的值对齐
         LayoutBuilder(builder: (context, c) {
           final cols = c.maxWidth >= 560 ? 2 : 1;
-          return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            for (var k = 0; k < rows.length; k += cols)
-              Padding(
-                padding: EdgeInsets.only(top: k == 0 ? 0 : 12),
-                child: Row(children: [
-                  Expanded(child: cell(rows[k])),
+          const labelWidth = MaxColumnWidth(FixedColumnWidth(72 + 12), IntrinsicColumnWidth());
+          final gap = TableRow(children: [for (var j = 0; j < (cols == 2 ? 5 : 2); j++) const SizedBox(height: 12)]);
+          return Table(
+            defaultVerticalAlignment: TableCellVerticalAlignment.middle,
+            columnWidths: cols == 2
+                ? const {0: labelWidth, 1: FlexColumnWidth(), 2: FixedColumnWidth(32), 3: labelWidth, 4: FlexColumnWidth()}
+                : const {0: labelWidth, 1: FlexColumnWidth()},
+            children: [
+              for (var k = 0; k < rows.length; k += cols) ...[
+                if (k > 0) gap,
+                TableRow(children: [
+                  label(rows[k]),
+                  value(rows[k]),
                   if (cols == 2) ...[
-                    const SizedBox(width: 32),
-                    Expanded(child: k + 1 < rows.length ? cell(rows[k + 1]) : const SizedBox.shrink()),
+                    const SizedBox.shrink(),
+                    if (k + 1 < rows.length) ...[label(rows[k + 1]), value(rows[k + 1])] else ...[
+                      const SizedBox.shrink(),
+                      const SizedBox.shrink(),
+                    ],
                   ],
                 ]),
-              ),
-          ]);
+              ],
+            ],
+          );
         }),
       ]),
     );

@@ -1,5 +1,5 @@
 // DreamDesk 受管版界面的图标，全部是开源图标库的原图（路径照抄、不手改），清单见 dreamdesk/design/图标清单.md。
-// 本文件由草稿脚本从图标库原文件生成：
+// 本文件由草稿脚本从图标库原文件生成（各库的许可声明原文在文件末尾）：
 // - Lucide（lucide-static 0.460.0，ISC 许可）：描边图标，线宽统一 1.5（界面规范；Lucide 支持调线宽，路径不动）
 // - Fluent UI System Icons（@fluentui/svg-icons 1.1.292，MIT 许可）：填色图标，按显示尺寸用对应号的原图，不缩放
 // - Font Awesome Free 6.6.0 品牌图标（CC BY 4.0 许可，https://fontawesome.com/license/free）：系统标志
@@ -162,3 +162,71 @@ Widget ddIcon(DdIcon icon, {double size = 18, Color color = const Color(0xFF1F23
 const _allDevices = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="40 40 176 176"><path fill="#2f6fea" d="M120,80A40,40,0,1,1,80,40,40,40,0,0,1,120,80Z"/><path fill="#86aef3" d="M176,120a40,40,0,1,0-40-40A40,40,0,0,0,176,120Z"/><path fill="#86aef3" d="M80,136a40,40,0,1,0,40,40A40,40,0,0,0,80,136Z"/><path fill="#2f6fea" d="M176,136a40,40,0,1,0,40,40A40,40,0,0,0,176,136Z"/></svg>';
 
 Widget ddAllDevicesIcon({double size = 20}) => SvgPicture.string(_allDevices, width: size, height: size);
+
+// ---- 图标库许可声明（原文） ----
+//
+// Lucide:
+// ISC License
+//
+// Copyright (c) for portions of Lucide are held by Cole Bemis 2013-2022 as part of Feather (MIT). All other copyright (c) for Lucide are held by Lucide Contributors 2022.
+//
+// Permission to use, copy, modify, and/or distribute this software for any
+// purpose with or without fee is hereby granted, provided that the above
+// copyright notice and this permission notice appear in all copies.
+//
+// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+// WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+// MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+// ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+// WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+// ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+// OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+//
+// Fluent UI System Icons:
+// MIT License
+//
+// Copyright (c) 2020 Microsoft Corporation
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+//
+// Phosphor Icons:
+// MIT License
+//
+// Copyright (c) 2023 Phosphor Icons
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+//
+// Font Awesome Free 6.6.0 brand icons (windows, linux, apple) by Fonticons, Inc., https://fontawesome.com,
+// licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Paths unchanged.

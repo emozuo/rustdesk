@@ -78,11 +78,12 @@ class _DdRemoteTitleBarState extends State<DdRemoteTitleBar> {
                   loadIcon(18),
                   const SizedBox(width: 8),
                   _PeerName(id: id),
-                  Container(width: 1, height: 16, color: _kLine, margin: const EdgeInsets.only(left: 12, right: 8)),
+                  Container(width: 1, height: 16, color: _kLine, margin: const EdgeInsets.only(left: 12)),
                   // 照 UU：信号格和连接时长紧跟在屏幕标签后面，右边只留麦克风、控制中心、窗口按钮。
                   // 标签多到放不下时它占大头、可以横着滚，剩下的空白留给拖动窗口
                   Flexible(flex: 20, child: _DisplayTabs(id: id, ffi: ffi)),
-                  const SizedBox(width: 12),
+                  // 标签滚动区右边自带 8 像素（留给弯角），合起来离信号格 12
+                  const SizedBox(width: 4),
                   ddIcon(DdIcon.signal, size: 16, color: _kGreen),
                   const SizedBox(width: 6),
                   _Elapsed(key: ValueKey(id), ffi: ffi),
@@ -225,6 +226,8 @@ class _DisplayTabs extends StatelessWidget {
 
       return SingleChildScrollView(
         scrollDirection: Axis.horizontal,
+        // 选中标签两个下角各向外弯出 8 像素（画在标签外面），两边留出这 8 像素，不然第一个、最后一个标签的弯角被滚动区裁掉
+        padding: const EdgeInsets.symmetric(horizontal: 8),
         child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
           for (var i = 0; i < count; i++)
             _DisplayTab(
@@ -461,10 +464,18 @@ List<Widget> ddControlMenu(BuildContext context, String id, FFI ffi, {bool fulls
     final count = pi.displays.length;
     final current = _currentDisplay(id, count);
     final controls = toolbarControls(context, id, ffi);
-    Widget control(String actionId, DdIcon icon) {
-      final m = controls.firstWhereOrNull((m) => m.actionId == actionId);
-      return m == null ? const SizedBox.shrink() : _act(ffi, icon: icon, onPressed: m.onPressed, child: m.child);
-    }
+    // RustDesk 工具栏这次给了的那几项（没权限、对端不支持的它不给），按 (动作编号, 图标) 的顺序
+    List<Widget> actions(List<(String, DdIcon)> wanted) => [
+          for (final (actionId, icon) in wanted)
+            if (controls.firstWhereOrNull((m) => m.actionId == actionId) case final m?)
+              _act(ffi, icon: icon, onPressed: m.onPressed, child: m.child),
+        ];
+    final security = actions([(kShortcutActionInsertLock, DdIcon.lock), (kShortcutActionToggleBlockInput, DdIcon.ban)]);
+    final more = actions([
+      (kShortcutActionSendCtrlAltDel, DdIcon.keyboard),
+      (kShortcutActionRefresh, DdIcon.refresh),
+      (kShortcutActionRestartRemote, DdIcon.power),
+    ]);
 
     // [divider]：这一组前面的分隔线，组里一项都没有时不画（免得剩一条孤零零的线）
     Widget toggles(Future<List<TToggleMenu>> future, List<String> actionIds, {bool divider = false}) =>
@@ -545,9 +556,9 @@ List<Widget> ddControlMenu(BuildContext context, String id, FFI ffi, {bool fulls
         toggles(toolbarDisplayToggle(context, id, ffi), [kShortcutActionToggleMute]),
       ]),
       sub(DdIcon.lock, translate('Security'), [
-        control(kShortcutActionInsertLock, DdIcon.lock),
-        control(kShortcutActionToggleBlockInput, DdIcon.ban),
-        toggles(toolbarDisplayToggle(context, id, ffi), [kShortcutActionToggleLockAfterSessionEnd], divider: true),
+        ...security,
+        toggles(toolbarDisplayToggle(context, id, ffi), [kShortcutActionToggleLockAfterSessionEnd],
+            divider: security.isNotEmpty),
       ]),
       sub(DdIcon.mouse, translate('Peripherals'), [
         _mouseMode(ffi),
@@ -576,13 +587,11 @@ List<Widget> ddControlMenu(BuildContext context, String id, FFI ffi, {bool fulls
               icon: DdIcon.record,
               onPressed: () => ffi.recordingModel.toggle(),
               child: Text(translate(ffi.recordingModel.start ? 'Stop session recording' : 'Start session recording'))),
-        control(kShortcutActionScreenshot, DdIcon.camera),
+        ...actions([(kShortcutActionScreenshot, DdIcon.camera)]),
       ]),
       sub(DdIcon.more, translate('More'), [
-        control(kShortcutActionSendCtrlAltDel, DdIcon.keyboard),
-        control(kShortcutActionRefresh, DdIcon.refresh),
-        control(kShortcutActionRestartRemote, DdIcon.power),
-        toggles(toolbarDisplayToggle(context, id, ffi), [kShortcutActionToggleQualityMonitor], divider: true),
+        ...more,
+        toggles(toolbarDisplayToggle(context, id, ffi), [kShortcutActionToggleQualityMonitor], divider: more.isNotEmpty),
         const Divider(height: 9),
         _act(ffi,
             icon: DdIcon.zap,
@@ -626,7 +635,8 @@ Widget _mouseMode(FFI ffi) {
   return FutureBuilder<bool>(
     future: _remoteMouseRemembered(ffi),
     builder: (_, snap) {
-      final remote = snap.data ?? false;
+      // 记住的是远程鼠标、这次却用不了（没权限、Wayland、对端太旧）时连上就没打开，实际是本地鼠标，按实际的标
+      final remote = (snap.data ?? false) && reason.isEmpty;
       void choose(bool? v) {
         if (v == null) return;
         // 开不成（画面尺寸还没量好、对端不支持；RustDesk 自己会提示）就不记，免得以后每次连上都再试、再提示
@@ -647,7 +657,9 @@ Widget _mouseMode(FFI ffi) {
             child: Text(
                 reason.isNotEmpty
                     ? reason
-                    : translate('Use the remote mouse to turn the view in games and 3D software; press Ctrl+Alt to exit'),
+                    // 退出远程鼠标的快捷键照 RustDesk（relative_mouse_model.dart）：macOS 是 Cmd+G，其它是 Ctrl+Alt
+                    : translate(
+                        'Use the remote mouse to turn the view in games and 3D software; press {${isMacOS ? 'Cmd+G' : 'Ctrl+Alt'}} to exit'),
                 style: const TextStyle(fontSize: 12, height: 1.5, color: _kText2)),
           ),
         ),
