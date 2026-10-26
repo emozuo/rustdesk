@@ -1,11 +1,13 @@
 """由 dreamdesk/res/icon.svg（用户 10-26 给的图标）生成各处要用的程序图标。
 
 改了图标就在 Windows 上跑一次：python dreamdesk/scripts/gen-icons.py（要 Pillow；用系统自带的 Edge 无窗口把矢量图画成
-1024 像素的透明底位图，再缩成各个尺寸），把生成的文件一起提交。生成：
-- flutter/assets/icon.png、icon.ico：RustDesk 给定制客户端的入口，托盘、界面里的小图标用 png，Windows 快捷方式、
-  「程序和功能」用 ico（src/tray.rs load_icon_from_asset、src/platform/windows.rs get_custom_icon）
-- flutter/windows/runner/resources/app_icon.ico：程序文件内嵌的图标（任务栏、窗口、资源管理器）
-- dreamdesk/res/icon-256.png：Linux 包装进 hicolor 主题的位图（矢量图直接用 icon.svg，见 dreamdesk/scripts/build-linux.sh）
+1024 像素的透明底位图，再缩成各个尺寸），把生成的文件一起提交。生成（都在 dreamdesk/res/）：
+- icon-256.png：打包时放成 flutter/assets/icon.png（RustDesk 给定制客户端的入口：托盘、界面里的小图标，src/tray.rs
+  load_icon_from_asset、common.dart loadIcon），Linux 包还装进 hicolor 主题（矢量图直接用 icon.svg）
+- icon.ico：打包时放成 flutter/assets/icon.ico（Windows 快捷方式、「程序和功能」、托盘，src/platform/windows.rs
+  get_custom_icon、src/ddpro/brand.rs tray_icon）和 flutter/windows/runner/resources/app_icon.ico（程序文件内嵌的图标）
+仓库里那几个位置保持 RustDesk 原样（flutter/assets 下原本没有 icon.png / icon.ico）：不开 DreamDesk 开关编的程序要和原版一样。
+放进去、打完还原由 dreamdesk/scripts/build-windows.ps1、build-linux.sh 做。
 """
 import subprocess
 import tempfile
@@ -50,14 +52,11 @@ def main():
     with tempfile.TemporaryDirectory() as t:
         big = render_big(Path(t))
     sized = lambda n: big.resize((n, n), Image.LANCZOS)
-    sized(256).save(ROOT / "flutter/assets/icon.png")
     sized(256).save(ROOT / "dreamdesk/res/icon-256.png")
     sizes = [16, 20, 24, 32, 40, 48, 64, 128, 256]
     imgs = [sized(n) for n in sizes]
-    for p in ["flutter/assets/icon.ico", "flutter/windows/runner/resources/app_icon.ico"]:
-        imgs[-1].save(ROOT / p, format="ICO", sizes=[(n, n) for n in sizes], append_images=imgs[:-1])
-    for p in ["flutter/assets/icon.png", "flutter/assets/icon.ico", "flutter/windows/runner/resources/app_icon.ico",
-              "dreamdesk/res/icon-256.png"]:
+    imgs[-1].save(ROOT / "dreamdesk/res/icon.ico", format="ICO", sizes=[(n, n) for n in sizes], append_images=imgs[:-1])
+    for p in ["dreamdesk/res/icon-256.png", "dreamdesk/res/icon.ico"]:
         print(p, (ROOT / p).stat().st_size, "bytes")
 
 

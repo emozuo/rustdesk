@@ -201,7 +201,20 @@ $RunnerRcBytes = [IO.File]::ReadAllBytes($RunnerRc)
 if ([Text.Encoding]::UTF8.GetString($RunnerRcBytes).Contains('DreamDesk')) {
   throw "Runner.rc still has the DreamDesk version strings from an interrupted build: run 'git checkout -- flutter/windows/runner/Runner.rc' first"
 }
+# 程序图标（dreamdesk/res，gen-icons.py 生成）同样是编之前放进去、打完还原：程序内嵌的 app_icon.ico 换掉；flutter/assets 下的
+# icon.png / icon.ico 是 RustDesk 给定制客户端的入口，仓库里原本没有，打完删掉（不开 DreamDesk 开关编的程序要和原版一样）
+$AppIcon = Join-Path $Repo 'flutter\windows\runner\resources\app_icon.ico'
+$AppIconBytes = [IO.File]::ReadAllBytes($AppIcon)
+$BrandIco = Join-Path $Repo 'dreamdesk\res\icon.ico'
+$AssetPng = Join-Path $Repo 'flutter\assets\icon.png'
+$AssetIco = Join-Path $Repo 'flutter\assets\icon.ico'
+if ((Test-Path $AssetPng) -or (Test-Path $AssetIco) -or (Get-FileHash $AppIcon).Hash -eq (Get-FileHash $BrandIco).Hash) {
+  throw "program icons from an interrupted build are still in place: run 'git checkout -- flutter/windows/runner/resources/app_icon.ico' and delete flutter\assets\icon.png, icon.ico first"
+}
 try {
+  Copy-Item (Join-Path $Repo 'dreamdesk\res\icon-256.png') $AssetPng -ErrorAction Stop
+  Copy-Item $BrandIco $AssetIco -ErrorAction Stop
+  Copy-Item $BrandIco $AppIcon -Force -ErrorAction Stop
   # 文件是不带 BOM 的 UTF-8（版权行有 ©），按 UTF-8 读写
   $Branded = [Text.Encoding]::UTF8.GetString($RunnerRcBytes)
   $Branded = $Branded.Replace('"FileDescription", "RustDesk Remote Desktop"', '"FileDescription", "DreamDesk Remote Desktop"')
@@ -257,7 +270,9 @@ try {
   Write-Host "########## output ##########"
   Get-Item $Exe, $Installer | Select-Object Name, @{n = 'MB'; e = { [math]::Round($_.Length / 1MB, 1) } } | Format-Table -AutoSize
 } finally {
-  # 两处各自还原：一处出错（比如文件被占用）不能让另一处不还原
+  # 各处各自还原：一处出错（比如文件被占用）不能让别处不还原
   try { [IO.File]::WriteAllBytes($PubLock, $PubLockBytes) } catch { Write-Warning "cannot restore $PubLock : $_" }
   try { [IO.File]::WriteAllBytes($RunnerRc, $RunnerRcBytes) } catch { Write-Warning "cannot restore $RunnerRc : $_" }
+  try { [IO.File]::WriteAllBytes($AppIcon, $AppIconBytes) } catch { Write-Warning "cannot restore $AppIcon : $_" }
+  Remove-Item $AssetPng, $AssetIco -ErrorAction SilentlyContinue
 }

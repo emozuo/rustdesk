@@ -46,6 +46,12 @@ sed -i "s/ffi.NativeFunction<ffi.Bool Function(DartPort/ffi.NativeFunction<ffi.U
     flutter/lib/generated_bridge.dart
 
 echo "## flutter"
+# 程序图标（dreamdesk/res，gen-icons.py 生成）：flutter/assets/icon.png 是 RustDesk 给定制客户端的入口（托盘、界面里的小图标），
+# 仓库里原本没有（不开 DreamDesk 开关编的程序要和原版一样），编之前放进去、打完删掉。要在 flutter build 之前放：
+# 编完才放的话不在资源清单里，界面取不到
+cleanup() { rm -f flutter/assets/icon.png; [ -z "${T:-}" ] || rm -rf "$T"; }
+trap cleanup EXIT
+cp dreamdesk/res/icon-256.png flutter/assets/icon.png
 (cd flutter && flutter build linux --release)
 BUNDLE=flutter/build/linux/$FLUTTER_ARCH/release/bundle
 
@@ -59,8 +65,7 @@ fi
 # 顺带去掉行尾回车：工作区从 Windows 拷过来时文件带 CRLF，桌面文件、服务文件、安装脚本里留着回车会出问题
 rename() { sed -e 's/\r$//' -e "s/RustDesk/$APP/g" -e "s/rustdesk/$APP/g" "$1" >"$2"; }
 
-T=$(mktemp -d)
-trap 'rm -rf "$T"' EXIT
+T=$(mktemp -d) # 由上面的 cleanup 删
 D=$T/deb
 mkdir -p "$D/usr/bin" "$D/usr/share/$APP/files/systemd" "$D/usr/share/icons/hicolor/256x256/apps" \
     "$D/usr/share/icons/hicolor/scalable/apps" "$D/usr/share/applications" "$D/usr/share/polkit-1/actions" "$D/DEBIAN"
