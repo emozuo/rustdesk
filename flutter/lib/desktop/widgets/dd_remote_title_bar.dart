@@ -178,6 +178,13 @@ class _PeerName extends StatelessWidget {
 }
 
 /// 每块远程屏一个标签，选中的白底圆角上沿（照 UU / 浏览器标签）；点了切到那块屏（同一条连接、同一个窗口）
+/// 这个窗口在看的屏；-1 表示不在看某一块（RustDesk 的「所有屏」是 -1，屏变少后记着的号也可能越界），这时标签都不选中、
+/// 控制中心不写屏号（照 RustDesk 切屏按钮的范围判断）
+int _currentDisplay(String id, int count) {
+  final d = CurrentDisplayState.find(id).value;
+  return d >= 0 && d < count ? d : -1;
+}
+
 class _DisplayTabs extends StatelessWidget {
   final String id;
   final FFI ffi;
@@ -188,7 +195,7 @@ class _DisplayTabs extends StatelessWidget {
     return Obx(() {
       final pi = ffi.ffiModel.pi;
       final count = pi.displays.length;
-      final current = CurrentDisplayState.find(id).value;
+      final current = _currentDisplay(id, count);
       if (count == 0) return const SizedBox.shrink();
       // 把一块屏拖出去（或右键「在新窗口打开」）：用 RustDesk 的「显示器开到新窗口」，同一条连接、不另连。
       // 拖的是正在看的这块就先让这个窗口换去看下一块，免得两个窗口看同一块；只有一块屏时不能拖出
@@ -389,7 +396,7 @@ class _ControlCenterState extends State<_ControlCenter> {
 List<Widget> ddControlMenu(BuildContext context, String id, FFI ffi, {bool fullscreen = false}) {
     final pi = ffi.ffiModel.pi;
     final count = pi.displays.length;
-    final current = CurrentDisplayState.find(id).value;
+    final current = _currentDisplay(id, count);
     final controls = toolbarControls(context, id, ffi);
     Widget control(String actionId) {
       final m = controls.firstWhereOrNull((m) => m.actionId == actionId);
@@ -425,7 +432,7 @@ List<Widget> ddControlMenu(BuildContext context, String id, FFI ffi, {bool fulls
         );
 
     return [
-      sub(DdIcon.monitor, '${translate('Screen {${current + 1}}')} (${id.toUpperCase()})', [
+      sub(DdIcon.monitor, current < 0 ? translate('Monitor') : '${translate('Screen {${current + 1}}')} (${id.toUpperCase()})', [
         for (var i = 0; i < count; i++)
           RdoMenuButton<int>(
             value: i,
@@ -480,7 +487,13 @@ List<Widget> ddControlMenu(BuildContext context, String id, FFI ffi, {bool fulls
       sub(DdIcon.terminal, translate('Tools'), [
         MenuButton(onPressed: () => connect(context, id, isFileTransfer: true), ffi: ffi, child: Text(translate('File transfer'))),
         MenuButton(onPressed: () => connect(context, id, isTerminal: true), ffi: ffi, child: Text(translate('Terminal'))),
-        control(kShortcutActionToggleRecording),
+        // 录屏：桌面端 RustDesk 不放在工具栏菜单里（toolbarControls 只在手机上给），是单独的按钮 _RecordMenu；条件和动作照它
+        if (bind.mainGetLocalOption(key: kOptionHideRecordingButton) != 'Y' &&
+            (ffi.recordingModel.start || ffi.ffiModel.permissions['recording'] != false))
+          MenuButton(
+              onPressed: () => ffi.recordingModel.toggle(),
+              ffi: ffi,
+              child: Text(translate(ffi.recordingModel.start ? 'Stop session recording' : 'Start session recording'))),
         control(kShortcutActionScreenshot),
       ]),
       sub(DdIcon.menu, translate('More'), [
@@ -533,8 +546,9 @@ Widget _mouseMode(FFI ffi) {
       final remote = snap.data ?? false;
       void choose(bool? v) {
         if (v == null) return;
+        // 开不成（画面尺寸还没量好、对端不支持；RustDesk 自己会提示）就不记，免得以后每次连上都再试、再提示
+        if (!ffi.inputModel.setRelativeMouseMode(v) && v) return;
         bind.sessionSetFlutterOption(sessionId: ffi.sessionId, k: _kDdMouseMode, v: v ? 'remote' : '');
-        ffi.inputModel.setRelativeMouseMode(v);
       }
 
       return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
