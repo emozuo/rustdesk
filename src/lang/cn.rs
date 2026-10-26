@@ -918,5 +918,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("The remote side is too old for the remote mouse", "对方版本太旧，不支持远程鼠标"),
         ("The remote mouse does not work on a Wayland desktop", "本机是 Wayland 桌面，不支持远程鼠标"),
         ("No keyboard and mouse permission", "没有键盘鼠标权限"),
+        ("Not in pro mode: pro mode works only on the intranet", "非专业模式：专业模式只能在内网使用"),
+        ("The pro video channel could not reach the controlled side, and this connection goes through the relay server (for example, from outside the company network). Pro mode works only on the intranet: connect from the intranet or over VPN to use it.", "专业画面通道连不到被控端，而这次连接经中继服务器转发（例如从公司外网连入）。专业模式只能在内网使用：在内网或通过 VPN 连接即可使用。"),
     ].iter().cloned().collect();
 }

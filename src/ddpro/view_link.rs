@@ -129,6 +129,8 @@ enum Notice {
     PeerUnavailable,
     Busy,
     Version,
+    /// 主连接走中继、专业通道打不通：专业模式只在内网用（M-受管版方案第 4 步）
+    Relayed,
     /// 不是故障：用户在悬浮球菜单里切到了通用模式（只对这次会话）
     General,
 }
@@ -149,6 +151,7 @@ impl Notice {
             Notice::PeerUnavailable => "Not in pro mode: the controlled side cannot provide pro video",
             Notice::Busy => "Not in pro mode: this display is already in use",
             Notice::Version => "Not in pro mode: the pro protocol versions do not match",
+            Notice::Relayed => "Not in pro mode: pro mode works only on the intranet",
         }
     }
 
@@ -167,6 +170,7 @@ impl Notice {
             Notice::PeerUnavailable => "The controlled side cannot provide pro video, for example because its graphics card cannot encode HEVC 4:4:4.",
             Notice::Busy => "Another connection is using this display of the controlled side (pro mode allows one connection per display). Reconnect after it ends, or switch to another display.",
             Notice::Version => "The two computers run different versions of the pro protocol. Upgrade the older side so both run the same version.",
+            Notice::Relayed => "The pro video channel could not reach the controlled side, and this connection goes through the relay server (for example, from outside the company network). Pro mode works only on the intranet: connect from the intranet or over VPN to use it.",
         }
     }
 
@@ -178,7 +182,7 @@ impl Notice {
     /// 值得再请求一次（用户切到别的屏、或点「重新进入专业模式」）：和这块屏、这次通道有关的故障。
     /// 本机不支持、版本不一致，再请求也一样
     fn retryable(self) -> bool {
-        !matches!(self, Notice::Unsupported | Notice::Version)
+        !matches!(self, Notice::Unsupported | Notice::Version | Notice::Relayed)
     }
 }
 
@@ -285,6 +289,13 @@ fn raise<T: InvokeUiSession>(
     detail: &str,
     replaces: impl Fn(Notice) -> bool,
 ) {
+    // 专业模式只在内网用（M-受管版方案第 4 步）：主连接走中继、专业通道又打不通，多半是从外网连进来的（够不着被控端的内网地址），
+    // 提示换成「只能在内网用」。走中继但人在内网（强制中继、打洞没成）时专业通道照样直连得上，不受影响，所以不在请求前拦
+    let notice = if notice == Notice::ChannelFailed && session.lc.read().unwrap().direct == Some(false) {
+        Notice::Relayed
+    } else {
+        notice
+    };
     {
         let mut links = links().lock().unwrap();
         let view = links.entry(key(session)).or_default().views.entry(display).or_default();
