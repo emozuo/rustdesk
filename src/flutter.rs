@@ -660,7 +660,10 @@ impl FlutterHandler {
             }
             msg_vec.push(h);
         }
-        serde_json::ser::to_string(&msg_vec).unwrap_or("".to_owned())
+        let msg = serde_json::ser::to_string(&msg_vec).unwrap_or("".to_owned());
+        #[cfg(feature = "dd-pro")]
+        let msg = crate::ddpro::client::add_display_labels(msg, displays);
+        msg
     }
 
     pub fn update_use_texture_render(&self) {

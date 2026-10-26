@@ -204,6 +204,13 @@ int _currentDisplay(String id, int count) {
   return d >= 0 && d < count ? d : -1;
 }
 
+/// 第 [i] 块屏的名字：「显示屏 1」，被控端报了显示器型号就带上（照原型「显示屏 1（VX2723）」；括号经翻译，中文用全角）
+String _screenLabel(PeerInfo pi, int i) {
+  final name = translate('Screen {${i + 1}}');
+  final model = i < pi.displays.length ? pi.displays[i].ddLabel : '';
+  return model.isEmpty ? name : '$name${translate(' ({$model})')}';
+}
+
 class _DisplayTabs extends StatelessWidget {
   final String id;
   final FFI ffi;
@@ -231,7 +238,7 @@ class _DisplayTabs extends StatelessWidget {
         child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
           for (var i = 0; i < count; i++)
             _DisplayTab(
-              label: translate('Screen {${i + 1}}'),
+              label: _screenLabel(pi, i),
               selected: i == current,
               onTap: i == current ? null : () => openMonitorInTheSameTab(i, ffi, pi),
               onOpenOut: count < 2 ? null : () => openOut(i),
@@ -533,14 +540,14 @@ List<Widget> ddControlMenu(BuildContext context, String id, FFI ffi, {bool fulls
 
     return [
       _kMenuMinWidth,
-      sub(DdIcon.monitor, current < 0 ? translate('Monitor') : translate('Screen {${current + 1}}'), [
+      sub(DdIcon.monitor, current < 0 ? translate('Monitor') : _screenLabel(pi, current), [
         for (var i = 0; i < count; i++)
           _pick(ffi,
             on: i == current,
             onPressed: () => openMonitorInTheSameTab(i, ffi, pi),
             extra: Text('${pi.displays[i].width}×${pi.displays[i].height}',
                 style: const TextStyle(fontSize: 12, color: _kText2)),
-            child: Text(translate('Screen {${i + 1}}')),
+            child: Text(_screenLabel(pi, i)),
           ),
       ]),
       item(DdIcon.arrowLeftRight, translate('Switch to next screen'),

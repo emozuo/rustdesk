@@ -866,6 +866,8 @@ pub(super) fn update_sync_displays(all: &Vec<Display>) -> Vec<DisplayInfo> {
                 (d.height() as f64 / scale).round() as usize,
             );
             DisplayInfo {
+                #[cfg(all(feature = "dd-pro", windows))]
+                dd_label: crate::ddpro::server::display_label(&display_name),
                 x: d.origin().0 as _,
                 y: d.origin().1 as _,
                 width: d.width() as _,

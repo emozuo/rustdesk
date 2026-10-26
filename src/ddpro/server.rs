@@ -46,6 +46,14 @@ pub fn holds_display(server: &crate::server::Server, name: &str, conn_id: i32) -
     held
 }
 
+/// 发给主控端的屏幕信息里这块屏的显示器型号名（`DisplayInfo.dd_label`，主控端屏幕标签写「显示屏 1（VX2723）」）。
+/// RustDesk 每 300 毫秒（有连接时）重建一次屏幕列表，这里跟着查一次系统显示配置（实测每块屏几十微秒，
+/// `cargo run -p ddpro-enc --example display_names`）；查不到给空串
+#[cfg(windows)]
+pub fn display_label(name: &str) -> String {
+    ddpro::enc::friendly_name(name).unwrap_or_default()
+}
+
 /// 登录应答的名片：只写专业协议版本，详细能力在请求 / 答复里谈。
 pub fn add_name_card(platform_additions: &mut Map<String, Value>) {
     platform_additions.insert(

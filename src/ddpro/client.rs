@@ -7,10 +7,28 @@ use crate::{
     ddpro::wire::{wrap, PEER_LOG_INTERVAL},
     ui_session_interface::{InvokeUiSession, Session},
 };
-use base::message_proto::{Message, PeerInfo};
+use base::message_proto::{DisplayInfo, Message, PeerInfo};
 use ddpro::{dd_pro, DisplayCaps, FormatCaps};
 use hbb_common::{log, throttled_log, tokio::sync::mpsc::UnboundedSender};
 use serde_json::Value;
+
+/// 给 Flutter 的屏幕列表 JSON（RustDesk 的 `make_displays_msg`：按屏号排的对象数组）补上每块屏的显示器型号名
+/// （`dd_label`），界面写在屏幕标签上。被控端没给（老版本、查不到）的不加
+#[cfg(feature = "flutter")]
+pub fn add_display_labels(json: String, displays: &[DisplayInfo]) -> String {
+    if displays.iter().all(|d| d.dd_label.is_empty()) {
+        return json;
+    }
+    let Ok(Value::Array(mut list)) = serde_json::from_str::<Value>(&json) else {
+        return json;
+    };
+    for (item, d) in list.iter_mut().zip(displays) {
+        if let (Value::Object(m), false) = (item, d.dd_label.is_empty()) {
+            m.insert("dd_label".to_owned(), Value::String(d.dd_label.clone()));
+        }
+    }
+    serde_json::to_string(&list).unwrap_or(json)
+}
 
 /// 收到被控端的登录应答后决定要不要发起专业会话。
 /// 只在远程桌面会话里发起；文件传输、终端、端口转发等会话不发。

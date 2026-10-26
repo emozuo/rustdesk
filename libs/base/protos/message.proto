@@ -45,6 +45,8 @@ message DisplayInfo {
   bool cursor_embedded = 7;
   Resolution original_resolution = 8;
   double scale = 9;
+  // DreamDesk: the monitor's model name (e.g. VX2723) for the screen tabs; empty when unknown; far from upstream numbers
+  string dd_label = 1000;
 }
 
 message PortForward {

@@ -18,7 +18,7 @@ mod nvenc_sys;
 #[cfg(windows)]
 pub use cursor::show_system_cursor;
 #[cfg(windows)]
-pub use display::{hdr_sdr_white_nits, hdr_supported, set_hdr};
+pub use display::{friendly_name, hdr_sdr_white_nits, hdr_supported, set_hdr};
 #[cfg(windows)]
 pub use nvenc::{probe, Config, EncodedFrame, Encoder};
 

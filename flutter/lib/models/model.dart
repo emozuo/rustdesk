@@ -1641,6 +1641,7 @@ class FfiModel with ChangeNotifier {
     d.cursorEmbedded = evt['cursor_embedded'] == 1;
     d.originalWidth = evt['original_width'] ?? kInvalidResolutionValue;
     d.originalHeight = evt['original_height'] ?? kInvalidResolutionValue;
+    d.ddLabel = evt['dd_label'] ?? '';
     d._scale = 1.0;
     final scaledWidth = evt['scaled_width'];
     if (scaledWidth != null) {
@@ -4464,6 +4465,8 @@ class Display {
   bool cursorEmbedded = false;
   int originalWidth = kInvalidResolutionValue;
   int originalHeight = kInvalidResolutionValue;
+  /// DreamDesk：被控端这块屏接的显示器型号名（如 VX2723），写在屏幕标签上；被控端没给就是空串
+  String ddLabel = '';
   double _scale = 1.0;
   double get scale => _scale > 1.0 ? _scale : 1.0;
 

@@ -12,10 +12,10 @@ use windows::{
         Devices::Display::{
             DisplayConfigGetDeviceInfo, DisplayConfigSetDeviceInfo, GetDisplayConfigBufferSizes, QueryDisplayConfig,
             DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO, DISPLAYCONFIG_DEVICE_INFO_HEADER, DISPLAYCONFIG_DEVICE_INFO_TYPE, DISPLAYCONFIG_DEVICE_INFO_GET_SDR_WHITE_LEVEL,
-            DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME, DISPLAYCONFIG_DEVICE_INFO_SET_ADVANCED_COLOR_STATE,
-            DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO, DISPLAYCONFIG_MODE_INFO, DISPLAYCONFIG_PATH_INFO,
-            DISPLAYCONFIG_SDR_WHITE_LEVEL, DISPLAYCONFIG_SET_ADVANCED_COLOR_STATE, DISPLAYCONFIG_SOURCE_DEVICE_NAME,
-            QDC_ONLY_ACTIVE_PATHS,
+            DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME, DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME,
+            DISPLAYCONFIG_DEVICE_INFO_SET_ADVANCED_COLOR_STATE, DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO, DISPLAYCONFIG_MODE_INFO,
+            DISPLAYCONFIG_PATH_INFO, DISPLAYCONFIG_SDR_WHITE_LEVEL, DISPLAYCONFIG_SET_ADVANCED_COLOR_STATE,
+            DISPLAYCONFIG_SOURCE_DEVICE_NAME, DISPLAYCONFIG_TARGET_DEVICE_NAME, QDC_ONLY_ACTIVE_PATHS,
         },
         Foundation::LUID,
         Graphics::Dxgi::{
@@ -72,6 +72,26 @@ fn sdr_white_nits(name: &str) -> Option<u32> {
         white.header.id = id;
         // 单位：1000 = 80 尼特
         (DisplayConfigGetDeviceInfo(&mut white.header) == 0 && white.SDRWhiteLevel != 0).then(|| white.SDRWhiteLevel * 80 / 1000)
+    }
+}
+
+/// GDI 名为 `name` 的屏接的显示器型号名（显示器自己报的名字，如「VX2723」），主控端写在屏幕标签上。
+/// 查不到（没接真显示器、驱动没报）返回 None
+pub fn friendly_name(name: &str) -> Option<String> {
+    let (adapter, id) = target(name)?;
+    unsafe {
+        let mut t = DISPLAYCONFIG_TARGET_DEVICE_NAME::default();
+        t.header.r#type = DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME;
+        t.header.size = std::mem::size_of::<DISPLAYCONFIG_TARGET_DEVICE_NAME>() as u32;
+        t.header.adapterId = adapter;
+        t.header.id = id;
+        if DisplayConfigGetDeviceInfo(&mut t.header) != 0 {
+            return None;
+        }
+        let n = &t.monitorFriendlyDeviceName;
+        let end = n.iter().position(|&c| c == 0).unwrap_or(n.len());
+        let s = String::from_utf16_lossy(&n[..end]).trim().to_owned();
+        (!s.is_empty()).then_some(s)
     }
 }
 

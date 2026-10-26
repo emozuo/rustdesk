@@ -930,5 +930,6 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Copy", "复制"),
         ("Use the remote mouse to turn the view in games and 3D software; press {} to exit", "游戏、三维软件里转视角用远程鼠标；按 {} 退出"),
         ("{} in total", "{} 台"),
+        (" ({})", "（{}）"),
     ].iter().cloned().collect();
 }
