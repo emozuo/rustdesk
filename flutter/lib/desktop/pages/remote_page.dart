@@ -23,6 +23,7 @@ import '../../common/shared_state.dart';
 import '../../utils/dd_kiosk.dart';
 import '../../utils/image.dart';
 import '../widgets/dd_floating_ball.dart';
+import '../widgets/dd_remote_title_bar.dart';
 import '../widgets/remote_toolbar.dart';
 import '../widgets/kb_layout_type_chooser.dart';
 import '../widgets/tabbar_widget.dart';
@@ -161,6 +162,8 @@ class _RemotePageState extends State<RemotePage>
     }
     Get.put<FFI>(_ffi, tag: widget.id);
     _ffi.imageModel.addCallbackOnFirstImage((String peerId) {
+      // DreamDesk 受管版：鼠标模式按机器记，连上（含重连）按记住的值打开远程鼠标
+      if (kDdManaged) ddApplyRememberedMouseMode(_ffi);
       _ffi.canvasModel.activateLocalCursor();
       showKBLayoutTypeChooserIfNeeded(
           _ffi.ffiModel.pi.platform, _ffi.dialogManager);

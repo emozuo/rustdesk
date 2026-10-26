@@ -913,5 +913,10 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Turn on the microphone", "打开麦克风"),
         ("Turn off the microphone", "关闭麦克风"),
         ("These settings will be removed: remote settings are now changed in each machine's Control center and remembered per machine. They are kept here, read-only, for comparison.", "这一页将移除：远程相关的设置改在每台机器的「控制中心」里调，按机器记住。这里先留着对照，不能修改。"),
+        ("Local mouse", "本地鼠标"),
+        ("Remote mouse", "远程鼠标"),
+        ("The remote side is too old for the remote mouse", "对方版本太旧，不支持远程鼠标"),
+        ("The remote mouse does not work on a Wayland desktop", "本机是 Wayland 桌面，不支持远程鼠标"),
+        ("No keyboard and mouse permission", "没有键盘鼠标权限"),
     ].iter().cloned().collect();
 }

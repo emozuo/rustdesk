@@ -413,16 +413,27 @@ List<Widget> ddControlMenu(BuildContext context, String id, FFI ffi, {bool fulls
         toggles(toolbarDisplayToggle(context, id, ffi), [kShortcutActionToggleLockAfterSessionEnd]),
       ]),
       sub(DdIcon.devices, translate('Peripherals'), [
-        Obx(() => CkbMenuButton(
-              value: ffi.inputModel.relativeMouseMode.value,
-              ffi: ffi,
-              onChanged: (v) {
-                if (v != null) ffi.inputModel.setRelativeMouseMode(v);
-              },
-              child: Text(translate('Relative mouse mode')),
-            )),
+        _mouseMode(ffi),
+        const Divider(height: 9),
         toggles(toolbarDisplayToggle(context, id, ffi),
             [kShortcutActionToggleDisableClipboard, kShortcutActionToggleEnableFileCopyPaste]),
+        // 反转滚轮、交换左右键：RustDesk 原样就是按机器存的（菜单项照它的工具栏）
+        if (ffi.ffiModel.keyboard)
+          CkbMenuButton(
+            value: (bind.sessionGetReverseMouseWheelSync(sessionId: ffi.sessionId) ?? '') == 'Y' ||
+                ((bind.sessionGetReverseMouseWheelSync(sessionId: ffi.sessionId) ?? '') == '' &&
+                    bind.mainGetUserDefaultOption(key: kKeyReverseMouseWheel) == 'Y'),
+            ffi: ffi,
+            onChanged: ffi.ffiModel.viewOnly
+                ? null
+                : (v) {
+                    if (v != null) bind.sessionSetReverseMouseWheel(sessionId: ffi.sessionId, value: v ? 'Y' : 'N');
+                  },
+            child: Text(translate('Reverse mouse wheel')),
+          ),
+        for (final m in toolbarKeyboardToggles(ffi))
+          if (m.actionId == kShortcutActionToggleSwapLeftRightMouse)
+            CkbMenuButton(value: m.value, onChanged: m.onChanged, ffi: ffi, child: m.child),
       ]),
       sub(DdIcon.terminal, translate('Tools'), [
         MenuButton(onPressed: () => connect(context, id, isFileTransfer: true), ffi: ffi, child: Text(translate('File transfer'))),
@@ -447,6 +458,59 @@ List<Widget> ddControlMenu(BuildContext context, String id, FFI ffi, {bool fulls
             : item(DdIcon.arrowUpCircle, translate('Fullscreen'), () => stateGlobal.setFullscreen(true)),
       item(DdIcon.close, translate('End remote control'), () => closeConnection(id: id), color: const Color(0xFFE5484D)),
     ];
+}
+
+/// 鼠标模式按机器记（dreamdesk/docs/M-菜单设置方案.md）：本地鼠标 = RustDesk 原来的绝对坐标；远程鼠标 = RustDesk 的相对鼠标模式
+/// （本机指针锁在窗口里藏起来，只发移动量）。记在这台机器的配置里，每次连上（含重连）按记住的值打开（[ddApplyRememberedMouseMode]）。
+/// RustDesk 自己在出错、重连、键盘权限被收回时会关掉相对模式，Ctrl+Alt 也能临时退出（防鼠标被锁死）——这些都不改记住的值，
+/// 只有在菜单里切换才改
+const _kDdMouseMode = 'dd-mouse-mode';
+
+/// 不能用远程鼠标的原因；空串表示能用
+String _remoteMouseUnavailable(FFI ffi) {
+  if (!ffi.inputModel.isRelativeMouseModeSupported) return translate('The remote side is too old for the remote mouse');
+  if (isLinux && bind.mainCurrentIsWayland()) return translate('The remote mouse does not work on a Wayland desktop');
+  if (!ffi.ffiModel.keyboard || ffi.ffiModel.viewOnly) return translate('No keyboard and mouse permission');
+  return '';
+}
+
+Future<bool> _remoteMouseRemembered(FFI ffi) async =>
+    (await bind.sessionGetFlutterOption(sessionId: ffi.sessionId, k: _kDdMouseMode)) == 'remote';
+
+/// 连上（含重连）拿到第一帧画面时调用：记住的是远程鼠标、又能用，就打开
+Future<void> ddApplyRememberedMouseMode(FFI ffi) async {
+  if (_remoteMouseUnavailable(ffi).isNotEmpty || !await _remoteMouseRemembered(ffi)) return;
+  ffi.inputModel.setRelativeMouseMode(true);
+}
+
+Widget _mouseMode(FFI ffi) {
+  final reason = _remoteMouseUnavailable(ffi);
+  return FutureBuilder<bool>(
+    future: _remoteMouseRemembered(ffi),
+    builder: (_, snap) {
+      final remote = snap.data ?? false;
+      void choose(bool? v) {
+        if (v == null) return;
+        bind.sessionSetFlutterOption(sessionId: ffi.sessionId, k: _kDdMouseMode, v: v ? 'remote' : '');
+        ffi.inputModel.setRelativeMouseMode(v);
+      }
+
+      return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        RdoMenuButton<bool>(value: false, groupValue: remote, ffi: ffi, onChanged: choose, child: Text(translate('Local mouse'))),
+        RdoMenuButton<bool>(
+            value: true,
+            groupValue: remote,
+            ffi: ffi,
+            onChanged: reason.isEmpty ? choose : null,
+            child: Text(translate('Remote mouse'))),
+        if (reason.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
+            child: Text(reason, style: const TextStyle(fontSize: 12, color: _kText3)),
+          ),
+      ]);
+    },
+  );
 }
 
 /// 控制中心菜单的样式（白底圆角，照 UU），悬浮球的菜单也用它
