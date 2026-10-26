@@ -15,6 +15,7 @@ import 'package:flutter_hbb/desktop/widgets/tabbar_widget.dart';
 import 'package:flutter_hbb/desktop/widgets/material_mod_popup_menu.dart'
     as mod_menu;
 import 'package:flutter_hbb/desktop/widgets/popup_menu.dart';
+import 'package:flutter_hbb/utils/dd_kiosk.dart';
 import 'package:flutter_hbb/utils/multi_window_manager.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:get/get.dart';
@@ -443,6 +444,12 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
         }
         await setNewConnectWindowFrame(windowId(), id!, prePeerCount,
             WindowType.RemoteDesktop, display, screenRect);
+        // kiosk：通用窗口始终全屏——kiosk 里没有任务栏，窗口缩小、最小化后就找不回来（工具栏上也不给这两个按钮）。
+        // 隔一会儿再设，和 tryMoveToScreenAndSetFullscreen 一样，免得被刚恢复的窗口位置盖掉
+        if (kDdKiosk) {
+          Future.delayed(const Duration(milliseconds: 300),
+              () => stateGlobal.setFullscreen(true));
+        }
         Future.delayed(Duration(milliseconds: isWindows ? 100 : 0), () async {
           await windowOnTop(windowId());
         });

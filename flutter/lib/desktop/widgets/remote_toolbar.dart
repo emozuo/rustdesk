@@ -23,6 +23,7 @@ import '../../models/platform_model.dart';
 import '../../common/shared_state.dart';
 import './popup_menu.dart';
 import './kb_layout_type_chooser.dart';
+import 'package:flutter_hbb/utils/dd_kiosk.dart';
 import 'package:flutter_hbb/utils/scale.dart';
 import 'package:flutter_hbb/common/widgets/custom_scale_base.dart';
 
@@ -3589,6 +3590,8 @@ class _DraggableShowHideState extends State<_DraggableShowHide> {
         Obx(() => collapse.isTrue
             ? _MinimizedMonitorSwitchButton(id: widget.id, ffi: widget.ffi)
             : const Offstage()),
+        // kiosk 下通用窗口始终全屏，不给退出全屏和最小化（没有任务栏，缩下去就找不回来）
+        if (!kDdKiosk)
         Obx(() => buttonWrapper(
               () {
                 widget.setFullscreen(!isFullscreen.value);
@@ -3604,7 +3607,7 @@ class _DraggableShowHideState extends State<_DraggableShowHide> {
                 ),
               ),
             )),
-        if (!isMacOS && !isWebDesktop)
+        if (!isMacOS && !isWebDesktop && !kDdKiosk)
           Obx(() => Offstage(
                 offstage: isFullscreen.isFalse,
                 child: buttonWrapper(
