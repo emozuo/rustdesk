@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # DreamDesk Linux 打包：编出 dreamdesk-pro-<版本>.deb（产品改名、专业模式、只连内网服务器）。在仓库根目录跑：
-#   bash dreamdesk/scripts/build-linux.sh [build.py 的额外开关，例如测试包的 --dd-managed-dev]
-# 只出受管版：总是带 --dd-managed。正式包要先把产品钥填进 src/ddpro/managed.rs 的 PRODUCT_KEYS，没填时编译直接报错停下。
+#   bash dreamdesk/scripts/build-linux.sh [build.py 的额外开关]
+# 只出受管版：总是带 --dd-managed。受管版信任的票公钥、根证书和账号服务器地址都内置（src/ddpro/managed.rs、server_tls.rs、brand.rs），用联调网关的。
 #
 # 和 Windows 的 build-windows.ps1 同一个做法：编译走 RustDesk 自己的流程（build.py 的开关表、它 Linux 打包时用的同样的
 # cargo / flutter 命令），只给程序文件和安装包改名，内部库 librustdesk.so 不动（Windows 也保留 librustdesk.dll），

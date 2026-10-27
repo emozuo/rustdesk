@@ -5,7 +5,9 @@ kiosk 瘦客户机另见 [K-kiosk方案.md](K-kiosk方案.md)。
 
 ## 用户已定（10-26）
 
-- **只出受管版**。不受管的版本只留给开发测试。正式受管版要密钥仪式填好产品钥才编得出来。
+- **只出受管版**，而且只有一个受管版：10-27 起不再分「开发版 / 正式版」（用户：「要求没那么严格，只有个人开发，几台测试机」），
+  联调网关的票公钥 `devsrv1`、根证书、账号服务器地址 `https://dreamdesk.of3d.com:8443` 直接当成内置的，没有密钥仪式。
+  不开受管开关的构建只留给开发测试。
 - **所有客户端都必须登录账号**，从网关拿「授权给我的工作站」再连。登录认证由网关向 AD 做，本机不认证、不存口令。
 - **受管客户端不连非受管的机器**：要不到票就报原因、结束连接，不退回 RustDesk 的口令流程。
 - **桌面端照网易 UU 远程的布局和样式改**（用户给了截图，「不用完全参照」）：主窗口是「我的设备」首页；远程窗口一台机器一个窗口、
@@ -42,17 +44,18 @@ kiosk 瘦客户机另见 [K-kiosk方案.md](K-kiosk方案.md)。
 ### 第 2 步：关掉入口（10-26）
 
 - 用 RustDesk 给定制客户端的强制设置 / 内置设置（`brand::managed_lock`）：强制关「按 IP 直连」「局域网发现」，内置「不能改设备号」
-  「不显示服务器设置」；正式版连 ID / 中继服务器、服务器公钥、网关地址也强制成内网的（10-21 放开的「ID 服务器可改」在受管版收回），
-  开发版不锁地址，好用 `--option` 指到 0.208:8443 的联调网关。
+  「不显示服务器设置」；连 ID / 中继服务器、服务器公钥、网关地址也强制成内网的（10-21 放开的「ID 服务器可改」在受管版收回）。
+  原来开发版不锁地址、好用 `--option` 指到 0.208:8443 的联调网关，10-27 起只有一个受管版、一律锁死，地址就是那个联调网关
+  （只有一个网关，锁死后测试机不会再漏配，.82 那次就是漏配）。
 - 局域网发现：RustDesk 的监听端口（UDP 21119）始终绑着，开关关了就不回应扫描，不是不绑端口。
 - 实测（209.32、本机）：两项读出来都是 N；209.32 不再监听直连端口（之前日志里有直连）；向 21119 发局域网发现 ping，209.32 不回，
   对照机 59.82（不受管旧版）回了设备号、Windows 用户名和主机名；`--set-id` 报 Changing ID is disabled。
-  正式版锁地址那一支要等产品钥填好才编得出来，没实际编过。
+  （以上是当时开发版上的实测；10-27 合成一个受管版后锁地址这一支所有构建都走，改后只做了编译检查，没有再实测。）
 
 ### 第 3 步：主窗口（10-26）
 
 - 受管版（Rust 经 `main_get_common_sync("dd-managed")` 告诉界面）主窗口首页换成 `dd_home_page.dart`，kiosk 照旧，不受管的开发版
-  照旧是 RustDesk 原首页。RustDesk 原首页照样建起来、只是不显示（远程窗口、设置页要它登记的东西）。
+  （不开受管开关的构建）照旧是 RustDesk 原首页。RustDesk 原首页照样建起来、只是不显示（远程窗口、设置页要它登记的东西）。
 - 布局照 UU：浅灰标题栏和左栏连成一片，内容区更浅、左上角圆角；左栏「我的设备」列出授权工作站（`/api/dd/workstations`，在线点、
   系统小方块图标）和「全部设备」，左下角「设置」（就是 RustDesk 的设置页）；右边没登录是插画 +「立即登录」，登录后是全部设备卡片，
   或一台的详情（状态胶囊 + 名字、「进入桌面」大卡片、文件传输 / 终端 / 端口映射）。标题栏右边头像（点开小卡片：没登录是
@@ -113,9 +116,8 @@ kiosk 瘦客户机另见 [K-kiosk方案.md](K-kiosk方案.md)。
 ### 第 5 步：打包默认受管版（10-26）
 
 - Linux（`build-linux.sh`）、Windows（`build-windows.ps1`）打包总是带 `--dd-managed`，不再编得出不受管的包。
-- `build.py` 加 `--dd-managed-dev`（受管 + 另信任开发测试钥），测试包用它：`build-linux.sh --dd-managed-dev`、
-  `build-windows.ps1 -BuildPyFlags --hwcodec,--vram,--dd-managed-dev`（Linux 原来的 `EXTRA_FEATURES=dd-managed-dev` 照样能用）。
-- 正式包要等产品钥（PRODUCT_KEYS、PRODUCT_ROOTS）填进 `src/ddpro/managed.rs`：没填时编译直接报错停下（实测 `cargo check` 两条报错），
-  不会悄悄编出只认测试钥的包。
-- 核对：`build.py ... --dd-managed --print-features` 打出 `hwcodec,flutter,dd-pro,dd-brand,dd-managed`，加 `--dd-managed-dev` 多一个
-  `dd-managed-dev`；两个脚本语法检查通过。
+- ~~`build.py` 的 `--dd-managed-dev`（受管 + 另信任开发测试钥）、「没填产品钥编译报错」的检查~~：10-27 取消「开发版 / 正式版」之分，
+  特性 `dd-managed-dev`、`--dd-managed-dev` 开关、`DEV_KEYS` / `DEV_ROOTS`、两处编译期断言整个删了；只留一份受信票公钥
+  （`managed.rs` 的 `TRUSTED_KEYS`，钥匙编号 `devsrv1`，网关签票用的编号，不能改）和一份根证书（`server_tls.rs` 的 `TRUSTED_ROOTS`，文件
+  `src/ddpro/root-ca.pem`，原 `dev-root-ca.pem`），受管构建一律只发 HTTPS、账号服务器地址一律锁死（`brand.rs` 的 `INTRANET_API`）。
+- 核对：`build.py ... --dd-managed --print-features` 打出 `hwcodec,flutter,dd-pro,dd-brand,dd-managed`。

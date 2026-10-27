@@ -160,13 +160,7 @@ def make_parser():
         '--dd-managed',
         action='store_true',
         help='DreamDesk: enable feature dd-managed (hosts only accept server-issued connection tickets; '
-             'implies dd-pro and dd-brand; needs the production keys built in)'
-    )
-    parser.add_argument(
-        '--dd-managed-dev',
-        action='store_true',
-        help='DreamDesk: enable feature dd-managed-dev (dd-managed that also trusts the development '
-             'test key; for test packages only)'
+             'implies dd-pro and dd-brand)'
     )
     parser.add_argument(
         '--print-features',
@@ -351,8 +345,6 @@ def get_features(args):
         features.append('dd-brand')
     if args.dd_managed:
         features.append('dd-managed')
-    if args.dd_managed_dev:
-        features.append('dd-managed-dev')
     if args.drm:
         # Say so rather than quietly handing back a stock build: the backend is Linux-only, so on
         # any other host the flag cannot be honoured and the resulting binary would look like a

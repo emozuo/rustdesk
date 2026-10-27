@@ -10,21 +10,11 @@ use ddpro::ticket::{self, Ticket};
 /// 编进来就受管。钩子写成 `if MANAGED { return ... }`，是为了让钩子后面 RustDesk 原有的代码不被报「执行不到」
 pub(super) const MANAGED: bool = true;
 
-/// 产品预置的受信任公钥（钥匙编号, Ed25519 公钥十六进制）。密钥仪式后填入当前钥和备用钥
-const PRODUCT_KEYS: &[(&str, &str)] = &[];
-// 正式受管版没有产品钥就不许编出来：编出来的被控端谁的票都不认，装上去就没人连得上
-#[cfg(not(feature = "dd-managed-dev"))]
-const _: () = assert!(
-    !PRODUCT_KEYS.is_empty(),
-    "dd-managed: fill PRODUCT_KEYS with the production ticket keys (key ceremony) before building a managed product"
-);
-/// 开发测试钥：私钥在 dreamdesk-gateway 的开发环境里，只有 `dd-managed-dev` 构建认，产品构建不带
-#[cfg(feature = "dd-managed-dev")]
-const DEV_KEYS: &[(&str, &str)] = &[
+/// 受信任的票公钥（钥匙编号, Ed25519 公钥十六进制）：联调网关（dreamdesk-gateway）签票用的钥。
+/// 编号要和网关签票时写进票里的钥匙编号一致，不能改；换钥时在这里加新的、旧的留到旧票都过期
+const TRUSTED_KEYS: &[(&str, &str)] = &[
     ("devsrv1", "d6b608d34808ded7ecad1dbc57017723211fd45ec52a82bc5b4b33425de56252"),
 ];
-#[cfg(not(feature = "dd-managed-dev"))]
-const DEV_KEYS: &[(&str, &str)] = &[];
 
 const LOG_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
 
@@ -113,9 +103,8 @@ pub(super) fn add_audit_jti(conn_id: i32, audit: &mut Value) {
 }
 
 fn trusted_keys() -> Vec<(&'static str, Vec<u8>)> {
-    PRODUCT_KEYS
+    TRUSTED_KEYS
         .iter()
-        .chain(DEV_KEYS)
         .filter_map(|(kid, pk)| match hex::decode(pk) {
             Ok(pk) if pk.len() == 32 => Some((*kid, pk)),
             _ => {

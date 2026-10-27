@@ -22,9 +22,10 @@ pub fn apply() {
         base::config::keys::OPTION_USE_ALL_MY_DISPLAYS_FOR_THE_REMOTE_SESSION.to_owned(),
         "Y".to_owned(),
     );
-    // 受管正式版：服务器地址锁成产品内置的。能改的话，被控端上的人（包括凭票进来的远程用户）可以把它改成 http 或别的地址，
-    // 证书固定就落空，服务端经心跳下发的「断开」也送不到。开发测试版不锁，方便指向联调服务
-    #[cfg(all(feature = "dd-managed", not(feature = "dd-managed-dev")))]
+    // 受管：账号服务器锁成内置的。能改的话，被控端上的人（包括凭票进来的远程用户）可以把它改成 http 或别的地址，
+    // 证书固定就落空，服务端经心跳下发的「断开」也送不到（`brand::managed_lock` 把 ID / 中继 / 公钥 / 账号服务器都锁了，
+    // 这里是更早一步、在 RustDesk 读配置前就把账号服务器锁上，两处要一起改）
+    #[cfg(feature = "dd-managed")]
     hbb_common::config::OVERWRITE_SETTINGS.write().unwrap().insert(
         base::config::keys::OPTION_API_SERVER.to_owned(),
         brand::INTRANET_API.to_owned(),

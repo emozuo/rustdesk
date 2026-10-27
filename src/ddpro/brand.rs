@@ -16,7 +16,8 @@ use hbb_common::config;
 pub const APP_NAME: &str = "dreamdesk-pro";
 
 const INTRANET_SERVER: &str = "dreamdesk.of3d.com";
-pub(crate) const INTRANET_API: &str = "https://dreamdesk.of3d.com";
+/// 账号服务器：联调网关（192.168.0.208 上的新网关，8443 端口）。受管版锁死，新装的测试机不用再手动 --option 指过去
+pub(crate) const INTRANET_API: &str = "https://dreamdesk.of3d.com:8443";
 /// 内网 RustDesk 服务端（192.168.0.208 上的 hbbs，2026-10-13 部署 1.1.16）的公钥，客户端凭它认服务器。
 /// 服务端重装、换了密钥就要改这里并发新版。
 const INTRANET_SERVER_KEY: &str = "k0JPM24w59r7hkKuSfjwcGQAxezVb+sTBj5+UZOOlOg=";
@@ -47,18 +48,17 @@ pub fn apply() {
 
 /// 受管版内置锁定（用户 10-26 定，dreamdesk/docs/M-受管版方案.md 第 2 步）：连接只能从网关列出的工作站发起、按设备号走，
 /// 所以不开按 IP 直连、不做局域网发现；设备号只是内部的连接号码，不能改；不显示服务器设置。
-/// 正式版连服务器地址也锁死（10-21 放开的「ID 服务器可改」在受管版收回）；开发版留着，好用 --option 指到联调网关
+/// 连服务器地址（ID、中继、公钥、账号服务器）也锁死（10-21 放开的「ID 服务器可改」在受管版收回）：只有一个网关，锁死后测试机不会漏配
 #[cfg(feature = "dd-managed")]
 fn managed_lock() {
-    #[allow(unused_mut)]
-    let mut forced = vec![(keys::OPTION_DIRECT_SERVER, "N"), (keys::OPTION_ENABLE_LAN_DISCOVERY, "N")];
-    #[cfg(not(feature = "dd-managed-dev"))]
-    forced.extend([
+    let forced = [
+        (keys::OPTION_DIRECT_SERVER, "N"),
+        (keys::OPTION_ENABLE_LAN_DISCOVERY, "N"),
         (keys::OPTION_CUSTOM_RENDEZVOUS_SERVER, INTRANET_SERVER),
         (keys::OPTION_RELAY_SERVER, INTRANET_SERVER),
         (keys::OPTION_KEY, INTRANET_SERVER_KEY),
         (keys::OPTION_API_SERVER, INTRANET_API),
-    ]);
+    ];
     config::OVERWRITE_SETTINGS.write().unwrap().extend(forced.into_iter().map(|(k, v)| (k.to_owned(), v.to_owned())));
     config::BUILTIN_SETTINGS.write().unwrap().extend(
         [keys::OPTION_DISABLE_CHANGE_ID, keys::OPTION_HIDE_SERVER_SETTINGS].map(|k| (k.to_owned(), "Y".to_owned())),

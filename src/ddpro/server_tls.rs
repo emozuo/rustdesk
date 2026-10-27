@@ -12,24 +12,12 @@ use hbb_common::{
     proxy::{Proxy, ProxyScheme},
 };
 
-/// 产品根证书（PEM）：当前和备用两张，密钥仪式后填入；根证书私钥离线保管，服务器证书到期换发不用改客户端
-const PRODUCT_ROOTS: &[&str] = &[];
-// 正式受管版没有产品根证书就不许编出来：编出来的客户端什么服务器都不信，登录、要票、心跳全失败
-#[cfg(not(feature = "dd-managed-dev"))]
-const _: () = assert!(
-    !PRODUCT_ROOTS.is_empty(),
-    "dd-managed: fill PRODUCT_ROOTS with the production root certificates (key ceremony) before building a managed product"
-);
-/// 开发根证书：私钥在 dreamdesk-gateway 的开发环境里，只有 `dd-managed-dev` 构建认
-#[cfg(feature = "dd-managed-dev")]
-const DEV_ROOTS: &[&str] = &[include_str!("dev-root-ca.pem")];
-#[cfg(not(feature = "dd-managed-dev"))]
-const DEV_ROOTS: &[&str] = &[];
+/// 信任的根证书（PEM）：联调网关的服务器证书由它签发；服务器证书到期换发不用改客户端
+const TRUSTED_ROOTS: &[&str] = &[include_str!("root-ca.pem")];
 
 fn roots() -> Vec<reqwest::Certificate> {
-    PRODUCT_ROOTS
+    TRUSTED_ROOTS
         .iter()
-        .chain(DEV_ROOTS)
         .filter_map(|pem| match reqwest::Certificate::from_pem(pem.as_bytes()) {
             Ok(c) => Some(c),
             Err(e) => {
@@ -63,12 +51,12 @@ fn configured_proxy() -> Result<Option<reqwest::Proxy>, String> {
 macro_rules! pinned_client {
     ($Client:ty) => {{
         let pinned = || {
-            // 正式版只发 HTTPS（服务器地址也锁成 https 的）；开发测试版要连明文的联调服务
+            // 只发 HTTPS（服务器地址也锁成 https 的）
             let mut b = <$Client>::builder()
                 .no_proxy()
                 .use_rustls_tls()
                 .tls_built_in_root_certs(false)
-                .https_only(cfg!(not(feature = "dd-managed-dev")));
+                .https_only(true);
             for c in roots() {
                 b = b.add_root_certificate(c);
             }
@@ -97,7 +85,7 @@ macro_rules! pinned_client {
                             .no_proxy()
                             .use_native_tls()
                             .tls_built_in_root_certs(false)
-                            .https_only(cfg!(not(feature = "dd-managed-dev")));
+                            .https_only(true);
                         for c in roots() {
                             b = b.add_root_certificate(c);
                         }
