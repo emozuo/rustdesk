@@ -126,6 +126,9 @@ dev_dependencies:
   ffigen: ^8.0.2
 
 dependency_overrides:
+  # DreamDesk: rustdesk_desktop_multi_window with setMinimumSize added (see dreamdesk/third_party/desktop_multi_window/DREAMDESK.md)
+  desktop_multi_window:
+    path: ../dreamdesk/third_party/desktop_multi_window
   intl: ^0.19.0
   flutter_plugin_android_lifecycle: 2.0.17
 
