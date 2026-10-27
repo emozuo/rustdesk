@@ -588,7 +588,8 @@ async fn run_forward(forward: Framed<TcpStream, BytesCodec>, stream: Stream) -> 
     Ok(())
 }
 
-#[cfg(test)]
+// DreamDesk 受管版的登录在 handle_hash 里改走连接票（src/ddpro/managed_client.rs），这组测的口令登录走不到
+#[cfg(all(test, not(feature = "dd-managed")))]
 mod login_tests {
     use super::*;
     use async_trait::async_trait;
