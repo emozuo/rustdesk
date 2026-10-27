@@ -2,13 +2,16 @@
 
 use crate::{
     ddpro::wire::{wrap, PEER_LOG_INTERVAL},
-    server::{service::Subscriber, ConnInner, ServerPtrWeak},
+    server::{
+        service::{GenericService, Subscriber},
+        ConnInner, ServerPtrWeak,
+    },
 };
 use base::message_proto::Message;
 use ddpro::{dd_pro, reject, FormatCaps, HdrResult, Hello, SetHdr};
 use hbb_common::{log, throttled_log, tokio};
 use serde_json::{json, Map, Value};
-use std::net::IpAddr;
+use std::{collections::HashSet, net::IpAddr, sync::Arc};
 
 /// 专业视频服务名的前缀（后面接屏号）
 const PRO_SERVICE_PREFIX: &str = "ddpro_monitor";
@@ -74,6 +77,72 @@ pub fn add_name_card(platform_additions: &mut Map<String, Value>) {
         ddpro::NAME_CARD_KEY.to_owned(),
         json!(ddpro::PROTOCOL_VERSION),
     );
+}
+
+/// 通用画面服务（`video_service::run`，每次重启一份新的）把这块屏的采集方式、是不是硬编告诉订阅它的连接
+/// （`VideoInfo`，只给主控端界面的详情显示）。
+/// 要在画面服务发出一帧之后报（[`Self::on_frame`]）：新订阅者在第一帧发出前还在「新订阅」里，`send_shared` 只送老订阅者；
+/// 发出第一帧前 RustDesk 自己的 snapshot 才把它们转正。这里不碰 snapshot——它会提前把新订阅者转正，画面服务就不会为新订阅者重启，
+/// 新订阅者拿不到关键帧
+pub struct VideoReport {
+    /// 摄像头不报
+    monitor: bool,
+    /// Windows 的采集现在是不是 GDI（DXGI 出错或被选项关掉后退回的）
+    gdi: bool,
+    /// 已经收到的连接
+    informed: HashSet<i32>,
+}
+
+impl VideoReport {
+    pub fn new(monitor: bool) -> Self {
+        Self {
+            monitor,
+            gdi: false,
+            informed: HashSet::new(),
+        }
+    }
+
+    /// 画面服务建好时采集已经是 GDI 的（选项关了 DXGI、DXGI 恢复用尽）：只记状态，等第一帧发出时一起报
+    #[cfg(windows)]
+    pub fn set_gdi(&mut self, gdi: bool) {
+        self.gdi = gdi;
+    }
+
+    /// 每发出一帧调用：这一帧发给的连接里有还没收到的，就报一次。第一个连接、画面服务重启后的连接、中途加入的连接都经这里送到——
+    /// 此刻新订阅者已被 `handle_one_frame` 开头的 snapshot 转正，`send_shared` 送得到
+    pub fn on_frame(&mut self, sp: &GenericService, display: usize, hardware: bool, conns: &HashSet<i32>) {
+        if conns.iter().all(|id| self.informed.contains(id)) {
+            return;
+        }
+        self.informed.extend(conns.iter().copied());
+        self.send(sp, display, hardware);
+    }
+
+    /// DXGI 中途退回 GDI：对所有订阅者再报一次
+    #[cfg(windows)]
+    pub fn fell_back_to_gdi(&mut self, sp: &GenericService, display: usize, hardware: bool) {
+        self.gdi = true;
+        self.send(sp, display, hardware);
+    }
+
+    fn send(&self, sp: &GenericService, display: usize, hardware: bool) {
+        if !self.monitor {
+            return;
+        }
+        if let Some(msg) = wrap(ddpro::video_info(display as u32, capture_name(self.gdi), hardware)) {
+            sp.send_shared(Arc::new(msg));
+        }
+    }
+}
+
+/// 通用画面的采集方式。Linux 的 Wayland 只认 PipeWire 一条路（带 drm 功能的构建在登录界面可能走 DRM，这里不区分）
+fn capture_name(_gdi: bool) -> &'static str {
+    #[cfg(windows)]
+    return if _gdi { "GDI" } else { "DXGI" };
+    #[cfg(target_os = "linux")]
+    return if crate::platform::linux::is_x11() { "X11" } else { "PipeWire" };
+    #[cfg(not(any(windows, target_os = "linux")))]
+    ""
 }
 
 /// 处理专业协议消息时需要的连接信息（由 RustDesk 的连接对象交过来）。
@@ -281,6 +350,11 @@ fn answer(hello: &Hello, ctx: &ConnCtx) -> dd_pro::Union {
             match open_channel(display, ctx, accept.format.bit_depth, accept.format.hdr) {
                 Ok(media) => {
                     accept.media = Some(media).into();
+                    // 专业画面用 DXGI 桌面复制采集纹理，没有 GDI 退路
+                    #[cfg(all(windows, feature = "vram"))]
+                    {
+                        accept.capture = "DXGI".to_owned();
+                    }
                     #[cfg(windows)]
                     super::mic::on_pro_session(ctx.conn.id());
                 }

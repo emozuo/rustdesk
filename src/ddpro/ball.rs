@@ -41,14 +41,20 @@ const REVEAL: f32 = 24.0;
 /// 停在屏幕中间、没人碰多久就回到顶边
 const IDLE_DOCK: Duration = Duration::from_secs(1);
 // 面板尺寸、配色、字号照界面原型（dreamdesk/design/prototype/ProBall.html，和通用窗口的控制中心菜单同一套：
-// 宽 230、行高 36、行左右各缩进 6 的圆角悬停块、图标 18、字 14；选中项主色字加右边对勾）
+// 宽 230、行高 36、行左右各缩进 6 的圆角悬停块、图标 18、字 14；选中项是文字前一个 5 像素黑点，文字不变色、不打勾）
 const MENU_W: f32 = 230.0;
 const SUB_W: f32 = 200.0;
 /// 行的悬停块离面板左右边的距离，和行里内容的左右内边距
 const ROW_INSET: f32 = 6.0;
 const ROW_PAD: f32 = 10.0;
-/// 子菜单没有图标，文字从行内边距起
+/// 子菜单没有图标，文字从行内边距起；里面有选中项时，所有行的文字都往右让出黑点的位置（原型 .dd-mi--on：行内左边距 26）
 const SUB_TEXT_X: f32 = ROW_INSET + ROW_PAD;
+const SUB_DOT_TEXT_X: f32 = ROW_INSET + 26.0;
+/// 单选项（子菜单里当前的那一项）选中的黑点：直径 5，圆心在行内 12 + 半径处
+const DOT: f32 = 5.0;
+const SUB_DOT_X: f32 = ROW_INSET + 12.0 + DOT / 2.0;
+/// 多选（开关）项选中的对勾（Lucide check，原型 .dd-mi--check：14 像素），圆心在图标那一列
+const CHECK: f32 = 14.0;
 const ROW_H: f32 = 36.0;
 /// 分组之间的分隔线占的高度（线在正中）
 const DIVIDER_H: f32 = 9.0;
@@ -72,7 +78,6 @@ const C_TEXT2: [u8; 4] = [100, 106, 115, 255];
 const C_DIM: [u8; 4] = [154, 160, 168, 255];
 const C_HOVER: [u8; 4] = [0, 0, 0, 15];
 const C_LINE: [u8; 4] = [220, 223, 228, 255];
-const C_ACCENT: [u8; 4] = [47, 111, 234, 255];
 const C_DANGER: [u8; 4] = [209, 52, 56, 255];
 /// 球：常态浅灰底 + 浅灰带状边框；悬停时底转白、边框叠蓝。图标颜色始终不变
 const C_BALL: [u8; 4] = [241, 241, 242, 247];
@@ -80,12 +85,15 @@ const C_BALL_H: [u8; 4] = [255, 255, 255, 252];
 const C_BAND: [u8; 4] = [227, 227, 230, 255];
 const C_BAND_H: [u8; 4] = [177, 203, 255, 255];
 const C_BALL_FG: [u8; 4] = [71, 77, 87, 255];
-/// 网络状态块：10 号等宽字（≈13.3 像素），深灰 72% 底、白字 92%；最窄 132 像素，离屏幕底边 110 像素（让开被控端任务栏）
-const STATUS_PX: f32 = 13.33;
-const STATUS_MIN_W: f32 = 132.0;
+/// 网络状态块（照 UU 的「网络状态」，原型 RemoteStats.html ③）：12 号等宽白字、行高 16、左右留 12 上下留 8、4 圆角、黑底 70%；
+/// 一行一个数值、不写名称；离屏幕底边 110 像素（让开被控端任务栏）
+const STATUS_PX: f32 = 12.0;
+const STATUS_LINE_H: f32 = 16.0;
+const STATUS_PAD_X: f32 = 12.0;
+const STATUS_PAD_Y: f32 = 8.0;
 const STATUS_BOTTOM: f32 = 110.0;
-const C_STATUS_BG: [u8; 4] = [87, 87, 94, 184];
-const C_STATUS_FG: [u8; 4] = [255, 255, 255, 235];
+const C_STATUS_BG: [u8; 4] = [0, 0, 0, 179];
+const C_STATUS_FG: [u8; 4] = [255, 255, 255, 255];
 
 /// Linux evdev 码
 const BTN_LEFT: u32 = 0x110;
@@ -149,7 +157,7 @@ fn row_top(i: usize) -> f32 {
     PAD + i as f32 * ROW_H + DIVIDER_AFTER.iter().filter(|&&d| d < i).count() as f32 * DIVIDER_H
 }
 
-/// 子菜单的一行：文字、是不是当前选中的（主色字、右边对勾）、点了做什么（None = 点了只关菜单）
+/// 子菜单的一行：文字、是不是当前选中的（文字前一个黑点）、点了做什么（None = 点了只关菜单）
 struct SubEntry {
     label: String,
     current: bool,
@@ -179,6 +187,15 @@ impl Item {
 
     fn has_sub(self) -> bool {
         matches!(self, Item::SwitchDisplay | Item::Resolution)
+    }
+}
+
+/// 子菜单文字的起点：里面有选中项就让出黑点的位置
+fn sub_text_x(entries: &[SubEntry]) -> f32 {
+    if entries.iter().any(|e| e.current) {
+        SUB_DOT_TEXT_X
+    } else {
+        SUB_TEXT_X
     }
 }
 
@@ -709,8 +726,7 @@ impl Ball {
             .face
             .as_ref()
             .map_or(0.0, |f| entries.iter().map(|e| text_width(f, &e.label, FONT_PX)).fold(0.0, f32::max));
-        // 右边留出对勾的位置
-        let w = SUB_W.max((SUB_TEXT_X + text + 16.0 + 2.0 * MARK_X).ceil());
+        let w = SUB_W.max((sub_text_x(&entries) + text + ROW_INSET + ROW_PAD).ceil());
         let x = if mx + mw + 4.0 + w <= self.screen.0 { mx + mw + 4.0 } else { mx - 4.0 - w };
         let y = (my + row_top(r) - PAD).clamp(0.0, (self.screen.1 - h).max(0.0));
         Some((x.max(0.0), y, w, h))
@@ -749,7 +765,7 @@ impl Ball {
             stroke(&mut pm, band, C_BAND_H, BORDER);
         }
         // 图标：控制中心（和通用窗口标题栏的「控制中心」、全屏悬浮球同一个 Fluent 图标，20 号原尺寸），颜色不随悬停变
-        draw_svg(&mut pm, &icons::BALL, l + BALL / 2.0, t + BALL / 2.0, 20.0, C_BALL_FG);
+        draw_svg(&mut pm, &icons::BALL, l + BALL / 2.0, t + BALL / 2.0, 20.0, 1.5, C_BALL_FG);
         let (x, y) = self.ball_pos();
         Some(to_layer(&pm, (x - SHADOW).round() as i32, (y - SHADOW).round() as i32))
     }
@@ -790,42 +806,44 @@ impl Ball {
             if self.hover_row == Some(i) || self.sub_open == Some(i) {
                 fill(&mut pm, rounded(x + ROW_INSET, ry, w - 2.0 * ROW_INSET, ROW_H, 6.0), C_HOVER);
             }
-            // 开关项开着时照控制中心：文字主色、右边一个对勾（不用复选框）
+            // 开关（多选）项开着时照控制中心：图标那一列画一个对勾，文字不变色；单选（子菜单）才是黑点
             let on = (*item == Item::Status && self.show_status) || (*item == Item::Mic && self.mic) || (*item == Item::Hdr && self.hdr);
             let fg = match item {
                 Item::Disconnect => C_DANGER,
                 Item::Hdr if !self.hdr_available => C_DIM,
-                _ if on => C_ACCENT,
                 _ => C_TEXT,
             };
             let cy = ry + ROW_H / 2.0;
-            draw_svg(&mut pm, item.icon(), x + ICON_X, cy, ICON, fg);
+            match item.icon() {
+                Some(icon) => draw_svg(&mut pm, icon, x + ICON_X, cy, ICON, 1.5, fg),
+                None if on => draw_svg(&mut pm, &icons::CHECK, x + ICON_X, cy, CHECK, 2.0, C_TEXT),
+                None => {}
+            }
             if let Some(face) = &self.face {
                 // 屏幕那一项写正在看的是哪块屏（和通用窗口控制中心一样）
                 let label = if *item == Item::SwitchDisplay { screen_name(self.display_index) } else { item.label() };
                 draw_text(&mut pm, face, &label, x + TEXT_X, cy, fg, FONT_PX);
             }
             if item.has_sub() {
-                draw_svg(&mut pm, &icons::CHEVRON_RIGHT, x + w - MARK_X, cy, 16.0, C_TEXT2);
-            } else if on {
-                draw_svg(&mut pm, &icons::CHECK, x + w - MARK_X, cy, 16.0, C_ACCENT);
+                draw_svg(&mut pm, &icons::CHEVRON_RIGHT, x + w - MARK_X, cy, 16.0, 1.5, C_TEXT2);
             }
         }
 
         if let Some((sx, sy, sw, _)) = sub {
-            for (i, e) in self.sub_entries().iter().enumerate() {
+            let entries = self.sub_entries();
+            let text_x = sub_text_x(&entries);
+            for (i, e) in entries.iter().enumerate() {
                 let ry = sy + PAD + i as f32 * ROW_H;
                 if self.hover_sub == Some(i) {
                     fill(&mut pm, rounded(sx + ROW_INSET, ry, sw - 2.0 * ROW_INSET, ROW_H, 6.0), C_HOVER);
                 }
                 let cy = ry + ROW_H / 2.0;
-                // 当前那一项（看的那块屏、现在的分辨率）：主色字、右边对勾
-                let fg = if e.current { C_ACCENT } else { C_TEXT };
                 if let Some(face) = &self.face {
-                    draw_text(&mut pm, face, &e.label, sx + SUB_TEXT_X, cy, fg, FONT_PX);
+                    draw_text(&mut pm, face, &e.label, sx + text_x, cy, C_TEXT, FONT_PX);
                 }
+                // 当前那一项（看的那块屏、现在的分辨率）：文字前一个黑点
                 if e.current {
-                    draw_svg(&mut pm, &icons::CHECK, sx + sw - MARK_X, cy, 16.0, C_ACCENT);
+                    fill(&mut pm, rounded(sx + SUB_DOT_X - DOT / 2.0, cy - DOT / 2.0, DOT, DOT, DOT / 2.0), C_TEXT);
                 }
             }
         }
@@ -839,18 +857,18 @@ impl Ball {
         if self.status_lines.is_empty() {
             return None;
         }
-        let (line_h, pad) = (22.0, 12.0);
         let text_w = self
             .status_lines
             .iter()
             .map(|l| text_width(face, l, STATUS_PX))
             .fold(0.0, f32::max);
-        let w = (text_w + 2.0 * pad).ceil().max(STATUS_MIN_W);
-        let h = self.status_lines.len() as f32 * line_h + 2.0 * pad;
+        let w = (text_w + 2.0 * STATUS_PAD_X).ceil();
+        let h = self.status_lines.len() as f32 * STATUS_LINE_H + 2.0 * STATUS_PAD_Y;
         let mut pm = Pixmap::new(w as u32, h as u32)?;
-        fill(&mut pm, rounded(0.0, 0.0, w, h, 6.0), C_STATUS_BG);
+        fill(&mut pm, rounded(0.0, 0.0, w, h, 4.0), C_STATUS_BG);
         for (i, line) in self.status_lines.iter().enumerate() {
-            draw_text(&mut pm, face, line, pad, pad + i as f32 * line_h + line_h / 2.0, C_STATUS_FG, STATUS_PX);
+            let cy = STATUS_PAD_Y + i as f32 * STATUS_LINE_H + STATUS_LINE_H / 2.0;
+            draw_text(&mut pm, face, line, STATUS_PAD_X, cy, C_STATUS_FG, STATUS_PX);
         }
         // 右边只留一条缝；底边让开被控端的任务栏
         let (x, y) = (self.screen.0 - w - 1.0, self.screen.1 - h - STATUS_BOTTOM);
@@ -895,25 +913,25 @@ fn soft_shadow(pm: &mut Pixmap, x: f32, y: f32, w: f32, h: f32, r: f32) {
 }
 
 impl Item {
-    /// 每项左边的图标（图标库原图，见 `ball_icons.rs`；和通用窗口控制中心用的同一批）
-    fn icon(self) -> &'static icons::Icon {
-        match self {
+    /// 每项左边的图标（图标库原图，见 `ball_icons.rs`；和通用窗口控制中心用的同一批）。
+    /// 开关项（状态块、麦克风、HDR）没有图标：照原型，能选中的项选中时对勾放在图标那一列，没选中那一列空着、文字和有图标的行对齐
+    fn icon(self) -> Option<&'static icons::Icon> {
+        Some(match self {
             Item::SwitchDisplay => &icons::MONITOR,
             Item::Resolution => &icons::RESOLUTION,
-            Item::Status => &icons::SIGNAL,
-            Item::Mic => &icons::MIC,
-            Item::Hdr => &icons::HDR,
+            Item::Status | Item::Mic | Item::Hdr => return None,
             // 切到通用模式：通用模式就是普通的远程画面，原型里用显示器图标
             Item::General => &icons::MONITOR,
             Item::CtrlAltDel => &icons::KEYBOARD,
             Item::Lock => &icons::LOCK,
             Item::Disconnect => &icons::LOG_OUT,
-        }
+        })
     }
 }
 
-/// 以 (cx, cy) 为中心、边长 `size` 画一个图标：描边图标线宽 1.5（图标格子里的单位，和通用窗口一样随尺寸缩放）、圆头圆角
-fn draw_svg(pm: &mut Pixmap, icon: &icons::Icon, cx: f32, cy: f32, size: f32, color: [u8; 4]) {
+/// 以 (cx, cy) 为中心、边长 `size` 画一个图标：描边图标线宽 `stroke`（图标格子里的单位，和通用窗口一样随尺寸缩放；
+/// 图标一般 1.5，菜单里的小对勾照原型用 2）、圆头圆角
+fn draw_svg(pm: &mut Pixmap, icon: &icons::Icon, cx: f32, cy: f32, size: f32, stroke: f32, color: [u8; 4]) {
     let mut pb = PathBuilder::new();
     for seg in icon.segs {
         match *seg {
@@ -932,7 +950,7 @@ fn draw_svg(pm: &mut Pixmap, icon: &icons::Icon, cx: f32, cy: f32, size: f32, co
         pm.fill_path(&path, &paint(color), FillRule::Winding, t, None);
     } else {
         let s = Stroke {
-            width: 1.5,
+            width: stroke,
             line_cap: LineCap::Round,
             line_join: LineJoin::Round,
             ..Stroke::default()

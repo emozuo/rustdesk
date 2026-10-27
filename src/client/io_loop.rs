@@ -1621,6 +1621,8 @@ impl<T: InvokeUiSession> Remote<T> {
                             }
                         }
                         #[cfg(feature = "dd-pro")]
+                        crate::ddpro::stats::on_connected(&self.handler, peer.local_addr());
+                        #[cfg(feature = "dd-pro")]
                         crate::ddpro::client::on_peer_info(&pi, &self.handler);
                         self.handler.handle_peer_info(pi);
                         #[cfg(all(target_os = "windows", not(feature = "flutter")))]

@@ -147,7 +147,12 @@ pub fn on_message<T: InvokeUiSession>(data: &[u8], _sender: &UnboundedSender<Dat
         return;
     }
     match msg.union {
+        Some(dd_pro::Union::VideoInfo(v)) => super::stats::on_video_info(_session, v.display_index, &v.capture, v.hardware),
         Some(dd_pro::Union::Accept(accept)) if accept.format.is_some() => {
+            // 专业画面的编码是显卡硬编
+            if !accept.capture.is_empty() {
+                super::stats::on_video_info(_session, accept.display_index, &accept.capture, true);
+            }
             throttled_log!(
                 PEER_LOG_INTERVAL,
                 info,

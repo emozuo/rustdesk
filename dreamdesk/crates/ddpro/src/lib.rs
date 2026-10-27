@@ -113,6 +113,15 @@ pub fn stopped(reason: stopped::Reason, detail: String, display_index: u32) -> d
     })
 }
 
+pub fn video_info(display_index: u32, capture: &str, hardware: bool) -> dd_pro::Union {
+    dd_pro::Union::VideoInfo(VideoInfo {
+        display_index,
+        capture: capture.to_owned(),
+        hardware,
+        ..Default::default()
+    })
+}
+
 pub fn released(display_index: u32) -> dd_pro::Union {
     dd_pro::Union::Released(Released {
         display_index,

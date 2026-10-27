@@ -705,6 +705,10 @@ fn run(vs: VideoService) -> ResultType<()> {
         .unwrap()
         .set_support_changing_quality(&sp.name(), encoder.support_changing_quality());
     log::info!("initial quality: {quality:?}");
+    #[cfg(feature = "dd-pro")]
+    let mut dd_video = crate::ddpro::server::VideoReport::new(vs.source.is_monitor());
+    #[cfg(all(feature = "dd-pro", windows))]
+    dd_video.set_gdi(c.is_gdi());
 
     if sp.is_option_true(OPTION_REFRESH) {
         sp.set_option_bool(OPTION_REFRESH, false);
@@ -882,6 +886,8 @@ fn run(vs: VideoService) -> ResultType<()> {
                         capture_height,
                     )?;
                     static_refresh.on_frame_encoded(&result);
+                    #[cfg(feature = "dd-pro")]
+                    dd_video.on_frame(&sp, display_idx, encoder.is_hardware(), &result.send_conn_ids);
                     frame_controller.set_send(now, result.send_conn_ids);
                     send_counter += 1;
                 }
@@ -908,6 +914,8 @@ fn run(vs: VideoService) -> ResultType<()> {
                     if try_gdi > 0 && !c.is_gdi() {
                         if try_gdi > 3 {
                             c.set_gdi();
+                            #[cfg(feature = "dd-pro")]
+                            dd_video.fell_back_to_gdi(&sp, display_idx, encoder.is_hardware());
                             try_gdi = 0;
                             log::info!("No image, fall back to gdi");
                         }
@@ -993,6 +1001,8 @@ fn run(vs: VideoService) -> ResultType<()> {
                         dxgi_recovery_state.lock().unwrap().take_fallback_pending();
                     }
                     c.set_gdi();
+                    #[cfg(feature = "dd-pro")]
+                    dd_video.fell_back_to_gdi(&sp, display_idx, encoder.is_hardware());
                     log::info!("dxgi error, fall back to gdi: {:?}", err);
                     continue;
                 }

@@ -51,8 +51,6 @@ struct Link {
     views: HashMap<i32, View>,
     /// 对端提供专业模式、版本也对得上：RustDesk 之后为别的屏开子窗口时，那块屏也请求专业模式
     offered: bool,
-    /// 悬浮球的网络状态块开着：换屏开新的专业窗口时照旧
-    show_status: bool,
     /// 悬浮球的麦克风开着（这次会话发起了语音通话）：换屏开新的专业窗口时照旧
     mic: bool,
     /// 悬浮球「HDR」第一次切本机的屏之前各屏的颜色模式：RustDesk 连接断开时按它恢复（用户 2026-10-23 定）
@@ -94,6 +92,8 @@ impl Link {
 
 /// 悬浮球「HDR」切换最多算多久：被控端切屏每块约 1 秒，加本机切换和等显示稳下来的 1.5 秒，10 秒足够
 const HDR_SWITCH_MAX: Duration = Duration::from_secs(10);
+/// RustDesk 的「显示质量监测」会话选项（`Session::toggle_option` 用的名字）：通用窗口的质量监测和悬浮球的状态块共用它
+const QUALITY_MONITOR: &str = "show-quality-monitor";
 
 static LINKS: OnceLock<Mutex<HashMap<u64, Link>>> = OnceLock::new();
 
@@ -753,7 +753,7 @@ pub fn start<T: InvokeUiSession>(
     display_index: i32,
 ) {
     let k = key(session);
-    let (shown, is_main, display, origins, show_status, mic) = links()
+    let (shown, is_main, display, origins, mic) = links()
         .lock()
         .unwrap()
         .get(&k)
@@ -765,7 +765,6 @@ pub fn start<T: InvokeUiSession>(
                 display_index == l.index,
                 l.rects.get(&display_index).copied().unwrap_or_default(),
                 origins,
-                l.show_status,
                 l.mic,
             )
         })
@@ -823,7 +822,7 @@ pub fn start<T: InvokeUiSession>(
         remote_height: display.3,
         title: format!("{} - pro", session.get_id()),
         display_index,
-        show_status,
+        show_status: session.get_toggle_option(QUALITY_MONITOR.to_owned()),
         mic,
         format: Some(format.clone()).into(),
         display_origins: origins
@@ -836,6 +835,7 @@ pub fn start<T: InvokeUiSession>(
             .collect(),
         all_displays: session.get_use_all_my_displays_for_the_remote_session() == "Y",
         hdr_capable,
+        connected_secs: super::stats::connected_secs(session),
         ..Default::default()
     })))
     .ok();
@@ -984,7 +984,10 @@ pub fn start<T: InvokeUiSession>(
                     }
                     Some(view_action::Union::ShowStatus(on)) => {
                         log::info!("ddpro: floating menu: network status {}", if on { "shown" } else { "hidden" });
-                        links().lock().unwrap().entry(k).or_default().show_status = on;
+                        // 两种模式共用 RustDesk 的「显示质量监测」会话选项（按机器记）：只在和现在不同时翻转
+                        if session.get_toggle_option(QUALITY_MONITOR.to_owned()) != on {
+                            session.toggle_option(QUALITY_MONITOR.to_owned());
+                        }
                     }
                     // 用 RustDesk 自己的语音通话：主控端采集麦克风发过去，专业会话的被控端自动接受、送进虚拟麦克风（P2 第 2 项）。
                     // 多屏时各窗口的开关各自显示，按「要开 / 要关」处理而不是翻转，点哪个都不会重复发起

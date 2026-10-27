@@ -3003,6 +3003,10 @@ pub fn session_get_common(
     #[allow(unused_variables)] param: String,
 ) -> Option<String> {
     if let Some(s) = sessions::get_session_by_session_id(&session_id) {
+        #[cfg(feature = "dd-pro")]
+        if key == "dd-net-stats" {
+            return Some(crate::ddpro::stats::query(&s, &param));
+        }
         let v = if key == "is_screenshot_supported" {
             s.is_screenshot_supported().to_string()
         } else {

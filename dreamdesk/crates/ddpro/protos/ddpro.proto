@@ -18,6 +18,7 @@ message DdPro {
     UsbClose usb_close = 13;
     SetHdr set_hdr = 14;
     HdrResult hdr_result = 15;
+    VideoInfo video_info = 16;
   }
   // 5：v2–v3 的「请求关键帧」（经 RustDesk 原连接）；v4 起改在画面通道上回发。
   // 7：v7–v9 的「开 / 关抖动」（界面没有入口，只有诊断开关触发；HDR 定为走 10bit 后用不上，2026-10-22 删）
@@ -169,6 +170,19 @@ message Accept {
   uint32 display_index = 3;
   // v11 起：这块屏能开 HDR（显示器支持）。悬浮球「HDR」据此决定能不能点
   bool hdr_capable = 4;
+  // 专业画面这块屏的采集方式（"DXGI"）。只是给界面显示；老版本不认识这个字段，当它不存在，不用升协议版本
+  string capture = 5;
+}
+
+// 被控端 → 主控端：通用画面这块屏现在怎么采集、是不是硬编（界面详情里的「采集方式」「编解码器」）。画面服务建好采集器 / 编码器、
+// 或采集方式中途变了（Windows 的 DXGI 退回 GDI）时发。只给界面显示、不参与谈判，所以没升协议版本：老版本主控端收到当作不认识的消息忽略。
+// 被控端不知道主控端是不是我们的版本，所以对所有订阅这块屏的连接都发；原版 RustDesk 主控端不认识这个字段，直接忽略
+message VideoInfo {
+  uint32 display_index = 1;
+  // "DXGI" / "GDI" / "X11" / "PipeWire"；拿不到时为空
+  string capture = 2;
+  // 编码器是不是硬件编码
+  bool hardware = 3;
 }
 
 // v11 起（悬浮球「HDR」）：主控端请被控端把这次会话用到的屏的系统 HDR 打开 / 关掉。被控端记下每块屏改之前的样子，
@@ -249,6 +263,8 @@ message ViewStart {
   VideoFormat format = 13;
   // 被控端这块屏能开 HDR（Accept 里的）。悬浮球「HDR」能不能点还要看本机的屏（专业窗口自己查）；勾不勾看 format.hdr
   bool hdr_capable = 14;
+  // RustDesk 连接已经连了多少秒：悬浮球状态块的连接时长（专业窗口比连接晚开，换屏重开不清零）
+  uint32 connected_secs = 15;
 }
 
 message ViewPoint {

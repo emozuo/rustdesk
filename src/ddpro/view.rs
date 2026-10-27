@@ -120,26 +120,24 @@ enum FromSession {
 #[derive(Default)]
 struct Counters {
     bytes: AtomicU64,
+    /// 收到的包数（丢包率的分母要加上救不回来的）
+    packets: AtomicU64,
     lost: AtomicU64,
-    recovered: AtomicU64,
     /// 专业通道对时顺带量出的往返时间（微秒），还没对上时为 0（悬浮球的网络状态块用）
     rtt_us: AtomicU64,
 }
 
-/// 专业画面这一秒的实测值（悬浮球网络状态块显示）。色度、位深是从本机实际解出的画面读的，不是谈判时被控端声称的
+/// 专业画面这一秒的实测值（悬浮球网络状态块显示）
 struct Stats {
     /// 这一秒交给合成器上屏的帧数
     fps: u32,
     /// 这一秒收到的码率（千比特每秒）
-    kbps: u32,
+    kbps: f64,
     /// 端到端延迟中位数：被控端拿到画面 → 本机上屏，毫秒；两端时钟还没对上、或这一秒没有可算的帧时为 -1
     latency_ms: i32,
-    /// 还没解出第一帧时为空、位深为 0
-    chroma: &'static str,
-    bit_depth: u32,
-    /// 从专业窗口打开起累计：救不回来的丢包、缺了又补齐的包
+    /// 从专业窗口打开起累计：收到的包、救不回来的丢包
+    packets: u64,
     lost_packets: u64,
-    recovered_packets: u64,
 }
 
 /// 攒这一秒的实测值
@@ -148,8 +146,6 @@ struct Panel {
     frames: u32,
     latency_us: Vec<i64>,
     last_bytes: u64,
-    /// 实际解出的画面：色度是否 4:4:4、位深
-    format: Option<(bool, u32)>,
     /// 实际解出的画面尺寸。也是查实际解码格式的时机：第一帧和尺寸变了之后（被控端重建编码器）查一次
     frame: Option<(u32, u32)>,
     /// 上次报的「是否缩放」（变了才写日志）
@@ -163,7 +159,6 @@ impl Panel {
             frames: 0,
             latency_us: Vec::new(),
             last_bytes: 0,
-            format: None,
             frame: None,
             scaled: None,
         }
@@ -193,7 +188,7 @@ impl Panel {
         let secs = self.since.elapsed().as_secs_f64().max(0.001);
         self.since = Instant::now();
         let bytes = counters.bytes.load(Ordering::Relaxed);
-        let kbps = (bytes.saturating_sub(self.last_bytes) as f64 * 8.0 / 1000.0 / secs).round() as u32;
+        let kbps = bytes.saturating_sub(self.last_bytes) as f64 * 8.0 / 1000.0 / secs;
         self.last_bytes = bytes;
         self.latency_us.sort_unstable();
         let latency_ms = self
@@ -203,19 +198,12 @@ impl Panel {
         self.latency_us.clear();
         let fps = (self.frames as f64 / secs).round() as u32;
         self.frames = 0;
-        let (chroma, bit_depth) = match self.format {
-            Some((true, depth)) => ("4:4:4", depth),
-            Some((false, depth)) => ("not 4:4:4", depth),
-            None => ("", 0),
-        };
         Stats {
             fps,
             kbps,
             latency_ms,
-            chroma,
-            bit_depth,
+            packets: counters.packets.load(Ordering::Relaxed),
             lost_packets: counters.lost.load(Ordering::Relaxed),
-            recovered_packets: counters.recovered.load(Ordering::Relaxed),
         }
     }
 }
@@ -328,25 +316,42 @@ pub fn run() {
     send_up(&mut up, view_up::Union::Ended(ended)).ok();
 }
 
-/// 悬浮球网络状态块的几行：帧率、码率、专业通道往返、端到端延迟、丢包与补齐、画面尺寸、实际解出的格式。
-/// 画面静止时被控端只重编上一帧、不带采集时间，端到端延迟这一秒算不出，显示「-」。
-/// `lossless` 是画面里无损方块的比例（1:1 着色器显示时才有）
-fn status_lines(v: &Stats, rtt_us: u64, frame: Option<(u32, u32)>, lossless: Option<u32>) -> Vec<String> {
+/// 悬浮球网络状态块的几行（照 UU 的「网络状态」，原型 RemoteStats.html ③；一行一个数值、不写名称，全是英文单位）：
+/// 连接时长、通道、帧率、带宽、网络延时（专业通道往返）、帧延时（被控端拿到画面 → 本机上屏的中位数）、丢包率、无损比例、分辨率档。
+/// 拿不到的行不显示：画面静止时被控端只重编上一帧、不带采集时间，这一秒算不出帧延时；`lossless` 是画面里无损方块的比例（1:1 着色器显示时才有）。
+/// 行序和单位要和普通模式的质量监测一致（`flutter/lib/desktop/widgets/dd_remote_stats.dart` 的 `_monitorLines`：已连接时长、TCP/UDP DIRECT、
+/// fps、Kbps/Mbps、ms、4K/2K/1080p），改一边要同步另一边
+fn status_lines(v: &Stats, rtt_us: u64, frame: Option<(u32, u32)>, lossless: Option<u32>, connected: Duration) -> Vec<String> {
+    let secs = connected.as_secs();
     let mut lines = vec![
+        format!("{:02}:{:02}:{:02}", secs / 3600, secs / 60 % 60, secs % 60),
+        // 专业画面通道是被控端地址上的 UDP，只有直连，没有中继
+        "UDP DIRECT".to_owned(),
         format!("{} fps", v.fps),
-        format!("{:.1} Mbps", v.kbps as f64 / 1000.0),
-        if rtt_us > 0 { format!("RTT {:.1} ms", rtt_us as f64 / 1000.0) } else { "RTT -".to_owned() },
-        if v.latency_ms >= 0 { format!("e2e {} ms", v.latency_ms) } else { "e2e -".to_owned() },
-        format!("lost {} rec {}", v.lost_packets, v.recovered_packets),
+        if v.kbps < 1000.0 { format!("{:.1} Kbps", v.kbps) } else { format!("{:.1} Mbps", v.kbps / 1000.0) },
     ];
-    if let Some((w, h)) = frame {
-        lines.push(format!("{w}x{h}"));
+    if rtt_us > 0 {
+        let ms = rtt_us as f64 / 1000.0;
+        lines.push(if ms < 10.0 { format!("{ms:.1} ms") } else { format!("{ms:.0} ms") });
     }
-    if v.bit_depth > 0 {
-        lines.push(format!("H265 {} {}bit", v.chroma, v.bit_depth));
+    if v.latency_ms >= 0 {
+        lines.push(format!("{} ms frm.", v.latency_ms));
     }
+    // 丢包率 = 救不回来的 / （收到的 + 救不回来的）；补回的包已经算在收到的里。从专业窗口打开起累计
+    lines.push(format!(
+        "{:.1}% loss",
+        v.lost_packets as f64 * 100.0 / (v.packets + v.lost_packets).max(1) as f64
+    ));
     if let Some(p) = lossless {
-        lines.push(format!("lossless {p}%"));
+        lines.push(format!("{p}% lossless"));
+    }
+    if let Some((w, h)) = frame {
+        lines.push(match w {
+            3840.. => "4K".to_owned(),
+            2560.. => "2K".to_owned(),
+            1920.. => "1080p".to_owned(),
+            _ => format!("{w}×{h}"),
+        });
     }
     lines
 }
@@ -467,6 +472,10 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
     // 这一段日志间隔里：(合成器直接送显示的帧数, 上屏的帧数)
     let mut scanout = (0u64, 0u64);
     let mut panel = Panel::new();
+    // 状态块的连接时长：RustDesk 连接已经连了多久（专业窗口比连接晚开，换屏重开也不清零）
+    let connected_at = Instant::now()
+        .checked_sub(Duration::from_secs(start.connected_secs as u64))
+        .unwrap_or_else(Instant::now);
     let mut ready = false;
     // 谈成的位深（老版本被控端的答复里可能没有，按 8bit），HDR 时被控端普通内容的白（P1 第 4 项）
     let want_bits = start.format.bit_depth.max(8);
@@ -713,7 +722,6 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
                             f.chroma_444
                         );
                     }
-                    panel.format = Some((f.chroma_444, f.bit_depth));
                     panel.frame = Some(frame_size);
                     // 画面尺寸变了，解码器重建了画面池，编号会被新画面复用：着色器按编号缓存的导入作废
                     if let Some(s) = shader.as_mut() {
@@ -822,7 +830,13 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
                 panel.display(&win, &display_watch);
                 let stats = panel.take(&counters);
                 let coverage = lossless.coverage().filter(|_| shader.is_some() && lossless.size() == Some(size));
-                ball.set_status(status_lines(&stats, counters.rtt_us.load(Ordering::Relaxed), panel.frame, coverage));
+                ball.set_status(status_lines(
+                    &stats,
+                    counters.rtt_us.load(Ordering::Relaxed),
+                    panel.frame,
+                    coverage,
+                    connected_at.elapsed(),
+                ));
             }
         })
     };
@@ -1125,8 +1139,8 @@ fn receive(
             Err(e) => break e.to_string(),
         }
         counters.bytes.store(r.stats.bytes, Ordering::Relaxed);
+        counters.packets.store(r.stats.packets, Ordering::Relaxed);
         counters.lost.store(r.stats.lost_packets, Ordering::Relaxed);
-        counters.recovered.store(r.stats.recovered, Ordering::Relaxed);
         if let Some(c) = r.clock() {
             counters.rtt_us.store(c.rtt_us.max(0) as u64, Ordering::Relaxed);
         }
