@@ -2,7 +2,7 @@
    另补设置页、普通对话框、文件传输等规范里还没有的部件（同一套变量）。 */
 :root {
   --chrome: #f0f5f8; --pane: #f7fbfe; --surface: #ffffff; --selected: #e4e9ec; --hover: #0000000f;
-  --line: #dcdfe4; --line-strong: #8a9099; --ink: #1f2329; --ink-2: #646a73; --ink-3: #9aa0a8;
+  --line: #dcdfe4; --line-strong: #8a9099; --ink: #1f2329; --ink-2: #4e5560; --ink-3: #9aa0a8;
   --accent: #2f6fea; --accent-hover: #2a63d2; --accent-press: #2457bd; --accent-soft: #e8f0fe; --on-accent: #ffffff;
   --online: #22c55e; --mine: #14b8a6; --busy: #f97316; --offline: #9aa0a8; --danger: #e5484d; --danger-text: #d13438;
   --pill: #1f2329; --os-windows: #3b7bf6; --os-linux: #f08a24; --os-mac: #1f2329;

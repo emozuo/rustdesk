@@ -126,7 +126,7 @@ class _StatePill extends StatelessWidget {
       child: Row(mainAxisSize: MainAxisSize.min, children: [
         DdDot(color: color, size: 7),
         const SizedBox(width: 5),
-        Text(text, style: const TextStyle(color: DdColors.onAccent, fontSize: 12)),
+        Text(text, style: const TextStyle(color: DdColors.onAccent, fontSize: 13)),
       ]),
     );
   }
@@ -150,7 +150,7 @@ class _StateView extends StatelessWidget {
         Text(title, textAlign: TextAlign.center, style: TextStyle(fontSize: 14, color: dim ? DdColors.ink2 : DdColors.ink)),
         if (subtitle != null) ...[
           const SizedBox(height: 12),
-          Text(subtitle!, textAlign: TextAlign.center, style: const TextStyle(fontSize: 12, color: DdColors.ink2)),
+          Text(subtitle!, textAlign: TextAlign.center, style: const TextStyle(fontSize: 13, color: DdColors.ink2)),
         ],
         if (action != null) ...[const SizedBox(height: 12), action!],
       ]),
@@ -173,7 +173,7 @@ class _NetWarn extends StatelessWidget {
       child: Row(mainAxisSize: MainAxisSize.min, children: [
         ddIcon(DdIcon.wifiOff, size: 16, color: DdColors.busy),
         const SizedBox(width: 8),
-        Text(text, style: const TextStyle(fontSize: 12, color: DdColors.ink)),
+        Text(text, style: const TextStyle(fontSize: 13, color: DdColors.ink)),
         const SizedBox(width: 8),
         TextButton(
           onPressed: onRetry,
@@ -181,7 +181,7 @@ class _NetWarn extends StatelessWidget {
             minimumSize: const Size(0, 24),
             padding: const EdgeInsets.symmetric(horizontal: 6),
             tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-            textStyle: const TextStyle(fontSize: 12),
+            textStyle: const TextStyle(fontSize: 13),
           ),
           child: Text(translate('Retry')),
         ),
@@ -400,7 +400,7 @@ class _DeviceInfo extends StatelessWidget {
                 Clipboard.setData(ClipboardData(text: r.$2));
                 showToast(translate('Copied'));
               },
-              child: Text(translate('Copy'), style: const TextStyle(fontSize: 12)),
+              child: Text(translate('Copy'), style: const TextStyle(fontSize: 13)),
             ),
         ]);
     return Container(
@@ -487,7 +487,7 @@ class _DeviceTile extends StatelessWidget {
                       const SizedBox(width: 5),
                       Flexible(
                         child: Text(state,
-                            overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12, color: DdColors.ink2)),
+                            overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13, color: DdColors.ink2)),
                       ),
                     ]),
                   ]),

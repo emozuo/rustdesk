@@ -30,7 +30,7 @@ class DdColors {
   static const line = Color(0xFFDCDFE4);
   static const lineStrong = Color(0xFF8A9099);
   static const ink = Color(0xFF1F2329);
-  static const ink2 = Color(0xFF646A73);
+  static const ink2 = Color(0xFF4E5560);
   static const ink3 = Color(0xFF9AA0A8);
   static const accent = Color(0xFF2F6FEA);
   static const accentHover = Color(0xFF2A63D2);
@@ -134,6 +134,10 @@ RoundedRectangleBorder _round(double r) => RoundedRectangleBorder(borderRadius: 
 
 ThemeData? _ddLightTheme;
 
+// 10-27 在本机和 UU 对比试过思源黑体、黑体、宋体、等线、更纱黑体 UI、HarmonyOS Sans，都不比系统默认的微软雅黑 UI 更清楚
+// （发虚是 Flutter 不用 ClearType 的灰度抗锯齿，换字体解决不了），定为雅黑 UI
+final _cjkFallback = isWindows ? const ['Microsoft YaHei UI', 'Microsoft YaHei'] : const ['Noto Sans CJK SC'];
+
 /// 产品版的整体主题（浅色）：在 RustDesk 浅色主题上换掉规范管到的部分，它自己的主题扩展（ColorThemeExtension 等）照留
 ThemeData ddLightTheme() => _ddLightTheme ??= _build();
 
@@ -166,7 +170,10 @@ ThemeData _build() {
       surface: DdColors.surface,
       error: DdColors.dangerText,
     ),
-    textTheme: base.textTheme.apply(bodyColor: DdColors.ink, displayColor: DdColors.ink),
+    // 中文写明用哪个字体：不写时由 Flutter 按系统挑，可能挑到笔画细的（等线），在它的灰度抗锯齿下更发虚；
+    // Windows 用为界面小字号设计的微软雅黑 UI，Linux 照 kiosk 用 Noto Sans CJK。西文仍是系统默认（Segoe UI 等）
+    textTheme: base.textTheme.apply(
+        bodyColor: DdColors.ink, displayColor: DdColors.ink, fontFamilyFallback: _cjkFallback),
     textSelectionTheme: const TextSelectionThemeData(
         cursorColor: DdColors.accent, selectionColor: DdColors.accentSoft, selectionHandleColor: DdColors.accent),
     dividerTheme: const DividerThemeData(color: DdColors.line),

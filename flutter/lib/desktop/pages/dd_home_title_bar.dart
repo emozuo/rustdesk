@@ -134,7 +134,7 @@ class _AccountButton extends StatelessWidget {
                         if (name != account) ...[
                           const SizedBox(height: 2),
                           Text(account,
-                              overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12, color: DdColors.ink2)),
+                              overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13, color: DdColors.ink2)),
                         ],
                       ]),
                     ),

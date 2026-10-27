@@ -458,7 +458,7 @@ class _DdHomePageState extends State<DdHomePage> with WidgetsBindingObserver {
             Flexible(child: _heading(_title(w))),
             if (ddOsShort(w.os).isNotEmpty) ...[
               const SizedBox(width: 12),
-              Text(ddOsShort(w.os), style: const TextStyle(fontSize: 12, color: DdColors.ink2)),
+              Text(ddOsShort(w.os), style: const TextStyle(fontSize: 13, color: DdColors.ink2)),
             ],
           ]),
         ),
