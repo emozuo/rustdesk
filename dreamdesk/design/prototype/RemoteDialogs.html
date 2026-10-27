@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>远程窗口 · 相关对话框</title>
+<link rel="stylesheet" href="dd.css">
+<style>body{margin:0}
+body{margin:0;padding:24px;background:#e9ebef}
+</style>
+</head>
+<body>
+
+
+<div class="dd" style="width: 1280px; height: 760px; background: #f0f5f8; box-sizing: border-box; padding: 36px 40px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 28px 24px; align-items: start">
+  <div style="display: flex; flex-direction: column; gap: 8px">
+    <div style="font-size: 12px; color: #646a73">画质 › 自定义</div>
+    <div class="dd-modal" style="width: auto" role="dialog" aria-label="自定义画质">
+      <span class="dd-modal__x" aria-hidden="true"><svg class="dd-ico dd-ico--16" viewBox="0 0 24 24"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg></span>
+      <div class="dd-modal__title">自定义画质</div>
+      <div style="margin-top: 18px; display: flex; flex-direction: column; gap: 18px; font-size: 13px">
+        <div><div style="display: flex; justify-content: space-between"><span>码率</span><span style="color: #646a73">50%</span></div><div class="dd-bar" style="margin-top: 10px"><i style="width: 50%"></i></div></div>
+        <div><div style="display: flex; justify-content: space-between"><span>帧率</span><span style="color: #646a73">60 fps</span></div><div class="dd-bar" style="margin-top: 10px"><i style="width: 50%"></i></div></div>
+        <span class="dd-opt" style="font-size: 13px"><span class="dd-check"></span>更大的调节范围</span>
+      </div>
+      <div class="dd-modal__foot"><button class="dd-btn dd-btn--secondary dd-btn--compact">取消</button><button class="dd-btn dd-btn--primary dd-btn--compact">确定</button></div>
+    </div>
+  </div>
+  <div style="display: flex; flex-direction: column; gap: 8px">
+    <div style="font-size: 12px; color: #646a73">更多 › 重启远程电脑</div>
+    <div class="dd-modal" style="width: auto" role="dialog" aria-label="重启远程电脑">
+      <div class="dd-modal__title"><svg class="dd-state-ico" style="color: #f97316" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path></svg>重启远程电脑</div>
+      <div class="dd-modal__body">确定要重启 VM-CESHI 吗？重启后会自动重新连接。</div>
+      <div class="dd-modal__foot"><button class="dd-btn dd-btn--secondary dd-btn--compact">取消</button><button class="dd-btn dd-btn--primary dd-btn--compact">重启</button></div>
+    </div>
+  </div>
+  <div style="display: flex; flex-direction: column; gap: 8px">
+    <div style="font-size: 12px; color: #646a73">工具 › 截图</div>
+    <div class="dd-modal" style="width: auto" role="dialog" aria-label="截图">
+      <div class="dd-modal__title"><svg class="dd-state-ico" style="color: #22a35a" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="m9 12 2 2 4-4"></path></svg>截好了</div>
+      <div class="dd-modal__body">保存成文件，还是复制到剪贴板？</div>
+      <div class="dd-modal__foot"><button class="dd-btn dd-btn--secondary dd-btn--compact">复制</button><button class="dd-btn dd-btn--primary dd-btn--compact">另存为…</button></div>
+    </div>
+  </div>
+  <div style="grid-column: 1 / -1; display: flex; flex-direction: column; gap: 8px">
+    <div style="font-size: 12px; color: #646a73">画面左上角的模式提示（对方提供专业模式、这次没进专业模式时）</div>
+    <div style="position: relative; height: 150px; border-radius: 8px; overflow: hidden; display: flex">
+      <div class="dd-screen">
+        <div class="dd-badge">非专业模式：专业模式只能在内网使用<a href="#">重新进入专业模式</a></div>
+        <div class="dd-badge dd-badge--gray" style="top: 56px">通用模式<a href="#">进入专业模式</a></div>
+        <div class="dd-toast" style="position: absolute; left: 50%; bottom: 20px; transform: translateX(-50%)">已复制到剪贴板</div>
+      </div>
+    </div>
+  </div>
+  <div style="grid-column: 1 / -1; display: flex; flex-direction: column; gap: 8px">
+    <div style="font-size: 12px; color: #646a73">标题栏的连接标识（悬停说明）</div>
+    <div style="display: flex; gap: 24px; align-items: center">
+      <div class="dd-titlebar" style="border-radius: 8px; padding-right: 14px"><span style="font-weight: 600">VM-CESHI</span><svg class="dd-ico dd-ico--16" style="color: #22a35a; margin-left: 6px" aria-hidden="true" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"></path><path d="m9 12 2 2 4-4"></path></svg></div>
+      <span style="display: inline-flex; padding: 6px 10px; border-radius: 4px; background: #1f2329; color: #fff; font-size: 12px">已加密 · 直连</span>
+      <span style="display: inline-flex; padding: 6px 10px; border-radius: 4px; background: #1f2329; color: #fff; font-size: 12px">已加密 · 经中继服务器</span>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

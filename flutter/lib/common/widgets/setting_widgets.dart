@@ -3,7 +3,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/consts.dart';
+import 'package:flutter_hbb/desktop/widgets/dd_remote_dialogs.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
+import 'package:flutter_hbb/utils/dd_kiosk.dart';
 import 'package:get/get.dart';
 
 customImageQualityWidget(
@@ -13,6 +15,15 @@ customImageQualityWidget(
     required Function(double)? setFps,
     required bool showFps,
     required bool showMoreQuality}) {
+  if (kDdManaged) {
+    return ddCustomImageQualityWidget(
+        initQuality: initQuality,
+        initFps: initFps,
+        setQuality: setQuality,
+        setFps: setFps,
+        showFps: showFps,
+        showMoreQuality: showMoreQuality);
+  }
   if (initQuality < kMinQuality ||
       initQuality > (showMoreQuality ? kMaxMoreQuality : kMaxQuality)) {
     initQuality = kDefaultQuality;

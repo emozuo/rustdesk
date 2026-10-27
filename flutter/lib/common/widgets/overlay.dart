@@ -7,7 +7,9 @@ import 'package:get/get.dart';
 import 'package:provider/provider.dart';
 
 import '../../consts.dart';
+import '../../desktop/widgets/dd_remote_stats.dart';
 import '../../desktop/widgets/tabbar_widget.dart';
+import '../../utils/dd_kiosk.dart';
 import '../../models/chat_model.dart';
 import '../../models/model.dart';
 import 'chat_page.dart';
@@ -582,7 +584,13 @@ class QualityMonitor extends StatelessWidget {
   }
 
   @override
-  Widget build(BuildContext context) => ChangeNotifierProvider.value(
+  Widget build(BuildContext context) {
+    // DreamDesk 受管版：原型的样子、中文名称（dd_remote_stats.dart）
+    if (kDdManaged) return DdQualityMonitor(model: qualityMonitorModel);
+    return _build(context);
+  }
+
+  Widget _build(BuildContext context) => ChangeNotifierProvider.value(
       value: qualityMonitorModel,
       child: Consumer<QualityMonitorModel>(
           builder: (context, qualityMonitorModel, child) => qualityMonitorModel

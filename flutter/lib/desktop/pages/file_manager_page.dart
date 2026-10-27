@@ -5,6 +5,10 @@ import 'dart:math';
 import 'package:extended_text/extended_text.dart';
 import 'package:flutter_hbb/common/widgets/dialog.dart';
 import 'package:flutter_hbb/desktop/widgets/dragable_divider.dart';
+import 'package:flutter_hbb/desktop/widgets/dd_file_transfer.dart';
+import 'package:flutter_hbb/desktop/widgets/dd_icons.dart';
+import 'package:flutter_hbb/desktop/widgets/dd_theme.dart';
+import 'package:flutter_hbb/utils/dd_kiosk.dart';
 import 'package:percent_indicator/percent_indicator.dart';
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flutter/gestures.dart';
@@ -197,6 +201,7 @@ class _FileManagerPageState extends State<FileManagerPage>
   }
 
   Widget generateCard(Widget child) {
+    if (kDdManaged) return ddFtCard(child);
     return Container(
       decoration: BoxDecoration(
         color: Theme.of(context).cardColor,
@@ -235,6 +240,15 @@ class _FileManagerPageState extends State<FileManagerPage>
           controller: ScrollController(),
           itemBuilder: (BuildContext context, int index) {
             final item = jobs[index];
+            // 删除任务拷贝了下面原来删除按钮的 onPressed：上游改了这里要同步（dreamdesk/docs/合并上游检查清单.md 第 1 节）
+            if (kDdManaged) {
+              return ddFtJob(item,
+                  onResume: () => jobController.resumeJob(item.id),
+                  onDelete: () {
+                    jobController.jobTable.removeAt(index);
+                    jobController.cancelJob(item.id);
+                  });
+            }
             final status = item.getStatus();
             return Padding(
               padding: const EdgeInsets.only(bottom: 5),
@@ -371,7 +385,7 @@ class _FileManagerPageState extends State<FileManagerPage>
           padding: const EdgeInsets.all(8.0),
           child: Obx(
             () => jobController.jobTable.isEmpty
-                ? generateCard(
+                ? generateCard(ddFtNoTransfers(
                     Center(
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
@@ -393,7 +407,7 @@ class _FileManagerPageState extends State<FileManagerPage>
                         ],
                       ),
                     ),
-                  )
+                  ))
                 : statusListView(jobController.jobTable),
           )),
     );
@@ -479,6 +493,7 @@ class _FileManagerViewState extends State<FileManagerView> {
     return Container(
       margin: const EdgeInsets.all(16.0),
       padding: const EdgeInsets.all(8.0),
+      decoration: ddFtPaneDecoration,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -553,6 +568,11 @@ class _FileManagerViewState extends State<FileManagerView> {
       child: Column(
         children: [
           // symbols
+          if (kDdManaged)
+            ddFtSideTitle(isLocal
+                ? translate("Local Computer")
+                : translate("Remote Computer"))
+          else
           PreferredSize(
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.center,
@@ -594,7 +614,7 @@ class _FileManagerViewState extends State<FileManagerView> {
             children: [
               Row(
                 children: [
-                  MenuButton(
+                  ddFtTool(DdIcon.chevronLeft, MenuButton(
                     tooltip: translate('Back'),
                     padding: EdgeInsets.only(
                       right: 3,
@@ -613,8 +633,8 @@ class _FileManagerViewState extends State<FileManagerView> {
                       selectedItems.clear();
                       controller.goBack();
                     },
-                  ),
-                  MenuButton(
+                  )),
+                  ddFtTool(DdIcon.chevronUp, MenuButton(
                     tooltip: translate('Parent directory'),
                     child: RotatedBox(
                       quarterTurns: 3,
@@ -630,19 +650,19 @@ class _FileManagerViewState extends State<FileManagerView> {
                       selectedItems.clear();
                       controller.goToParentDirectory();
                     },
-                  ),
+                  )),
                 ],
               ),
               Expanded(
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 3.0),
                   child: Container(
-                    decoration: BoxDecoration(
+                    decoration: ddFtPathDecoration(BoxDecoration(
                       color: Theme.of(context).cardColor,
                       borderRadius: BorderRadius.all(
                         Radius.circular(8.0),
                       ),
-                    ),
+                    )),
                     child: Padding(
                       padding: EdgeInsets.symmetric(vertical: 2.5),
                       child: GestureDetector(
@@ -679,7 +699,7 @@ class _FileManagerViewState extends State<FileManagerView> {
               Obx(() {
                 switch (_locationStatus.value) {
                   case LocationStatus.bread:
-                    return MenuButton(
+                    return ddFtTool(DdIcon.search, MenuButton(
                       tooltip: translate('Search'),
                       onPressed: () {
                         _locationStatus.value = LocationStatus.fileSearchBar;
@@ -693,9 +713,9 @@ class _FileManagerViewState extends State<FileManagerView> {
                       ),
                       color: Theme.of(context).cardColor,
                       hoverColor: Theme.of(context).hoverColor,
-                    );
+                    ));
                   case LocationStatus.pathLocation:
-                    return MenuButton(
+                    return ddFtTool(DdIcon.close, MenuButton(
                       onPressed: null,
                       child: SvgPicture.asset(
                         "assets/close.svg",
@@ -704,9 +724,9 @@ class _FileManagerViewState extends State<FileManagerView> {
                       ),
                       color: Theme.of(context).disabledColor,
                       hoverColor: Theme.of(context).hoverColor,
-                    );
+                    ));
                   case LocationStatus.fileSearchBar:
-                    return MenuButton(
+                    return ddFtTool(DdIcon.close, MenuButton(
                       tooltip: translate('Clear'),
                       onPressed: () {
                         onSearchText("", isLocal);
@@ -719,10 +739,10 @@ class _FileManagerViewState extends State<FileManagerView> {
                       ),
                       color: Theme.of(context).cardColor,
                       hoverColor: Theme.of(context).hoverColor,
-                    );
+                    ));
                 }
               }),
-              MenuButton(
+              ddFtTool(DdIcon.refresh, MenuButton(
                 tooltip: translate('Refresh File'),
                 padding: EdgeInsets.only(
                   left: 3,
@@ -737,7 +757,7 @@ class _FileManagerViewState extends State<FileManagerView> {
                 ),
                 color: Theme.of(context).cardColor,
                 hoverColor: Theme.of(context).hoverColor,
-              ),
+              )),
             ],
           ),
           Row(
@@ -748,7 +768,7 @@ class _FileManagerViewState extends State<FileManagerView> {
                   mainAxisAlignment:
                       isLocal ? MainAxisAlignment.start : MainAxisAlignment.end,
                   children: [
-                    MenuButton(
+                    ddFtTool(DdIcon.house, MenuButton(
                       tooltip: translate('Home'),
                       padding: EdgeInsets.only(
                         right: 3,
@@ -763,8 +783,8 @@ class _FileManagerViewState extends State<FileManagerView> {
                       ),
                       color: Theme.of(context).cardColor,
                       hoverColor: Theme.of(context).hoverColor,
-                    ),
-                    MenuButton(
+                    )),
+                    ddFtTool(DdIcon.folderPlus, MenuButton(
                       tooltip: translate('Create Folder'),
                       onPressed: () {
                         final name = TextEditingController();
@@ -800,8 +820,12 @@ class _FileManagerViewState extends State<FileManagerView> {
                             title: Row(
                               mainAxisAlignment: MainAxisAlignment.center,
                               children: [
-                                SvgPicture.asset("assets/folder_new.svg",
-                                    colorFilter: svgColor(MyTheme.accent)),
+                                ddFtIcon(
+                                    DdIcon.folderPlus,
+                                    SvgPicture.asset("assets/folder_new.svg",
+                                        colorFilter: svgColor(MyTheme.accent)),
+                                    size: 22,
+                                    color: DdColors.accent),
                                 Text(
                                   translate("Create Folder"),
                                 ).paddingOnly(
@@ -849,8 +873,8 @@ class _FileManagerViewState extends State<FileManagerView> {
                       ),
                       color: Theme.of(context).cardColor,
                       hoverColor: Theme.of(context).hoverColor,
-                    ),
-                    Obx(() => MenuButton(
+                    )),
+                    Obx(() => ddFtTool(DdIcon.trash, MenuButton(
                           tooltip: translate('Delete'),
                           onPressed: SelectedItems.valid(selectedItems.items)
                               ? () async {
@@ -866,7 +890,7 @@ class _FileManagerViewState extends State<FileManagerView> {
                           ),
                           color: Theme.of(context).cardColor,
                           hoverColor: Theme.of(context).hoverColor,
-                        )),
+                        ))),
                     menu(isLocal: isLocal),
                   ],
                 ),
@@ -931,7 +955,7 @@ class _FileManagerViewState extends State<FileManagerView> {
                         ),
                       ).marginOnly(left: 8),
                     )).marginOnly(left: 16),
-              Obx(() => ElevatedButton.icon(
+              Obx(() => ddFtTransferButton(isLocal, ElevatedButton.icon(
                     style: ButtonStyle(
                       padding: MaterialStateProperty.all<EdgeInsetsGeometry>(
                           isLocal
@@ -1001,7 +1025,7 @@ class _FileManagerViewState extends State<FileManagerView> {
                                   : Colors.white,
                             ),
                           ),
-                  )),
+                  ))),
             ],
           ).marginOnly(top: 8.0)
         ],
@@ -1045,7 +1069,7 @@ class _FileManagerViewState extends State<FileManagerView> {
         final y = e.position.dy;
         menuPos = RelativeRect.fromLTRB(x, y, x, y);
       },
-      child: MenuButton(
+      child: ddFtTool(DdIcon.more, MenuButton(
         tooltip: translate('More'),
         onPressed: () => mod_menu.showMenu(
           context: context,
@@ -1070,7 +1094,7 @@ class _FileManagerViewState extends State<FileManagerView> {
         ),
         color: Theme.of(context).cardColor,
         hoverColor: Theme.of(context).hoverColor,
-      ),
+      )),
     );
   }
 
@@ -1191,9 +1215,11 @@ class _FileManagerViewState extends State<FileManagerView> {
             padding: EdgeInsets.symmetric(vertical: 1),
             child: Obx(() => Container(
                 decoration: BoxDecoration(
-                  color: selectedItems.items.contains(entry)
-                      ? MyTheme.button
-                      : Theme.of(context).cardColor,
+                  color: ddFtRowColor(
+                      selectedItems.items.contains(entry),
+                      selectedItems.items.contains(entry)
+                          ? MyTheme.button
+                          : Theme.of(context).cardColor),
                   borderRadius: BorderRadius.all(
                     Radius.circular(5.0),
                   ),
@@ -1221,7 +1247,7 @@ class _FileManagerViewState extends State<FileManagerView> {
                                       waitDuration: Duration(milliseconds: 500),
                                       message: entry.name,
                                       child: Row(children: [
-                                        entry.isDrive
+                                        ddFtEntryIcon(entry, entry.isDrive
                                             ? Image(
                                                     image: iconHardDrive,
                                                     fit: BoxFit.scaleDown,
@@ -1238,14 +1264,14 @@ class _FileManagerViewState extends State<FileManagerView> {
                                                     Theme.of(context)
                                                         .tabBarTheme
                                                         .labelColor),
-                                              ),
+                                              )),
                                         Expanded(
                                             child: Text(entry.name.nonBreaking,
-                                                style: TextStyle(
+                                                style: ddFtNameStyle(TextStyle(
                                                     color: selectedItems.items
                                                             .contains(entry)
                                                         ? Colors.white
-                                                        : null),
+                                                        : null)),
                                                 overflow:
                                                     TextOverflow.ellipsis))
                                       ]),
@@ -1268,13 +1294,13 @@ class _FileManagerViewState extends State<FileManagerView> {
                                       child: Text(
                                         lastModifiedStr,
                                         overflow: TextOverflow.ellipsis,
-                                        style: TextStyle(
+                                        style: ddFtMetaStyle(TextStyle(
                                           fontSize: 12,
                                           color: selectedItems.items
                                                   .contains(entry)
                                               ? Colors.white70
                                               : MyTheme.darkGray,
-                                        ),
+                                        )),
                                       )),
                                 ),
                               ),
@@ -1295,12 +1321,12 @@ class _FileManagerViewState extends State<FileManagerView> {
                                   child: Text(
                                     sizeStr,
                                     overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
+                                    style: ddFtMetaStyle(TextStyle(
                                         fontSize: 10,
                                         color:
                                             selectedItems.items.contains(entry)
                                                 ? Colors.white70
-                                                : MyTheme.darkGray),
+                                                : MyTheme.darkGray)),
                                   ),
                                 ),
                                 onTap: onTap,
@@ -1582,16 +1608,21 @@ class _FileManagerViewState extends State<FileManagerView> {
                     Expanded(
                       child: Text(
                         name,
-                        style: headerTextStyle,
+                        style: ddFtMetaStyle(headerTextStyle),
                         overflow: TextOverflow.ellipsis,
                       ).marginOnly(left: 4),
                     ),
                     ascending.value != null
-                        ? Icon(
+                        ? ddFtIcon(
                             ascending.value!
-                                ? Icons.keyboard_arrow_up_rounded
-                                : Icons.keyboard_arrow_down_rounded,
-                          )
+                                ? DdIcon.chevronUp
+                                : DdIcon.chevronDown,
+                            Icon(
+                              ascending.value!
+                                  ? Icons.keyboard_arrow_up_rounded
+                                  : Icons.keyboard_arrow_down_rounded,
+                            ),
+                            size: 14)
                         : SizedBox()
                   ],
                 ),
@@ -1632,14 +1663,16 @@ class _FileManagerViewState extends State<FileManagerView> {
                     },
                     child: BreadCrumb(
                       items: items,
-                      divider: const Icon(Icons.keyboard_arrow_right_rounded),
+                      divider: ddFtIcon(DdIcon.chevronRight,
+                          const Icon(Icons.keyboard_arrow_right_rounded),
+                          size: 14, color: DdColors.ink3),
                       overflow: ScrollableOverflow(
                         controller: _breadCrumbScroller,
                       ),
                     ),
                   ),
                 ),
-                ActionIcon(
+                ddFtActionIcon(DdIcon.chevronDown, ActionIcon(
                   message: "",
                   icon: Icons.keyboard_arrow_down_rounded,
                   onTap: () async {
@@ -1681,13 +1714,15 @@ class _FileManagerViewState extends State<FileManagerView> {
                           menuItems.add(MenuEntryButton(
                               childBuilder: (TextStyle? style) =>
                                   Row(children: [
-                                    Image(
-                                        image: iconHardDrive,
-                                        fit: BoxFit.scaleDown,
-                                        color: Theme.of(context)
-                                            .iconTheme
-                                            .color
-                                            ?.withOpacity(0.7)),
+                                    ddFtIcon(
+                                        DdIcon.hardDrive,
+                                        Image(
+                                            image: iconHardDrive,
+                                            fit: BoxFit.scaleDown,
+                                            color: Theme.of(context)
+                                                .iconTheme
+                                                .color
+                                                ?.withOpacity(0.7))),
                                     SizedBox(width: 10),
                                     Text(
                                       entry.name,
@@ -1726,7 +1761,7 @@ class _FileManagerViewState extends State<FileManagerView> {
                             .toList());
                   },
                   iconSize: 20,
-                )
+                ))
               ]);
   }
 
@@ -1739,8 +1774,8 @@ class _FileManagerViewState extends State<FileManagerView> {
       breadCrumbList.add(BreadCrumbItem(
           content: TextButton(
                   child: buildWindowsThisPC(context),
-                  style: ButtonStyle(
-                      minimumSize: MaterialStateProperty.all(Size(0, 0))),
+                  style: ddFtCrumbStyle(ButtonStyle(
+                      minimumSize: MaterialStateProperty.all(Size(0, 0)))),
                   onPressed: () => onPressed(['/']))
               .marginSymmetric(horizontal: 4)));
     } else {
@@ -1750,11 +1785,11 @@ class _FileManagerViewState extends State<FileManagerView> {
               (e) => BreadCrumbItem(
                 content: TextButton(
                   child: Text(e.value),
-                  style: ButtonStyle(
+                  style: ddFtCrumbStyle(ButtonStyle(
                     minimumSize: MaterialStateProperty.all(
                       Size(0, 0),
                     ),
-                  ),
+                  )),
                   onPressed: () => onPressed(
                     list.sublist(0, e.key + 1),
                   ),
@@ -1785,16 +1820,24 @@ class _FileManagerViewState extends State<FileManagerView> {
       ..selection = TextSelection.collapsed(offset: text.length);
     return Row(
       children: [
-        SvgPicture.asset(
-          _locationStatus.value == LocationStatus.pathLocation
-              ? "assets/folder.svg"
-              : "assets/search.svg",
-          colorFilter: svgColor(Theme.of(context).tabBarTheme.labelColor),
-        ),
+        ddFtIcon(
+            _locationStatus.value == LocationStatus.pathLocation
+                ? DdIcon.folder
+                : DdIcon.search,
+            SvgPicture.asset(
+              _locationStatus.value == LocationStatus.pathLocation
+                  ? "assets/folder.svg"
+                  : "assets/search.svg",
+              colorFilter: svgColor(Theme.of(context).tabBarTheme.labelColor),
+            ),
+            padding: const EdgeInsets.only(left: 8)),
         Expanded(
           child: TextField(
             focusNode: _locationNode,
+            style: kDdManaged ? const TextStyle(fontSize: 13) : null,
             decoration: InputDecoration(
+              // 受管版主题给输入框白底，放在路径栏的浅底上要去掉
+              filled: kDdManaged ? false : null,
               border: InputBorder.none,
               isDense: true,
               prefix: Padding(
@@ -1852,7 +1895,7 @@ int pageDelta(int lead, int first, int last, bool down) {
 Widget buildWindowsThisPC(BuildContext context, [TextStyle? textStyle]) {
   final color = Theme.of(context).iconTheme.color?.withOpacity(0.7);
   return Row(children: [
-    Icon(Icons.computer, size: 20, color: color),
+    ddFtIcon(DdIcon.monitor, Icon(Icons.computer, size: 20, color: color)),
     SizedBox(width: 10),
     Text(translate('This PC'), style: textStyle)
   ]);

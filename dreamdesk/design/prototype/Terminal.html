@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>终端</title>
+<link rel="stylesheet" href="dd.css">
+<style>body{margin:0;background:#e9ebef}
+body{margin:0;padding:24px;background:#e9ebef}
+</style>
+</head>
+<body>
+
+
+<div class="dd dd-window" style="width: 1080px; height: 700px">
+  <div class="dd-titlebar">
+    <img src="icon.png" alt="" style="width: 18px; height: 18px; margin-right: 8px">
+    <span style="font-weight: 600">终端</span><span style="color: #646a73; margin-left: 8px">VM-CESHI</span>
+    <span class="dd-sep"></span>
+    <div class="dd-tab dd-tab--on">终端 1<svg class="dd-ico" style="width: 13px; height: 13px; color: #646a73; margin-left: 4px" viewBox="0 0 24 24"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg></div>
+    <div class="dd-tab">终端 2</div>
+    <button class="dd-btn dd-btn--small" aria-label="新开终端"><svg class="dd-ico dd-ico--16" viewBox="0 0 24 24"><path d="M5 12h14"></path><path d="M12 5v14"></path></svg></button>
+    <div style="flex: 1"></div>
+    <span class="dd-win" aria-hidden="true"><svg class="dd-ico" style="width: 16px; height: 16px; transform: translate(0.5px, 0.5px)" viewBox="0 0 24 24"><path d="M5 12h14"/></svg></span>
+    <span class="dd-win" aria-hidden="true"><svg class="dd-ico" style="width: 16px; height: 16px; transform: translate(0.5px, 0.5px)" viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="3" rx="2"/></svg></span>
+    <span class="dd-win dd-win--close" aria-hidden="true"><svg class="dd-ico" style="width: 16px; height: 16px; transform: translate(0.5px, 0.5px)" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></span>
+  </div>
+  <div style="flex: 1; background: #1e2127; color: #d7dae0; font-family: var(--font-mono); font-size: 13px; line-height: 21px; padding: 14px 18px; white-space: pre">Windows PowerShell
+PS C:\Users\pangchaocheng&gt; Get-Service dreamdesk-pro
+
+Status   Name               DisplayName
+------   ----               -----------
+Running  dreamdesk-pro      dreamdesk-pro
+
+PS C:\Users\pangchaocheng&gt; <span style="background: #d7dae0; color: #1e2127"> </span></div>
+  <div style="background: #fff; border-top: 1px solid #dcdfe4; height: 40px; display: flex; align-items: center; padding: 0 16px; flex: none">
+    <span class="dd-opt" style="font-size: 13px"><span class="dd-check dd-check--on"></span>断开后保留终端会话</span>
+  </div>
+</div>
+
+</body>
+</html>

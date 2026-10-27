@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>文件传输</title>
+<link rel="stylesheet" href="dd.css">
+<style>body{margin:0;background:#e9ebef}
+body{margin:0;padding:24px;background:#e9ebef}
+</style>
+</head>
+<body>
+
+
+<div class="dd dd-window" style="width: 1080px; height: 700px">
+  <div class="dd-titlebar">
+    <img src="icon.png" alt="" style="width: 18px; height: 18px; margin-right: 8px">
+    <span style="font-weight: 600">文件传输</span><span style="color: #646a73; margin-left: 8px">VM-CESHI</span>
+    <div style="flex: 1"></div>
+    <span class="dd-win" aria-hidden="true"><svg class="dd-ico" style="width: 16px; height: 16px; transform: translate(0.5px, 0.5px)" viewBox="0 0 24 24"><path d="M5 12h14"/></svg></span>
+    <span class="dd-win" aria-hidden="true"><svg class="dd-ico" style="width: 16px; height: 16px; transform: translate(0.5px, 0.5px)" viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="3" rx="2"/></svg></span>
+    <span class="dd-win dd-win--close" aria-hidden="true"><svg class="dd-ico" style="width: 16px; height: 16px; transform: translate(0.5px, 0.5px)" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></span>
+  </div>
+  <div class="dd-ft">
+    <section class="dd-ft__side" aria-label="本机">
+      <div style="height: 36px; display: flex; align-items: center; padding: 0 16px; font-weight: 600; font-size: 13px">本机</div>
+      <div class="dd-ft__bar">
+        <button class="dd-btn dd-btn--small" aria-label="返回"><svg class="dd-ico dd-ico--16" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"></path></svg></button>
+        <button class="dd-btn dd-btn--small" aria-label="上一级"><svg class="dd-ico dd-ico--16" viewBox="0 0 24 24"><path d="m18 15-6-6-6 6"></path></svg></button>
+        <div class="dd-ft__path">D:\项目\镜头 012</div>
+        <button class="dd-btn dd-btn--small" aria-label="新建文件夹"><svg class="dd-ico dd-ico--16" viewBox="0 0 24 24"><path d="M12 10v6"></path><path d="M9 13h6"></path><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"></path></svg></button>
+        <button class="dd-btn dd-btn--primary dd-btn--compact" style="gap: 6px">发送<svg class="dd-ico dd-ico--16" viewBox="0 0 24 24"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg></button>
+      </div>
+      <div class="dd-ft__head"><span>名称</span><span>修改时间</span><span>大小</span></div>
+      <div class="dd-ft__row"><span class="dd-ft__name"><svg class="dd-ico dd-ico--16" style="color: #f0a020" viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"></path></svg>素材</span><span>10-25 18:20</span><span></span></div>
+      <div class="dd-ft__row dd-ft__row--on"><span class="dd-ft__name"><svg class="dd-ico dd-ico--16" style="color: #646a73" viewBox="0 0 24 24"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"></path><path d="M14 2v4a2 2 0 0 0 2 2h4"></path></svg>shot012_v03.ma</span><span>10-26 16:02</span><span>84.2 MB</span></div>
+      <div class="dd-ft__row"><span class="dd-ft__name"><svg class="dd-ico dd-ico--16" style="color: #646a73" viewBox="0 0 24 24"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"></path><path d="M14 2v4a2 2 0 0 0 2 2h4"></path></svg>说明.txt</span><span>10-24 09:41</span><span>2 KB</span></div>
+    </section>
+    <section class="dd-ft__side" aria-label="远程电脑">
+      <div style="height: 36px; display: flex; align-items: center; padding: 0 16px; font-weight: 600; font-size: 13px">VM-CESHI</div>
+      <div class="dd-ft__bar">
+        <button class="dd-btn dd-btn--small" aria-label="返回"><svg class="dd-ico dd-ico--16" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"></path></svg></button>
+        <button class="dd-btn dd-btn--small" aria-label="上一级"><svg class="dd-ico dd-ico--16" viewBox="0 0 24 24"><path d="m18 15-6-6-6 6"></path></svg></button>
+        <div class="dd-ft__path">C:\Users\pangchaocheng\Desktop</div>
+        <button class="dd-btn dd-btn--small" aria-label="新建文件夹"><svg class="dd-ico dd-ico--16" viewBox="0 0 24 24"><path d="M12 10v6"></path><path d="M9 13h6"></path><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"></path></svg></button>
+        <button class="dd-btn dd-btn--secondary dd-btn--compact" style="gap: 6px"><svg class="dd-ico dd-ico--16" viewBox="0 0 24 24"><path d="m12 19-7-7 7-7"></path><path d="M19 12H5"></path></svg>取回</button>
+      </div>
+      <div class="dd-ft__head"><span>名称</span><span>修改时间</span><span>大小</span></div>
+      <div class="dd-ft__row"><span class="dd-ft__name"><svg class="dd-ico dd-ico--16" style="color: #f0a020" viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"></path></svg>渲染输出</span><span>10-26 12:10</span><span></span></div>
+      <div class="dd-ft__row"><span class="dd-ft__name"><svg class="dd-ico dd-ico--16" style="color: #646a73" viewBox="0 0 24 24"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"></path><path d="M14 2v4a2 2 0 0 0 2 2h4"></path></svg>shot011_v07.ma</span><span>10-25 20:33</span><span>79.6 MB</span></div>
+    </section>
+  </div>
+  <div style="background: #fff; border-top: 1px solid #dcdfe4; padding: 10px 16px; display: flex; align-items: center; gap: 14px; font-size: 13px; flex: none">
+    <span style="font-weight: 600">传输</span>
+    <span class="dd-ft__name" style="width: 220px">shot012_v03.ma → Desktop</span>
+    <div class="dd-bar" style="flex: 1"><i style="width: 46%"></i></div>
+    <span style="color: #646a73; width: 150px; text-align: right">38.7 / 84.2 MB · 22 MB/s</span>
+    <button class="dd-btn dd-btn--small" aria-label="暂停"><svg class="dd-ico dd-ico--16" viewBox="0 0 24 24"><rect x="14" y="4" width="4" height="16" rx="1"></rect><rect x="6" y="4" width="4" height="16" rx="1"></rect></svg></button>
+    <button class="dd-btn dd-btn--small" aria-label="取消"><svg class="dd-ico dd-ico--16" viewBox="0 0 24 24"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg></button>
+  </div>
+</div>
+
+</body>
+</html>

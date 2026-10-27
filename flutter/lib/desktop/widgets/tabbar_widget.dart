@@ -10,9 +10,11 @@ import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/desktop/pages/remote_page.dart';
 import 'package:flutter_hbb/desktop/pages/view_camera_page.dart';
+import 'package:flutter_hbb/desktop/widgets/dd_sub_windows.dart';
 import 'package:flutter_hbb/main.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:flutter_hbb/models/state_model.dart';
+import 'package:flutter_hbb/utils/dd_kiosk.dart';
 import 'package:get/get.dart';
 import 'package:get/get_rx/src/rx_workers/utils/debouncer.dart';
 import 'package:scroll_pos/scroll_pos.dart';
@@ -529,6 +531,19 @@ class _DesktopTabState extends State<DesktopTab>
       Obx(() {
         if (stateGlobal.showTabBar.isTrue &&
             !(kUseCompatibleUiMode && isHideSingleItem())) {
+          if (kDdManaged && ddUsesSubWindowBar(tabType)) {
+            return SizedBox(
+              height: kDdSubBarHeight,
+              child: DdSubWindowBar(
+                  controller: controller,
+                  tabMenuBuilder: tabMenuBuilder,
+                  tail: ddSubBarTailOf(tail),
+                  onClose: onWindowCloseButton,
+                  showMinimize: showMinimize,
+                  showMaximize: showMaximize,
+                  showClose: showClose),
+            );
+          }
           final customBar = widget.customBar;
           if (customBar != null) {
             return SizedBox(height: widget.customBarHeight ?? _kTabBarHeight, child: customBar());

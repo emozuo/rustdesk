@@ -161,6 +161,7 @@ flutter:
   assets:
     - assets/
     - assets/dd_kiosk/
+    - assets/dd/
 
   fonts:
     - family: GestureIcons

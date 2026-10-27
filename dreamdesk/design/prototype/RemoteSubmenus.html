@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>远程窗口 · 控制中心各级菜单</title>
+<link rel="stylesheet" href="dd.css">
+<style>body{margin:0}
+body{margin:0;padding:24px;background:#e9ebef}
+</style>
+</head>
+<body>
+
+
+<div class="dd" style="width: 1280px; height: 760px; background: #f0f5f8; box-sizing: border-box; padding: 36px 40px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 28px 24px; align-items: start">
+  <div style="display: flex; flex-direction: column; gap: 8px">
+    <div style="font-size: 12px; color: #646a73">显示屏</div>
+    <div class="dd-menu" style="width: auto">
+      <div class="dd-mi dd-mi--on">显示屏 1（VX2723）<span class="dd-mi__key">2560×1440</span><svg class="dd-ico dd-ico--16 dd-mi__check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"></path></svg></div>
+      <div class="dd-mi">显示屏 2（VA2723）<span class="dd-mi__key">1920×1080</span></div>
+    </div>
+  </div>
+  <div style="display: flex; flex-direction: column; gap: 8px">
+    <div style="font-size: 12px; color: #646a73">窗口</div>
+    <div class="dd-menu" style="width: auto">
+      <div class="dd-mi">原始大小</div>
+      <div class="dd-mi dd-mi--on">适应窗口<svg class="dd-ico dd-ico--16 dd-mi__check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"></path></svg></div>
+      <div class="dd-mi">自定义缩放…</div>
+    </div>
+  </div>
+  <div style="display: flex; flex-direction: column; gap: 8px">
+    <div style="font-size: 12px; color: #646a73">声音</div>
+    <div class="dd-menu" style="width: auto">
+      <div class="dd-mi dd-mi--check">静音</div>
+    </div>
+  </div>
+  <div style="display: flex; flex-direction: column; gap: 8px">
+    <div style="font-size: 12px; color: #646a73">安全</div>
+    <div class="dd-menu" style="width: auto">
+      <div class="dd-mi"><svg class="dd-ico dd-ico--16" viewBox="0 0 24 24"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>锁定远程电脑</div>
+      <div class="dd-mi"><svg class="dd-ico dd-ico--16" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><path d="m4.9 4.9 14.2 14.2"></path></svg>禁止对方本地操作</div>
+      <hr>
+      <div class="dd-mi dd-mi--check dd-mi--on">断开后锁定远程电脑<svg class="dd-ico dd-ico--16 dd-mi__check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"></path></svg></div>
+    </div>
+  </div>
+  <div style="display: flex; flex-direction: column; gap: 8px">
+    <div style="font-size: 12px; color: #646a73">外设</div>
+    <div class="dd-menu" style="width: auto">
+      <div class="dd-menu__head">鼠标模式</div>
+      <div class="dd-mi dd-mi--on">本地鼠标<svg class="dd-ico dd-ico--16 dd-mi__check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"></path></svg></div>
+      <div class="dd-mi">远程鼠标</div>
+      <div class="dd-note" style="padding-left: 16px">游戏、三维软件里转视角用远程鼠标；按 Ctrl+Alt 退出</div>
+      <hr>
+      <div class="dd-mi dd-mi--check dd-mi--on">同步剪贴板<svg class="dd-ico dd-ico--16 dd-mi__check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"></path></svg></div>
+      <div class="dd-mi dd-mi--check dd-mi--on">允许复制粘贴文件<svg class="dd-ico dd-ico--16 dd-mi__check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"></path></svg></div>
+      <div class="dd-mi dd-mi--check">反转鼠标滚轮</div>
+      <div class="dd-mi dd-mi--check">交换鼠标左右键</div>
+    </div>
+  </div>
+  <div style="display: flex; flex-direction: column; gap: 8px">
+    <div style="font-size: 12px; color: #646a73">工具</div>
+    <div class="dd-menu" style="width: auto">
+      <div class="dd-mi"><svg class="dd-ico dd-ico--16" viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"></path><path d="M12 10v6"></path><path d="m9 13 3-3 3 3"></path></svg>文件传输</div>
+      <div class="dd-mi"><svg class="dd-ico dd-ico--16" viewBox="0 0 24 24"><path d="m7 11 2-2-2-2"></path><path d="M11 13h4"></path><rect width="18" height="18" x="3" y="3" rx="2" ry="2"></rect></svg>终端</div>
+      <div class="dd-mi"><svg class="dd-ico dd-ico--16" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="1"></circle></svg>开始录屏</div>
+      <div class="dd-mi"><svg class="dd-ico dd-ico--16" viewBox="0 0 24 24"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"></path><circle cx="12" cy="13" r="3"></circle></svg>截图</div>
+    </div>
+  </div>
+  <div style="display: flex; flex-direction: column; gap: 8px">
+    <div style="font-size: 12px; color: #646a73">更多</div>
+    <div class="dd-menu" style="width: auto">
+      <div class="dd-mi"><svg class="dd-ico dd-ico--16" viewBox="0 0 24 24"><path d="M10 8h.01"></path><path d="M12 12h.01"></path><path d="M14 8h.01"></path><path d="M16 12h.01"></path><path d="M18 8h.01"></path><path d="M6 8h.01"></path><path d="M7 16h10"></path><path d="M8 12h.01"></path><rect width="20" height="16" x="2" y="4" rx="2"></rect></svg>发送 Ctrl+Alt+Del</div>
+      <div class="dd-mi"><svg class="dd-ico dd-ico--16" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path></svg>刷新画面</div>
+      <div class="dd-mi"><svg class="dd-ico dd-ico--16" viewBox="0 0 24 24"><path d="M12 2v10"></path><path d="M18.4 6.6a9 9 0 1 1-12.77.04"></path></svg>重启远程电脑</div>
+      <hr>
+      <div class="dd-mi dd-mi--check dd-mi--on">显示质量监测<svg class="dd-ico dd-ico--16 dd-mi__check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"></path></svg></div>
+      <hr>
+      <div class="dd-mi"><svg class="dd-ico dd-ico--16" viewBox="0 0 24 24"><path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"></path></svg>切换到专业模式</div>
+    </div>
+  </div>
+  <div style="display: flex; flex-direction: column; gap: 8px">
+    <div style="font-size: 12px; color: #646a73">外设（远程鼠标用不了时）</div>
+    <div class="dd-menu" style="width: auto">
+      <div class="dd-menu__head">鼠标模式</div>
+      <div class="dd-mi dd-mi--on">本地鼠标<svg class="dd-ico dd-ico--16 dd-mi__check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"></path></svg></div>
+      <div class="dd-mi dd-mi--off">远程鼠标</div>
+      <div class="dd-note" style="padding-left: 16px">对方版本太旧，不支持远程鼠标</div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

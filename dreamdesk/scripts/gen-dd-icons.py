@@ -20,10 +20,29 @@ STROKE = [  # Lucide
     ('minimize', 'minimize'), ('logOut', 'log-out'), ('layoutGrid', 'layout-grid'), ('check', 'check'),
     ('ban', 'ban'), ('record', 'circle-dot'), ('camera', 'camera'), ('keyboard', 'keyboard'),
     ('refresh', 'rotate-ccw'), ('zap', 'zap'), ('wifiOff', 'wifi-off'), ('circleAlert', 'circle-alert'),
+    ('circleX', 'circle-x'), ('circleCheck', 'circle-check'), ('shieldAlert', 'shield-alert'),
+    ('hourglass', 'hourglass'), ('shieldCheck', 'shield-check'), ('shield', 'shield'),
+    ('chevronLeft', 'chevron-left'), ('chevronRight', 'chevron-right'), ('house', 'house'),
+    ('folderPlus', 'folder-plus'), ('trash', 'trash-2'), ('search', 'search'), ('folder', 'folder'),
+    ('file', 'file'), ('hardDrive', 'hard-drive'), ('plus', 'plus'), ('triangleAlert', 'triangle-alert'),
+    ('messageSquare', 'message-square'),
+    # 照 UU 的信号格（三根竖条）
+    ('signalBars', 'chart-no-axes-column-increasing'),
+    # 窗口按钮（10-27 用户选：和标题栏上别的图标同一家，不用 Fluent）
+    ('winMinimize', 'minus'), ('winMaximize', 'square'), ('winClose', 'x'),
+    # 设置页左侧分类（10-27 用户：Material 换成 Lucide；安全、显示、账户、关于用已有的 shield / monitor / user / info）
+    ('sliders', 'sliders-horizontal'), ('network', 'network'), ('printer', 'printer'),
 ]
 FILL = [  # (枚举名, 前缀, 原文件名)
     ('menu', 'fluent', 'navigation_20_regular'),
     ('controlCenter', 'fluent', 'toggle_multiple_20_regular'),
+    # 窗口「还原」（10-27 用户：Fluent 的两个叠着的方框最合适）
+    ('winRestore', 'fluent', 'square_multiple_16_regular'),
+    # 屏幕标签（10-27 用户：照 UU 的长方形 + 底部粗条）
+    ('screen', 'material', 'video_label'),
+    # 「全部显示屏」标签（一个画面里两块屏）、「铺满我所有显示器」按钮（两台显示器），10-27 原型 RemoteMulti.html
+    ('allScreens', 'material', 'splitscreen_landscape'),
+    ('myDisplays', 'material', 'tv_displays'),
     ('osWindows', 'fa', 'windows'),
     ('osLinux', 'fa', 'linux'),
     ('osMac', 'fa', 'apple'),
@@ -53,6 +72,7 @@ lines.append('// 本文件由 dreamdesk/scripts/gen-dd-icons.py 从图标库原�
 lines.append('// - Lucide（lucide-static 0.460.0，ISC 许可）：描边图标，线宽统一 1.5（界面规范；Lucide 支持调线宽，路径不动）')
 lines.append('// - Fluent UI System Icons（@fluentui/svg-icons 1.1.292，MIT 许可）：填色图标，按显示尺寸用对应号的原图，不缩放')
 lines.append('// - Font Awesome Free 6.6.0 品牌图标（CC BY 4.0 许可，https://fontawesome.com/license/free）：系统标志')
+lines.append('// - Material Symbols（@material-symbols/svg-400 0.23.0 outlined，Apache 2.0 许可）：屏幕标签（video_label，照 UU 的长方形 + 底部粗条）')
 lines.append("import 'package:flutter/material.dart';")
 lines.append("import 'package:flutter_svg/flutter_svg.dart';")
 lines.append('')
@@ -81,13 +101,19 @@ for n, kind, f in FILL:
     lines.append(f"  DdIcon.{n}: ('{vb}', '{inner}'),")
 lines.append('};')
 lines.append('')
-lines.append("Widget ddIcon(DdIcon icon, {double size = 18, Color color = const Color(0xFF1F2329)}) {")
+lines.append("/// 拼好的 SVG 串：同一个图标 + 线宽只拼一次（flutter_svg 拿整串当缓存键，每次拼新串、算哈希是白费功夫）")
+lines.append("final _svgs = <(DdIcon, double), String>{};")
+lines.append("")
+lines.append("String _svgOf(DdIcon icon, double strokeWidth) => _svgs.putIfAbsent((icon, strokeWidth), () {")
 lines.append("  final fill = _fill[icon];")
-lines.append("  final svg = fill != null")
-lines.append("      ? '<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"${fill.$1}\" fill=\"#000\">${fill.$2}</svg>'")
-lines.append("      : '$_strokeHead${_stroke[icon]}</svg>';")
-lines.append("  return SvgPicture.string(svg, width: size, height: size, colorFilter: ColorFilter.mode(color, BlendMode.srcIn));")
-lines.append('}')
+lines.append("  if (fill != null) return '<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"${fill.$1}\" fill=\"#000\">${fill.$2}</svg>';")
+lines.append("  final head = strokeWidth == 1.5 ? _strokeHead : _strokeHead.replaceFirst('stroke-width=\"1.5\"', 'stroke-width=\"$strokeWidth\"');")
+lines.append("  return '$head${_stroke[icon]}</svg>';")
+lines.append("});")
+lines.append("")
+lines.append("/// [strokeWidth]：描边图标的线宽（Lucide 的 24 格里算），默认 1.5；填色图标不管它")
+lines.append("Widget ddIcon(DdIcon icon, {double size = 18, Color color = const Color(0xFF1F2329), double strokeWidth = 1.5}) =>")
+lines.append("    SvgPicture.string(_svgOf(icon, strokeWidth), width: size, height: size, colorFilter: ColorFilter.mode(color, BlendMode.srcIn));")
 
 # 「全部设备」：Phosphor circles-four（fill）。原路径是 4 个圆连在一条里，照 UU 拆开分别上两种蓝（对角同色）；
 # 第二个圆开头是相对的 m56,40（上一个圆闭合后的当前点是 120,80），换成等价的 M176,120，其余照抄
@@ -113,7 +139,8 @@ lines.append('Widget ddAllDevicesIcon({double size = 20}) => SvgPicture.string(_
 # 许可声明：ISC / MIT 要求副本里保留版权和许可声明，原文照抄（各库发布的 LICENSE 文件）；Font Awesome 图标是 CC BY 4.0，注明出处
 lines.append('')
 lines.append('// ---- 图标库许可声明（原文） ----')
-for title, f in [('Lucide', 'lucide'), ('Fluent UI System Icons', 'fluent'), ('Phosphor Icons', 'phosphor')]:
+for title, f in [('Lucide', 'lucide'), ('Fluent UI System Icons', 'fluent'), ('Phosphor Icons', 'phosphor'),
+                 ('Material Symbols', 'material-symbols')]:
     text = (icons / f'LICENSE-{f}.txt').read_text(encoding='utf-8').strip()
     lines.append('//')
     lines.append(f'// {title}:')

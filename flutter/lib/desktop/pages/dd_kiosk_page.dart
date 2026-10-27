@@ -10,12 +10,12 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common.dart';
-import 'package:flutter_hbb/common/hbbs/hbbs.dart';
 import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_tab_page.dart';
 import 'package:flutter_hbb/desktop/widgets/dd_icons.dart';
 import 'package:flutter_hbb/desktop/widgets/dd_kiosk_view.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
+import 'package:flutter_hbb/utils/dd_gateway.dart';
 import 'package:flutter_hbb/utils/dd_kiosk.dart';
 import 'package:flutter_hbb/utils/http_service.dart' as http;
 import 'package:flutter_hbb/utils/multi_window_manager.dart';
@@ -60,13 +60,13 @@ class _DdKioskPageState extends State<DdKioskPage> {
   String _displayName = '';
   bool _userMenu = false;
 
-  List<DdKioskWsItem> _items = [];
+  List<DdWs> _items = [];
   bool _listLoaded = false;
   String _listError = '';
   String? _selectedId;
   DateTime _lastListFetch = DateTime.fromMillisecondsSinceEpoch(0);
 
-  DdKioskWsItem? _target;
+  DdWs? _target;
   int _failures = 0;
   _Cat _cat = _Cat.lost;
   String _reason = '';
@@ -194,19 +194,7 @@ class _DdKioskPageState extends State<DdKioskPage> {
       _loginError = '';
     });
     try {
-      final resp = await gFFI.userModel.login(LoginRequest(
-          username: user,
-          password: password,
-          id: await bind.mainGetMyId(),
-          uuid: await bind.mainGetUuid(),
-          autoLogin: true,
-          type: HttpType.kAuthReqTypeAccount));
-      final token = resp.access_token;
-      if (resp.type != HttpType.kAuthResTypeToken || token == null) {
-        // 服务端要二次验证（邮件 / 动态码）：AD 登录没有这一步，kiosk 也不做
-        throw RequestException(0, translate('Sign-in failed'));
-      }
-      await bind.mainSetLocalOption(key: 'access_token', value: token);
+      final resp = await ddSignIn(user, password);
       await bind.mainSetLocalOption(key: _kLastUser, value: user);
       debugPrint('dd-kiosk: signed in as $user');
       if (!mounted) return;
@@ -223,12 +211,8 @@ class _DdKioskPageState extends State<DdKioskPage> {
       });
       _lastInput = DateTime.now();
       _showList();
-    } on RequestException catch (e) {
-      debugPrint('dd-kiosk: sign-in failed: ${e.statusCode}');
-      _loginFailed(e.cause.isNotEmpty ? translate(e.cause) : translate('Sign-in failed'));
-    } catch (e) {
-      debugPrint('dd-kiosk: sign-in failed: $e');
-      _loginFailed(translate('Cannot reach the server'));
+    } on DdSignInError catch (e) {
+      _loginFailed(e.message);
     }
   }
 
@@ -279,47 +263,28 @@ class _DdKioskPageState extends State<DdKioskPage> {
     final token = bind.mainGetLocalOption(key: 'access_token');
     // 请求在路上时换了人（退出、别人登录）：晚回来的结果是上一个人的，丢掉（不然显示上一个人的工作站，
     // 或者拿上一个人已注销的令牌被拒、把刚登录的人踢下线）
-    bool stale() => !mounted || bind.mainGetLocalOption(key: 'access_token') != token;
-    try {
-      final api = await bind.mainGetApiServer();
-      final resp = await http.get(Uri.parse('$api/api/dd/workstations'), headers: getHttpHeaders());
-      if (stale()) return;
-      if (resp.statusCode == 401) {
-        debugPrint('dd-kiosk: token rejected while listing workstations');
-        _signOut(message: translate('Your sign-in has expired. Please sign in again.'));
-        return;
-      }
-      final body = jsonDecode(resp.body) as Map<String, dynamic>;
-      if (resp.statusCode != 200) {
-        setState(() => _listError = body['error'] as String? ?? translate('Could not load your workstations'));
-        return;
-      }
-      final items = <DdKioskWsItem>[];
-      for (final m in (body['items'] as List? ?? const [])) {
-        if (m is! Map) continue;
-        final id = m['id'] as String? ?? '';
-        if (id.isEmpty) continue;
-        final name = (m['name'] as String?)?.isNotEmpty == true ? m['name'] as String : id;
-        final state = m['online'] != true
-            ? DdKioskWsState.offline
-            : (m['in_use_by_me'] == true
-                ? DdKioskWsState.mine
-                : (m['in_use'] == true ? DdKioskWsState.busy : DdKioskWsState.available));
-        items.add(DdKioskWsItem(id, name, state));
-      }
-      setState(() {
-        _items = items;
-        _listLoaded = true;
-        _listError = '';
-        // 选中的那台没了或者连不了时，换成第一台能连的
-        if (!items.any((w) => w.id == _selectedId && w.selectable)) {
-          _selectedId = items.where((w) => w.selectable).firstOrNull?.id;
-        }
-      });
-    } catch (e) {
-      debugPrint('dd-kiosk: listing workstations failed: $e');
-      if (!stale()) setState(() => _listError = translate('Cannot reach the server'));
+    final r = await ddFetchWorkstations();
+    if (!mounted || bind.mainGetLocalOption(key: 'access_token') != token) return;
+    if (r.rejected) {
+      _signOut(message: translate('Your sign-in has expired. Please sign in again.'));
+      return;
     }
+    final items = r.items;
+    if (items == null) {
+      setState(() => _listError = r.failure == DdFailure.network
+          ? translate('Cannot reach the server')
+          : (r.message.isNotEmpty ? r.message : translate('Could not load your workstations')));
+      return;
+    }
+    setState(() {
+      _items = items;
+      _listLoaded = true;
+      _listError = '';
+      // 选中的那台没了或者连不了时，换成第一台能连的
+      if (!items.any((w) => w.id == _selectedId && w.selectable)) {
+        _selectedId = items.where((w) => w.selectable).firstOrNull?.id;
+      }
+    });
   }
 
   void _connectTo(String id) {
@@ -545,10 +510,10 @@ class _DdKioskPageState extends State<DdKioskPage> {
         titleB: translate('Dream'),
         sub: sub,
         stateText: (s) => translate(switch (s) {
-          DdKioskWsState.available => 'Available',
-          DdKioskWsState.mine => 'Connected from elsewhere',
-          DdKioskWsState.busy => 'In use by someone else',
-          DdKioskWsState.offline => 'Offline',
+          DdWsState.available => 'Available',
+          DdWsState.mine => 'Connected from elsewhere',
+          DdWsState.busy => 'In use by someone else',
+          DdWsState.offline => 'Offline',
         }),
         connect: translate('Connect'),
         hint: translate('Number keys to choose · Enter to connect'),
@@ -563,7 +528,7 @@ class _DdKioskPageState extends State<DdKioskPage> {
   Widget _card() {
     final name = _target?.name ?? '';
     final (String kicker, String title, String reason) = switch (_cat) {
-      _Cat.lost => (translate('Not connected'), translate('Connection lost'), _reason),
+      _Cat.lost => (translate('No connection'), translate('Connection lost'), _reason),
       _Cat.refused => (translate('Connection refused'), translate('Connection refused'), _reason),
       _Cat.peer => (
           translate('Disconnected'),

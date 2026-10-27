@@ -30,6 +30,8 @@ import 'package:flutter_hbb/common/shared_state.dart';
 import 'package:flutter_hbb/utils/multi_window_manager.dart';
 import 'package:flutter_hbb/utils/http_service.dart' as http;
 import 'package:flutter_hbb/utils/dd_kiosk.dart';
+import 'package:flutter_hbb/desktop/widgets/dd_remote_dialogs.dart';
+import 'package:flutter_hbb/desktop/widgets/dd_remote_displays.dart';
 import 'package:tuple/tuple.dart';
 import 'package:image/image.dart' as img2;
 import 'package:flutter_svg/flutter_svg.dart';
@@ -402,7 +404,7 @@ class FfiModel with ChangeNotifier {
       } else if (name == 'ddpro_mode') {
         onDdproModeEvent(sessionId, evt);
       } else if (name == 'ddpro_window') {
-        onDdproWindowEvent(sessionId, peerId, evt);
+        onDdproWindowEvent(sessionId, peerId, evt, parent.target);
       } else if (name == 'update_privacy_mode') {
         updatePrivacyMode(evt, sessionId, peerId);
       } else if (name == 'show_elevation') {
@@ -539,15 +541,18 @@ class FfiModel with ChangeNotifier {
 
       final List<Widget> buttons = [
         dialogButton('${translate('Save as')}...', onPressed: saveAs),
-        dialogButton('Copy to clipboard', onPressed: copyToClipboard),
-        dialogButton('Cancel', onPressed: cancel),
+        dialogButton('Copy to clipboard',
+            onPressed: copyToClipboard, isOutline: kDdManaged),
+        dialogButton('Cancel', onPressed: cancel, isOutline: kDdManaged),
       ];
       dialogManager.dismissAll();
       dialogManager.show(
         (setState, close, context) => CustomAlertDialog(
           title: null,
           content: SelectionArea(
-              child: msgboxContent(msgBoxType, msgBoxTitle, msgBoxText)),
+              child: kDdManaged
+                  ? ddScreenshotContent(msgBoxTitle, msgBoxText)
+                  : msgboxContent(msgBoxType, msgBoxTitle, msgBoxText)),
           actions: buttons,
         ),
         tag: '$msgBoxType-$msgBoxTitle-$msgBoxTitle',
@@ -1543,6 +1548,8 @@ class FfiModel with ChangeNotifier {
   }
 
   tryUseAllMyDisplaysForTheRemoteSession(String peerId) async {
+    // DreamDesk 受管版：只在连接的主窗口铺。拖出来 / 铺开出来的窗口重连时也收到对端信息，照做会把自己切回第 1 块屏、再去开窗口
+    if (kDdManaged && !(ddOwnedDisplaysOf(peerId)?.isMain ?? true)) return;
     if (bind.sessionGetUseAllMyDisplaysForTheRemoteSession(
             sessionId: sessionId) !=
         'Y') {

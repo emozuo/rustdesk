@@ -10,6 +10,7 @@ import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/models/input_model.dart';
 import 'package:flutter_hbb/models/state_model.dart';
 import 'package:flutter_hbb/desktop/pages/remote_page.dart';
+import 'package:flutter_hbb/desktop/widgets/dd_remote_sync.dart';
 import 'package:flutter_hbb/desktop/widgets/dd_remote_title_bar.dart';
 import 'package:flutter_hbb/desktop/widgets/remote_toolbar.dart';
 import 'package:flutter_hbb/desktop/widgets/tabbar_widget.dart';
@@ -108,6 +109,8 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
       ));
       _update_remote_count();
     }
+    // DreamDesk 受管版：多块屏各归哪个窗口、窗口最小尺寸（dd_remote_sync.dart）
+    if (kDdManaged) ddOnRemoteWindowCreated(params, tabController);
     tabController.onRemoved = (_, id) => onRemoveId(id);
     rustDeskWinManager.setMethodHandler(_remoteMethodHandler);
   }
@@ -432,6 +435,8 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
         "[Remote Page] call ${call.method} with args ${call.arguments} from window $fromWindowId");
 
     dynamic returnValue;
+    // DreamDesk 受管版：拖出去的屏报到 / 归还（dd_remote_displays.dart）
+    if (kDdManaged && ddHandleRemoteWindowCall(call, tabController)) return null;
     // for simplify, just replace connectionId
     if (call.method == kWindowEventNewRemoteDesktop) {
       final args = jsonDecode(call.arguments);

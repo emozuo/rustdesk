@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>远程窗口 · 标题栏和画面</title>
+<link rel="stylesheet" href="dd.css">
+<style>
+body{margin:0;padding:24px;background:#e9ebef}
+.note{font:600 14px/22px var(--font-sans);color:#1f2329;margin:28px 0 10px}
+.sub{font:12px/18px var(--font-sans);color:#646a73;margin:0 0 8px}
+.row{display:flex;gap:24px;align-items:flex-start;flex-wrap:wrap}
+.strip{border-radius:8px;overflow:hidden;border:1px solid #00000024;display:inline-flex}
+</style>
+</head>
+<body>
+
+<!-- 10-27 用户第二次对照 UU 截图改：字 12 号 #111418；屏幕标签图标换成长方形 + 底部粗条（Material Symbols video_label）；竖线只在标签和信号格之间；
+     信号格三根竖条；只有最小化 / 最大化 / 关闭占满标题栏高，麦克风、控制中心还是圆角小块；窗口窄了标签只剩图标 -->
+<div class="dd dd-window" style="width: 1280px; height: 760px">
+  <div class="dd-titlebar">
+    <img src="icon.png" alt="" style="width: 18px; height: 18px; margin-right: 8px">
+    <span style="letter-spacing: 0.3px">VM-CESHI</span>
+    <svg class="dd-ico dd-ico--16" style="color: #22a35a; margin-left: 6px; margin-right: 12px" role="img" aria-label="连接已加密" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"></path><path d="m9 12 2 2 4-4"></path></svg>
+    <div class="dd-tab dd-tab--on"><svg class="dd-ico dd-ico--fill" viewBox="0 -960 960 960"><path d="M140-160q-24 0-42-18t-18-42v-520q0-24 18-42t42-18h680q24 0 42 18t18 42v520q0 24-18 42t-42 18H140Zm0-189h680v-391H140v391Z"/></svg>显示屏 1（VX2723）</div>
+    <div class="dd-tab is-hover"><svg class="dd-ico dd-ico--fill" viewBox="0 -960 960 960"><path d="M140-160q-24 0-42-18t-18-42v-520q0-24 18-42t42-18h680q24 0 42 18t18 42v520q0 24-18 42t-42 18H140Zm0-189h680v-391H140v391Z"/></svg>显示屏 2（VA2723）</div>
+    <span class="dd-sep"></span>
+    <svg class="dd-ico dd-ico--16" style="color: #22c55e; stroke-width: 3" role="img" aria-label="信号好" viewBox="0 0 24 24"><line x1="6" x2="6" y1="20" y2="16"></line><line x1="12" x2="12" y1="20" y2="10"></line><line x1="18" x2="18" y1="20" y2="4"></line></svg>
+    <span class="dd-stat" style="margin-left: 6px">00:12:38</span>
+    <div style="flex: 1"></div>
+    <button class="dd-btn dd-btn--small" aria-label="打开麦克风"><svg class="dd-ico" viewBox="0 0 24 24"><line x1="2" x2="22" y1="2" y2="22"></line><path d="M18.89 13.23A7.12 7.12 0 0 0 19 12v-2"></path><path d="M5 10v2a7 7 0 0 0 12 5"></path><path d="M15 9.34V5a3 3 0 0 0-5.68-1.33"></path><path d="M9 9v3a3 3 0 0 0 5.12 2.12"></path><line x1="12" x2="12" y1="19" y2="22"></line></svg></button>
+    <button class="dd-btn dd-btn--small" style="margin: 0 4px; gap: 8px; padding: 0 10px; font-size: 12px; color: #111418"><svg class="dd-ico dd-ico--fill" viewBox="0 0 20 20" style="width: 20px; height: 20px"><path d="M8 5.5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0Zm-5 0A3.5 3.5 0 0 0 6.5 9h7a3.5 3.5 0 1 0 0-7h-7A3.5 3.5 0 0 0 3 5.5ZM6.5 3h7a2.5 2.5 0 0 1 0 5h-7a2.5 2.5 0 0 1 0-5Zm7 13a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3ZM3 14.5A3.5 3.5 0 0 0 6.5 18h7a3.5 3.5 0 1 0 0-7h-7A3.5 3.5 0 0 0 3 14.5ZM6.5 12h7a2.5 2.5 0 0 1 0 5h-7a2.5 2.5 0 0 1 0-5Z"></path></svg>控制中心</button>
+    <span class="dd-win" aria-hidden="true"><svg class="dd-ico" style="width: 16px; height: 16px; transform: translate(0.5px, 0.5px)" viewBox="0 0 24 24"><path d="M5 12h14"/></svg></span>
+    <span class="dd-win" aria-hidden="true"><svg class="dd-ico" style="width: 16px; height: 16px; transform: translate(0.5px, 0.5px)" viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="3" rx="2"/></svg></span>
+    <span class="dd-win dd-win--close" aria-hidden="true"><svg class="dd-ico" style="width: 16px; height: 16px; transform: translate(0.5px, 0.5px)" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></span>
+  </div>
+  <div class="dd-screen">
+    <div style="position: absolute; left: 0; right: 0; bottom: 0; height: 34px; background: #1b2733cc"></div>
+    <div style="position: absolute; left: 160px; top: 90px; width: 560px; height: 360px; border-radius: 6px; background: #f3f4f6; box-shadow: 0 10px 30px #00000055">
+      <div style="height: 30px; border-bottom: 1px solid #e3e5e8"></div>
+    </div>
+    <div style="position: absolute; left: 520px; top: 200px; width: 420px; height: 280px; border-radius: 6px; background: #ffffff; box-shadow: 0 10px 30px #00000055">
+      <div style="height: 30px; border-bottom: 1px solid #e3e5e8"></div>
+    </div>
+    <div class="dd-monitor"><span>速度</span><span>56.3 kB/s</span><span>帧率</span><span>60</span><span>延迟</span><span>1 ms</span><span>目标码率</span><span>3005 kb</span><span>编码</span><span>H265</span><span>色度</span><span>4:2:0</span></div>
+  </div>
+</div>
+<p class="sub" style="margin-top: 8px">上图：显示屏 2 是鼠标停在上面的样子（圆角深色底，四边各留 7 像素）。</p>
+
+<div class="note">窗口缩放时标签渐进变窄（10-27 用户：不要一下子变成图标）；窗口最小 720 × 480，不能再缩</div>
+<p class="sub">每个标签的宽 = 标签区能用的宽 ÷ 标签数，最宽 230、最窄 40。变窄时先截文字（末尾省略号），窄到放不下「图标 + 两三个字」（约 96）才只剩图标居中；
+选中的照样白底接画面、悬停照样圆角底。下面四条是同一个窗口（两块屏 +「全部显示屏」）在不同宽度下的样子，最后一条是最小宽度 720。
+窗口最小 720 × 480：标题栏左边机器名、三个只剩图标的标签、信号格、时长、麦克风、控制中心、三个窗口按钮正好放得下；再小拖不动。</p>
+<div id="shrink"></div>
+<script>
+(function () {
+  const SCR = '<svg class="dd-ico dd-ico--fill" viewBox="0 -960 960 960"><path d="M140-160q-24 0-42-18t-18-42v-520q0-24 18-42t42-18h680q24 0 42 18t18 42v520q0 24-18 42t-42 18H140Zm0-189h680v-391H140v391Z"/></svg>';
+  const ALL = '<svg class="dd-ico dd-ico--fill" viewBox="0 -960 960 960"><path d="M510-280h250v-400H510v400Zm-310 0h250v-400H200v400Zm-60 120q-24 0-42-18t-18-42v-520q0-24 18-42t42-18h680q24 0 42 18t18 42v520q0 24-18 42t-42 18H140Zm680-580H140v520h680v-520Zm-680 0v520-520Z"/></svg>';
+  const SHIELD = '<svg class="dd-ico dd-ico--16" style="color: #22a35a; margin-left: 6px; margin-right: 12px" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"></path><path d="m9 12 2 2 4-4"></path></svg>';
+  const SIG = '<span class="dd-sep"></span><svg class="dd-ico dd-ico--16" style="color: #22c55e; stroke-width: 3" viewBox="0 0 24 24"><line x1="6" x2="6" y1="20" y2="16"/><line x1="12" x2="12" y1="20" y2="10"/><line x1="18" x2="18" y1="20" y2="4"/></svg><span class="dd-stat" style="margin-left: 6px">00:12:38</span><div style="flex: 1; min-width: 16px"></div>';
+  const MIC = '<button class="dd-btn dd-btn--small"><svg class="dd-ico" viewBox="0 0 24 24"><line x1="2" x2="22" y1="2" y2="22"></line><path d="M18.89 13.23A7.12 7.12 0 0 0 19 12v-2"></path><path d="M5 10v2a7 7 0 0 0 12 5"></path><path d="M15 9.34V5a3 3 0 0 0-5.68-1.33"></path><path d="M9 9v3a3 3 0 0 0 5.12 2.12"></path><line x1="12" x2="12" y1="19" y2="22"></line></svg></button>';
+  const CC = '<button class="dd-btn dd-btn--small" style="margin: 0 4px; gap: 8px; padding: 0 10px; font-size: 12px; color: #111418"><svg class="dd-ico dd-ico--fill" viewBox="0 0 20 20" style="width: 20px; height: 20px"><path d="M8 5.5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0Zm-5 0A3.5 3.5 0 0 0 6.5 9h7a3.5 3.5 0 1 0 0-7h-7A3.5 3.5 0 0 0 3 5.5ZM6.5 3h7a2.5 2.5 0 0 1 0 5h-7a2.5 2.5 0 0 1 0-5Zm7 13a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3ZM3 14.5A3.5 3.5 0 0 0 6.5 18h7a3.5 3.5 0 1 0 0-7h-7A3.5 3.5 0 0 0 3 14.5ZM6.5 12h7a2.5 2.5 0 0 1 0 5h-7a2.5 2.5 0 0 1 0-5Z"></path></svg>控制中心</button>';
+  const N = 'style="width: 16px; height: 16px; transform: translate(0.5px, 0.5px)"';
+  const WIN = `<span class="dd-win"><svg class="dd-ico" ${N} viewBox="0 0 24 24"><path d="M5 12h14"/></svg></span><span class="dd-win"><svg class="dd-ico" ${N} viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="3" rx="2"/></svg></span><span class="dd-win dd-win--close"><svg class="dd-ico" ${N} viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></span>`;
+  // 标题栏里除了标签以外占的宽（机器名、盾牌、竖线、信号格、时长、最少留给拖动的 16、麦克风、控制中心、窗口按钮、标签区两边各 8）
+  const FIXED = 14 + 26 + 70 + 34 + 17 + 22 + 50 + 16 + 44 + 108 + 138 + 16;
+  const tabs = [[SCR, '显示屏 1（VX2723）', true], [SCR, '显示屏 2（VA2723）', false], [ALL, '全部显示屏', false]];
+  let html = '';
+  for (const W of [1180, 1000, 860, 720]) {
+    const w = Math.max(40, Math.min(230, Math.floor((W - FIXED) / tabs.length)));
+    const iconOnly = w < 96;
+    const t = tabs.map(([icon, label, on]) =>
+      `<div class="dd-tab${on ? ' dd-tab--on' : ''}" title="${label}" style="width: ${w}px; ${iconOnly ? 'padding: 0 0 7px; justify-content: center' : ''}">${icon}${iconOnly ? '' : `<span style="overflow: hidden; text-overflow: ellipsis">${label}</span>`}</div>`).join('');
+    html += `<p class="cap" style="margin-top: 12px">窗口宽 ${W}：每个标签 ${w}${iconOnly ? '（只剩图标）' : ''}</p><div class="strip"><div class="dd dd-titlebar" style="width: ${W}px"><img src="icon.png" alt="" style="width: 18px; height: 18px; margin-right: 8px"><span style="letter-spacing: 0.3px">VM-CESHI</span>${SHIELD}${t}${SIG}${MIC}${CC}${WIN}</div></div>`;
+  }
+  document.getElementById('shrink').innerHTML = html;
+})();
+</script>
+
+<div class="note">右边按钮的悬停：麦克风、控制中心是圆角小块（高 28）；只有最小化 / 最大化 / 关闭占满标题栏高，关闭是红底白叉</div>
+<div class="row">
+  <div><p class="sub">麦克风</p><div class="strip"><div class="dd dd-titlebar" style="padding: 0 8px"><button class="dd-btn dd-btn--small is-hover"><svg class="dd-ico" viewBox="0 0 24 24"><line x1="2" x2="22" y1="2" y2="22"></line><path d="M18.89 13.23A7.12 7.12 0 0 0 19 12v-2"></path><path d="M5 10v2a7 7 0 0 0 12 5"></path><path d="M15 9.34V5a3 3 0 0 0-5.68-1.33"></path><path d="M9 9v3a3 3 0 0 0 5.12 2.12"></path><line x1="12" x2="12" y1="19" y2="22"></line></svg></button></div></div></div>
+  <div><p class="sub">控制中心</p><div class="strip"><div class="dd dd-titlebar" style="padding: 0 8px"><button class="dd-btn dd-btn--small is-hover" style="gap: 8px; padding: 0 10px; font-size: 12px; color: #111418"><svg class="dd-ico dd-ico--fill" viewBox="0 0 20 20" style="width: 20px; height: 20px"><path d="M8 5.5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0Zm-5 0A3.5 3.5 0 0 0 6.5 9h7a3.5 3.5 0 1 0 0-7h-7A3.5 3.5 0 0 0 3 5.5ZM6.5 3h7a2.5 2.5 0 0 1 0 5h-7a2.5 2.5 0 0 1 0-5Zm7 13a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3ZM3 14.5A3.5 3.5 0 0 0 6.5 18h7a3.5 3.5 0 1 0 0-7h-7A3.5 3.5 0 0 0 3 14.5ZM6.5 12h7a2.5 2.5 0 0 1 0 5h-7a2.5 2.5 0 0 1 0-5Z"></path></svg>控制中心</button></div></div></div>
+  <div><p class="sub">最小化</p><div class="strip"><div class="dd dd-titlebar" style="padding: 0"><span class="dd-win is-hover"><svg class="dd-ico" style="width: 16px; height: 16px; transform: translate(0.5px, 0.5px)" viewBox="0 0 24 24"><path d="M5 12h14"/></svg></span><span class="dd-win"><svg class="dd-ico" style="width: 16px; height: 16px; transform: translate(0.5px, 0.5px)" viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="3" rx="2"/></svg></span><span class="dd-win dd-win--close"><svg class="dd-ico" style="width: 16px; height: 16px; transform: translate(0.5px, 0.5px)" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></span></div></div></div>
+  <div><p class="sub">关闭</p><div class="strip"><div class="dd dd-titlebar" style="padding: 0"><span class="dd-win"><svg class="dd-ico" style="width: 16px; height: 16px; transform: translate(0.5px, 0.5px)" viewBox="0 0 24 24"><path d="M5 12h14"/></svg></span><span class="dd-win"><svg class="dd-ico" style="width: 16px; height: 16px; transform: translate(0.5px, 0.5px)" viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="3" rx="2"/></svg></span><span class="dd-win dd-win--close is-hover"><svg class="dd-ico" style="width: 16px; height: 16px; transform: translate(0.5px, 0.5px)" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></span></div></div></div>
+</div>
+
+<div class="note">远程画面的滚动条（原始比例 / 自定义缩放、画面比窗口大、滚动方式选「滚动条」时）——照 UU：有轨道，滑块在轨道里</div>
+<p class="sub">右边、下边各一条 10 宽的浅灰轨道（中间一道 6 宽的更浅的槽），滑块 6 宽圆头深灰、正好填满这道槽（离轨道两边各 2），灰色，鼠标停上去或拖着加深。
+这种滚动方式下一直显示（轨道占掉画面右边、下边各 10，画面不被滑块挡住；尺寸、颜色照 UU 截图量的）。不用 RustDesk 那种 12 宽的方头灰条、滚动时才出现的样子。</p>
+<div class="row">
+  <div>
+    <p class="cap">深色画面</p>
+    <div class="dd-screen" style="position: relative; width: 520px; height: 300px; border-radius: 6px">
+      <div class="dd-rsb-track dd-rsb-track--v"><span class="dd-rsb" style="top: 60px; height: 140px"></span></div>
+      <div class="dd-rsb-track dd-rsb-track--h"><span class="dd-rsb" style="left: 90px; width: 220px"></span></div>
+      <div class="dd-rsb-corner"></div>
+    </div>
+  </div>
+  <div>
+    <p class="cap">浅色画面（鼠标停在竖滑块上）</p>
+    <div style="position: relative; width: 520px; height: 300px; border-radius: 6px; overflow: hidden; background: #f3f4f6">
+      <div style="position: absolute; left: 40px; top: 30px; width: 360px; height: 200px; background: #fff; border-radius: 6px; box-shadow: 0 6px 20px #0000002e"></div>
+      <div class="dd-rsb-track dd-rsb-track--v"><span class="dd-rsb is-hover" style="top: 60px; height: 140px"></span></div>
+      <div class="dd-rsb-track dd-rsb-track--h"><span class="dd-rsb" style="left: 90px; width: 220px"></span></div>
+      <div class="dd-rsb-corner"></div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

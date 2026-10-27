@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/common/widgets/ddpro_mode_badge.dart';
 import 'package:flutter_hbb/consts.dart';
+import 'package:flutter_hbb/desktop/widgets/dd_theme.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:flutter_hbb/utils/multi_window_manager.dart';
 
@@ -18,7 +19,7 @@ final bool kDdManaged = isDesktop && bind.mainGetCommonSync(key: 'dd-managed') =
 
 /// 远程窗口标题栏的高度：受管版换成照 UU 的标题栏（desktop/widgets/dd_remote_title_bar.dart），比 RustDesk 原来的标签栏高。
 /// 画面位置的计算（CanvasModel 的上边距）和「窗口贴合画面」都要用同一个值，不然鼠标位置会差这一截
-double get kDdTabBarHeight => kDdManaged ? 40.0 : kDesktopRemoteTabBarHeight;
+double get kDdTabBarHeight => kDdManaged ? DdSize.titlebarRemote : kDesktopRemoteTabBarHeight;
 
 List<String> _cmdline() {
   try {
@@ -68,7 +69,7 @@ bool ddKioskTakeOverMsgBox(String type, String title, String text,
         jsonEncode({'reason': reason, 'manual': manual, 'refused': refused}));
     // 和专业模式关窗同一套收尾：专业画面开着时这个窗口是藏着的，只移除标签关不掉会话和窗口（见那里的说明）；
     // 关窗走子窗口的关闭流程，会通知主窗口把它移出活动名单
-    onDdproWindowEvent(sessionId, peerId, {'action': 'close'});
+    onDdproWindowEvent(sessionId, peerId, {'action': 'close'}, null);
   }();
   return true;
 }

@@ -15,6 +15,8 @@ import 'package:flutter_hbb/main.dart';
 import 'package:get/get.dart';
 
 import '../../common.dart';
+import '../../desktop/widgets/dd_theme.dart';
+import '../../models/model.dart';
 import '../../models/platform_model.dart';
 
 class _Notice {
@@ -40,7 +42,7 @@ void onDdproModeEvent(SessionID sessionId, Map<String, dynamic> evt) {
 }
 
 void onDdproWindowEvent(
-    SessionID sessionId, String peerId, Map<String, dynamic> evt) async {
+    SessionID sessionId, String peerId, Map<String, dynamic> evt, FFI? ffi) async {
   final id = kWindowId;
   if (id == null) return;
   switch (evt['action'] as String? ?? '') {
@@ -49,6 +51,8 @@ void onDdproWindowEvent(
       break;
     case 'show':
       windowOnTop(id);
+      // 专业窗口的悬浮球可能改过「显示质量监测」（两种模式共用这个会话选项），回到这个窗口时按它重新读一次
+      ffi?.qualityMonitorModel.checkShowQualityMonitor(sessionId);
       break;
     case 'close':
       // 这个窗口是隐藏着的：Flutter 不再出帧，移除标签后远程页面的销毁（RustDesk 在那里关会话）不会发生，
@@ -83,19 +87,20 @@ class DdproModeBadge extends StatelessWidget {
           if (n.detail.isNotEmpty)
             '${translate('Original error (for troubleshooting)')}: ${n.detail}',
         ].join('\n\n');
+        // 原型 RemoteDialogs.html 的 dd-badge：高 28、6 圆角，故障红、通用模式灰，都是九成不透明
         return Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          height: 28,
+          padding: const EdgeInsets.symmetric(horizontal: 12),
           decoration: BoxDecoration(
-            color: (n.fault ? Colors.red.shade700 : Colors.grey.shade700)
-                .withAlpha(220),
-            borderRadius: BorderRadius.circular(4),
+            color: (n.fault ? DdColors.dangerText : DdColors.modeBadge).withAlpha(0xE6),
+            borderRadius: BorderRadius.circular(DdRadius.md),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
               hint.isEmpty ? text : Tooltip(message: hint, child: text),
               if (n.fault || n.general) ...[
-                const SizedBox(width: 8),
+                const SizedBox(width: 10),
                 InkWell(
                   onTap: () => bind.sessionDdproRetry(sessionId: sessionId),
                   child: Text(

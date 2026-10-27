@@ -1,9 +1,10 @@
-// DreamDesk 桌面端界面规范落到代码（规范：https://claude.ai/artifact/F1ALcvqqEKjcnmkLoyLSNK，用户 10-26 确认，照网易 UU 远程）。
+// DreamDesk 桌面端界面规范落到代码（照网易 UU 远程；规范以本地原型为准：dreamdesk/design/prototype，样式变量在 dd.css）。
 // 颜色、尺寸只在这里定义一次，名字和规范里的 token 一一对应；我们自己的界面（首页、远程窗口标题栏、控制中心、悬浮球）从这里取。
 // [ddLightTheme] 是产品版的整体主题：在 RustDesk 的浅色主题上换掉规范管到的部分（配色、按钮、输入框、菜单、对话框、复选 / 单选 / 开关、
 // 分隔线、提示框），RustDesk 原有的设置页、对话框、文件传输等一次换掉，不逐页改它们。产品版先固定浅色。
 import 'package:flutter/material.dart';
 import 'package:flutter_hbb/common.dart';
+import 'package:xterm/xterm.dart';
 
 class DdColors {
   DdColors._();
@@ -17,7 +18,14 @@ class DdColors {
   /// 左栏底部「设置」上方的分隔线
   static const sideDivider = Color(0xFFE4E9EC);
   /// 远程窗口的标题栏（UU 的远程窗口比主窗口深一档）
-  static const chromeRemote = Color(0xFFD7DCE0);
+  static const chromeRemote = Color(0xFFCDD3D8);
+  // 远程窗口和子窗口标题栏（10-27 用户对照 UU 截图，原型 Remote.html）：字小一号更深；没选中的标签、麦克风、控制中心
+  // 悬停是一块圆角深色底；窗口按钮悬停浅一档、占满高；分隔竖线在深一档的底上要看得见；关闭按钮悬停红底
+  static const titleText = Color(0xFF111418);
+  static const tabHover = Color(0x26000000);
+  static const winHover = Color(0x12000000);
+  static const titleSep = Color(0xFFB4BAC0);
+  static const closeHover = Color(0xFFE81123);
   static const hover = Color(0x0F000000);
   static const line = Color(0xFFDCDFE4);
   static const lineStrong = Color(0xFF8A9099);
@@ -28,6 +36,8 @@ class DdColors {
   static const accentHover = Color(0xFF2A63D2);
   static const accentPress = Color(0xFF2457BD);
   static const accentSoft = Color(0xFFE8F0FE);
+  /// 浅蓝底（accentSoft）上的细边（控制中心「允许对方」里开着的那几个；原型 dd-cm--on）
+  static const accentBorder = Color(0xFFB9CDF7);
   static const onAccent = Color(0xFFFFFFFF);
   /// 主按钮禁用时的底
   static const disabledFill = Color(0xFFC9CDD4);
@@ -35,6 +45,12 @@ class DdColors {
   static const mine = Color(0xFF14B8A6);
   static const busy = Color(0xFFF97316);
   static const offline = Color(0xFF9AA0A8);
+  /// 远程画面左上角模式提示条的灰底（通用模式，原型 RemoteDialogs）
+  static const modeBadge = Color(0xFF57575E);
+  /// 文件传输列表里的文件夹图标（原型 FileTransfer）
+  static const folder = Color(0xFFF0A020);
+  /// 弹窗里「成功」的图标色（原型 Dialogs）
+  static const success = Color(0xFF22A35A);
   static const danger = Color(0xFFE5484D);
   static const dangerText = Color(0xFFD13438);
   static const pill = Color(0xFF1F2329);
@@ -46,6 +62,16 @@ class DdColors {
   static const ballBandHot = Color(0xFFB1CBFF);
   static const ballInk = Color(0xFF474D57);
   static const scrim = Color(0x66000000);
+  /// 提示条的暖色底（端口映射的绿条、主窗口「连不上服务器」条；原型 dd-tip--warn / dd-netwarn）
+  static const warnBg = Color(0xFFFDF0E6);
+  /// 滚动条滑块（照 UU / Win11 的细滚动条，原型 dd.css）：平时半透明灰，悬停 / 拖动加深
+  static const scrollThumb = Color(0x24000000);
+  static const scrollThumbHot = Color(0x73000000);
+  /// 远程画面的滚动条（照 UU 截图量的，原型 Remote.html 最下面一节）：轨道、轨道正中的浅槽、滑块、滑块悬停 / 拖动
+  static const remoteScrollTrack = Color(0xFFF0F0F0);
+  static const remoteScrollGroove = Color(0xFFFAFAFA);
+  static const remoteScrollThumb = Color(0xFFB4B4B4);
+  static const remoteScrollThumbHot = Color(0xFF5C5C5C);
 }
 
 class DdRadius {
@@ -66,15 +92,43 @@ class DdSize {
   static const rowHeight = 40.0;
   static const buttonHeight = 36.0;
   static const ballSize = 42.0;
+  /// 远程窗口最小尺寸（10-27 用户；原型 Remote.html：720 宽时三个只剩图标的标签和标题栏其余部分正好放下）
+  static const remoteWindowMin = Size(720, 480);
 }
 
 class DdShadow {
   DdShadow._();
   static const card = [BoxShadow(color: Color(0x14000000), blurRadius: 10, offset: Offset(0, 2))];
-  static const menu = [BoxShadow(color: Color(0x1F000000), blurRadius: 16, offset: Offset(0, 4))];
   static const dialog = [BoxShadow(color: Color(0x33000000), blurRadius: 30, offset: Offset(0, 10))];
   static const ball = [BoxShadow(color: Color(0x33000000), blurRadius: 10, offset: Offset(0, 2))];
 }
+
+/// 终端配色（原型 Terminal.html）：底 #1e2127、字 #d7dae0、光标是同色的块；16 色照 xterm 的默认（VS Code 那套）
+const ddTerminalTheme = TerminalTheme(
+  cursor: Color(0xFFD7DAE0),
+  selection: Color(0x663B8EEA),
+  foreground: Color(0xFFD7DAE0),
+  background: Color(0xFF1E2127),
+  black: Color(0xFF000000),
+  red: Color(0xFFCD3131),
+  green: Color(0xFF0DBC79),
+  yellow: Color(0xFFE5E510),
+  blue: Color(0xFF2472C8),
+  magenta: Color(0xFFBC3FBC),
+  cyan: Color(0xFF11A8CD),
+  white: Color(0xFFE5E5E5),
+  brightBlack: Color(0xFF666666),
+  brightRed: Color(0xFFF14C4C),
+  brightGreen: Color(0xFF23D18B),
+  brightYellow: Color(0xFFF5F543),
+  brightBlue: Color(0xFF3B8EEA),
+  brightMagenta: Color(0xFFD670D6),
+  brightCyan: Color(0xFF29B8DB),
+  brightWhite: Color(0xFFFFFFFF),
+  searchHitBackground: Color(0xFFFFFF2B),
+  searchHitBackgroundCurrent: Color(0xFF31FF26),
+  searchHitForeground: Color(0xFF000000),
+);
 
 RoundedRectangleBorder _round(double r) => RoundedRectangleBorder(borderRadius: BorderRadius.circular(r));
 
@@ -134,9 +188,7 @@ ThemeData _build() {
     ),
     elevatedButtonTheme: ElevatedButtonThemeData(
       style: ElevatedButton.styleFrom(
-        backgroundColor: DdColors.accent,
         foregroundColor: DdColors.onAccent,
-        disabledBackgroundColor: DdColors.disabledFill,
         disabledForegroundColor: DdColors.onAccent,
         elevation: 0,
         minimumSize: const Size(0, DdSize.buttonHeight),
@@ -177,6 +229,15 @@ ThemeData _build() {
       trackColor: selectedOr(DdColors.accent, DdColors.disabledFill),
     ),
     progressIndicatorTheme: const ProgressIndicatorThemeData(color: DdColors.accent),
+    // 细滚动条：6 宽圆头、没有轨道、离边 2。悬停时不加粗（Material 默认悬停变 12 宽）。远程画面的滚动条自己写了一套（RawScrollbar），不受这里管
+    scrollbarTheme: ScrollbarThemeData(
+      thickness: const WidgetStatePropertyAll(6),
+      radius: const Radius.circular(3),
+      thumbColor: WidgetStateProperty.resolveWith((s) =>
+          s.contains(WidgetState.dragged) || s.contains(WidgetState.hovered) ? DdColors.scrollThumbHot : DdColors.scrollThumb),
+      crossAxisMargin: 2,
+      mainAxisMargin: 2,
+    ),
     popupMenuTheme: base.popupMenuTheme.copyWith(color: DdColors.surface, elevation: 8, shape: _round(DdRadius.lg)),
     menuTheme: const MenuThemeData(
       style: MenuStyle(

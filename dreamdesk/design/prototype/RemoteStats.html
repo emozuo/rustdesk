@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>信号格和质量监测</title>
+<link rel="stylesheet" href="dd.css">
+<style>
+body{margin:0;padding:24px;background:#e9ebef}
+.note{font:600 14px/22px var(--font-sans);color:#1f2329;margin:28px 0 8px}
+.note:first-child{margin-top:0}
+.sub{font:12px/20px var(--font-sans);color:#646a73;margin:0 0 10px;max-width:1180px}
+.row{display:flex;gap:28px;align-items:flex-start;flex-wrap:wrap}
+.cap{font:12px/18px var(--font-sans);color:#646a73;margin:0 0 6px}
+/* 点信号格弹出的详情（照 UU 截图）：白底 8 圆角、菜单阴影，宽 300；头一行信号格 + 「网络延时：x ms」，下面三组「名称 / 值」两列 */
+.dd-net { width: 300px; background: var(--surface); border-radius: var(--radius-lg); box-shadow: var(--shadow-menu); padding: 14px 0 10px; font-size: 13px; line-height: 28px; }
+.dd-net__head { display: flex; align-items: center; gap: 10px; padding: 0 20px 8px; font-size: 15px; font-weight: 600; }
+.dd-net hr { border: 0; border-top: 1px solid #eef0f3; margin: 6px 20px; }
+.dd-net__row { display: grid; grid-template-columns: 96px 1fr; padding: 0 20px; }
+.dd-net__row span:first-child { color: var(--ink-2); }
+.dd-net__row--todo span:last-child { color: var(--ink-3); }
+/* 质量监测（一直开着的小面板，画面右下角）：深色半透明、6 圆角、等宽数字，内容是上面「实时」那组 */
+/* 质量监测（10-27 用户：照 UU 的「网络状态」）：黑底半透明、白色等宽字、一行一个数值、不写名称（单位就说明是什么）；
+   行高 16、12 号，左右 12 上下 8，4 圆角 */
+.dd-qm { display: inline-block; background: #000000b3; color: #fff; border-radius: 4px; padding: 8px 12px; font: 12px/16px Consolas, "Cascadia Mono", "DejaVu Sans Mono", monospace; white-space: pre; }
+table.map { border-collapse: collapse; font: 12px/20px var(--font-sans); color: #1f2329; background: #fff; border-radius: 8px; overflow: hidden }
+table.map th, table.map td { border-bottom: 1px solid #eef0f3; padding: 6px 12px; text-align: left; vertical-align: top }
+table.map th { background: #f7f8fa; font-weight: 600 }
+.ok { color: #22a35a } .add { color: #d97706 } .no { color: #9aa0a8 }
+</style>
+</head>
+<body>
+
+<!-- 10-27 用户：信号格点开显示网络和画面的详情（照 UU 截图），和质量监测一起做；两种模式（普通 / 专业）用同一套名称和样子 -->
+
+<div class="note">① 标题栏的信号格：按网络延时分三档，点它弹出详情</div>
+<p class="sub">网络延时 ≤ 30 ms 三格绿、≤ 100 ms 两格橙、更高一格红；断线灰。悬停提示「网络延时 x ms」。点了在信号格下面弹出 ②，再点或点别处收起。</p>
+<div class="row">
+  <div><p class="cap">好（3 ms）</p><div class="strip"><div class="dd dd-titlebar" style="padding: 0 12px"><svg class="dd-ico dd-ico--16" style="color: #22c55e; stroke-width: 3" viewBox="0 0 24 24"><line x1="6" x2="6" y1="20" y2="16"/><line x1="12" x2="12" y1="20" y2="10"/><line x1="18" x2="18" y1="20" y2="4"/></svg><span class="dd-stat" style="margin-left: 6px">00:24:12</span></div></div></div>
+  <div><p class="cap">一般（80 ms）</p><div class="strip"><div class="dd dd-titlebar" style="padding: 0 12px"><svg class="dd-ico dd-ico--16" style="color: #f97316; stroke-width: 3" viewBox="0 0 24 24"><line x1="6" x2="6" y1="20" y2="16"/><line x1="12" x2="12" y1="20" y2="10"/><line x1="18" x2="18" y1="20" y2="4" style="opacity: .25"/></svg><span class="dd-stat" style="margin-left: 6px">00:24:12</span></div></div></div>
+  <div><p class="cap">差（240 ms）</p><div class="strip"><div class="dd dd-titlebar" style="padding: 0 12px"><svg class="dd-ico dd-ico--16" style="color: #e5484d; stroke-width: 3" viewBox="0 0 24 24"><line x1="6" x2="6" y1="20" y2="16"/><line x1="12" x2="12" y1="20" y2="10" style="opacity: .25"/><line x1="18" x2="18" y1="20" y2="4" style="opacity: .25"/></svg><span class="dd-stat" style="margin-left: 6px">00:24:12</span></div></div></div>
+</div>
+
+<div class="note">② 点信号格弹出的详情（左：普通模式；右：专业模式）</div>
+<p class="sub">三组：实时（每秒刷新）/ 连接 / 画面。灰字的值是现在拿不到、要补的（见 ④）。没有数据的行不显示（比如普通模式没有帧延时、丢包率）。</p>
+<div class="row">
+  <div class="dd dd-net">
+    <div class="dd-net__head"><svg class="dd-ico dd-ico--16" style="color: #22c55e; stroke-width: 3" viewBox="0 0 24 24"><line x1="6" x2="6" y1="20" y2="16"/><line x1="12" x2="12" y1="20" y2="10"/><line x1="18" x2="18" y1="20" y2="4"/></svg>网络延时：3 ms</div>
+    <hr>
+    <div class="dd-net__row"><span>帧率</span><span>60 fps</span></div>
+    <div class="dd-net__row"><span>带宽占用</span><span>12.3 Mbps</span></div>
+    <div class="dd-net__row"><span>目标码率</span><span>15.0 Mbps</span></div>
+    <hr>
+    <div class="dd-net__row"><span>加密通道</span><span>TCP 直连</span></div>
+    <div class="dd-net__row dd-net__row--todo"><span>被控端 IP</span><span>192.168.209.32</span></div>
+    <div class="dd-net__row dd-net__row--todo"><span>控制端 IP</span><span>192.168.59.161</span></div>
+    <div class="dd-net__row"><span>被控端版本</span><span>1.5.1</span></div>
+    <div class="dd-net__row"><span>被控端系统</span><span>Windows 11 Enterprise</span></div>
+    <hr>
+    <div class="dd-net__row dd-net__row--todo"><span>编解码器</span><span>硬编 / 硬解</span></div>
+    <div class="dd-net__row"><span>编码</span><span>H265 4:2:0</span></div>
+    <div class="dd-net__row"><span>分辨率</span><span>2560 × 1440</span></div>
+    <div class="dd-net__row dd-net__row--todo"><span>采集方式</span><span>DXGI</span></div>
+  </div>
+  <div class="dd dd-net">
+    <div class="dd-net__head"><svg class="dd-ico dd-ico--16" style="color: #22c55e; stroke-width: 3" viewBox="0 0 24 24"><line x1="6" x2="6" y1="20" y2="16"/><line x1="12" x2="12" y1="20" y2="10"/><line x1="18" x2="18" y1="20" y2="4"/></svg>网络延时：0.4 ms</div>
+    <hr>
+    <div class="dd-net__row dd-net__row--pro"><span>帧延时</span><span>9 ms</span></div>
+    <div class="dd-net__row"><span>帧率</span><span>120 fps</span></div>
+    <div class="dd-net__row"><span>带宽占用</span><span>86.5 Mbps</span></div>
+    <div class="dd-net__row dd-net__row--pro"><span>丢包率</span><span>0.0%（补回 12）</span></div>
+    <div class="dd-net__row dd-net__row--pro"><span>无损比例</span><span>63%</span></div>
+    <hr>
+    <div class="dd-net__row"><span>加密通道</span><span>UDP 专业通道直连</span></div>
+    <div class="dd-net__row dd-net__row--todo"><span>被控端 IP</span><span>192.168.59.82</span></div>
+    <div class="dd-net__row dd-net__row--todo"><span>控制端 IP</span><span>192.168.59.165</span></div>
+    <div class="dd-net__row"><span>被控端版本</span><span>1.5.1</span></div>
+    <div class="dd-net__row"><span>被控端系统</span><span>Windows 11 Pro</span></div>
+    <hr>
+    <div class="dd-net__row"><span>编解码器</span><span>硬编 / 硬解</span></div>
+    <div class="dd-net__row"><span>编码</span><span>H265 4:4:4 10bit</span></div>
+    <div class="dd-net__row"><span>分辨率</span><span>2560 × 1440</span></div>
+    <div class="dd-net__row"><span>采集方式</span><span>DXGI</span></div>
+  </div>
+</div>
+
+<div class="note">③ 质量监测 = UU 的「网络状态」（控制中心 / 悬浮球里开关，画面右下角一直显示）</div>
+<p class="sub">照 UU：一行一个数值，不写名称，单位就是说明；两种模式同一个样子、同一套顺序、同一个开关（按机器记，切模式不丢）。拿不到的行不显示（普通模式没有帧延时、丢包率）。
+顺序：连接时长 / 通道（UDP 或 TCP + DIRECT 直连 / RELAY 中继；面板里其余都是英文单位，这行也用英文）/ 帧率 / 带宽（小于 1 Mbps 写 Kbps）/ 网络延时 / 帧延时（ms frm.）/ 丢包率（% loss）/ 分辨率档（4K / 2K / 1080p，其它写宽×高）；
+专业模式多一行无损比例（1:1 无损显示时）。看全部数据（IP、编解码器、采集方式……）点标题栏信号格（②）。</p>
+<div class="row">
+  <div><p class="cap">普通模式</p><div class="dd-qm">00:24:12
+TCP DIRECT
+60 fps
+12.3 Mbps
+3 ms
+2K</div></div>
+  <div><p class="cap">普通模式（经中继）</p><div class="dd-qm">00:03:41
+TCP RELAY
+30 fps
+846.2 Kbps
+38 ms
+1080p</div></div>
+  <div><p class="cap">专业模式</p><div class="dd-qm">00:00:07
+UDP DIRECT
+120 fps
+86.5 Mbps
+0.4 ms
+9 ms frm.
+0.0% loss
+63% lossless
+2K</div></div>
+  <div><p class="cap">UU 的网络状态（用户截图）</p><div class="dd-qm" style="background: #000">00:00:07
+UDP LAN
+1 fps
+214.9 Kbps
+1 ms
+4 ms frm.
+0.0% loss
+4K</div></div>
+</div>
+
+<div class="note">④ 每一项的数据从哪来</div>
+<table class="map">
+  <tr><th>项</th><th>普通模式（RustDesk 视频流）</th><th>专业模式（专业通道）</th></tr>
+  <tr><td>网络延时</td><td class="ok">有：RustDesk 测的往返（现在质量监测里的「延迟」）</td><td class="ok">有：专业通道往返（现在的 RTT）</td></tr>
+  <tr><td>帧延时</td><td class="no">没有（RustDesk 不带采集时间），不显示</td><td class="ok">有：被控端采集 → 本机上屏的中位数（现在的 e2e）</td></tr>
+  <tr><td>帧率</td><td class="ok">有</td><td class="ok">有</td></tr>
+  <tr><td>带宽占用</td><td class="ok">有：现在的「速度」（kB/s 换成 Mbps）</td><td class="ok">有</td></tr>
+  <tr><td>目标码率</td><td class="ok">有：被控端编码器目标</td><td class="no">没有，不显示</td></tr>
+  <tr><td>丢包率</td><td class="no">没有（走 TCP，不丢包），不显示</td><td class="ok">有：现在是丢包 / 补回个数，要改成比例</td></tr>
+  <tr><td>无损比例</td><td class="no">没有，不显示</td><td class="ok">有（1:1 无损显示时）</td></tr>
+  <tr><td>加密通道</td><td class="ok">有：TCP / UDP、直连 / 中继（现在标题栏盾牌的悬停说明）</td><td class="ok">有</td></tr>
+  <tr><td>被控端 IP / 控制端 IP</td><td class="add">要补：连接里有，RustDesk 没交给界面（主控端 Rust 加一个小查询）</td><td class="add">要补：同左</td></tr>
+  <tr><td>被控端版本 / 系统</td><td class="ok">有：对端信息里带</td><td class="ok">有</td></tr>
+  <tr><td>编解码器（硬 / 软）</td><td class="add">要补：本机解码是硬是软主控端知道、没交给界面；被控端编码是硬是软要它报（我们的私有字段）</td><td class="ok">有（专业通道我们自己的）</td></tr>
+  <tr><td>编码 / 色度 / 位深</td><td class="ok">有编码、色度；位深没有，不显示</td><td class="ok">有</td></tr>
+  <tr><td>分辨率</td><td class="ok">有：对端信息里这块屏的尺寸</td><td class="ok">有</td></tr>
+  <tr><td>采集方式</td><td class="add">要补：被控端知道（DXGI / GDI / WGC、Linux 的 X11 / PipeWire），要它报（我们的私有字段）</td><td class="add">要补：专业通道被控端报一下</td></tr>
+</table>
+
+</body>
+</html>

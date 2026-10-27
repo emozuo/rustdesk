@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>主窗口 · 头像卡 / 更多 / 检查更新</title>
+<link rel="stylesheet" href="dd.css">
+<style>body{margin:0}
+body{margin:0;padding:24px;background:#e9ebef}
+</style>
+</head>
+<body>
+
+
+<div class="dd" style="width: 1080px; height: 700px; background: #f7f8fa; box-sizing: border-box; padding: 40px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: auto 1fr; gap: 28px 32px; align-items: start">
+  <div style="display: flex; flex-direction: column; gap: 10px">
+    <div style="font-size: 12px; color: #646a73">头像（没登录）</div>
+    <div class="dd-menu" style="width: 260px; padding: 20px; display: flex; flex-direction: column; align-items: center; gap: 12px">
+      <span style="width: 52px; height: 52px; border-radius: 50%; background: #e1e4e9; color: #9aa0a8; display: grid; place-items: center"><svg class="dd-ico" style="width: 28px; height: 28px" viewBox="0 0 24 24"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg></span>
+      <div style="font-size: 13px; color: #646a73; text-align: center">登录后查看授权给你的工作站</div>
+      <button class="dd-btn dd-btn--primary" style="width: 100%">立即登录</button>
+    </div>
+  </div>
+  <div style="display: flex; flex-direction: column; gap: 10px">
+    <div style="font-size: 12px; color: #646a73">头像（已登录）</div>
+    <div class="dd-menu" style="width: 260px; padding: 0">
+      <div style="display: flex; align-items: center; gap: 12px; padding: 18px 18px 14px">
+        <span style="width: 44px; height: 44px; border-radius: 50%; background: #2f6fea; color: #fff; font-size: 18px; display: grid; place-items: center">庞</span>
+        <div><div style="font-weight: 600">庞超成</div><div style="font-size: 12px; color: #646a73">pangchaocheng</div></div>
+      </div>
+      <hr style="border: 0; border-top: 1px solid #dcdfe4; margin: 0">
+      <div style="padding: 6px 0"><div class="dd-mi"><svg class="dd-ico dd-ico--16" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" x2="9" y1="12" y2="12"></line></svg>退出登录</div></div>
+    </div>
+  </div>
+  <div style="display: flex; flex-direction: column; gap: 10px">
+    <div style="font-size: 12px; color: #646a73">更多</div>
+    <div class="dd-menu" style="width: 180px">
+      <div class="dd-mi"><svg class="dd-ico dd-ico--16" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4"></path><path d="M12 8h.01"></path></svg>关于</div>
+      <hr>
+      <div class="dd-mi"><svg class="dd-ico dd-ico--16" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><path d="m16 12-4-4-4 4"></path><path d="M12 16V8"></path></svg>检查更新</div>
+    </div>
+  </div>
+  <div style="grid-column: 1 / -1; display: flex; flex-direction: column; gap: 10px">
+    <div style="font-size: 12px; color: #646a73">检查更新</div>
+    <div style="position: relative; height: 360px; border-radius: 8px; overflow: hidden; background: #f0f5f8">
+      <div class="dd-scrim">
+        <div class="dd-modal" role="dialog" aria-label="检查更新">
+          <span class="dd-modal__x" aria-hidden="true"><svg class="dd-ico dd-ico--16" viewBox="0 0 24 24"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg></span>
+          <div class="dd-modal__title"><svg class="dd-state-ico" style="color: #2f6fea" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="m16 12-4-4-4 4"></path><path d="M12 16V8"></path></svg>检查更新</div>
+          <div class="dd-modal__body">当前版本 1.5.1<br>还不支持在线更新，新版本由 IT 统一安装。</div>
+          <div class="dd-modal__foot"><button class="dd-btn dd-btn--primary dd-btn--compact">知道了</button></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

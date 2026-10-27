@@ -6,6 +6,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_hbb/desktop/widgets/dd_icons.dart';
+import 'package:flutter_hbb/utils/dd_gateway.dart';
 
 const kDdKioskRed = Color(0xFFFF2A3D);
 const _bg = Color(0xFF05050A);
@@ -858,23 +859,12 @@ class DdKioskLoginState extends State<DdKioskLogin> {
   }
 }
 
-enum DdKioskWsState { available, busy, mine, offline }
-
-class DdKioskWsItem {
-  final String id;
-  final String name;
-  final DdKioskWsState state;
-  const DdKioskWsItem(this.id, this.name, this.state);
-
-  bool get selectable => state == DdKioskWsState.available || state == DdKioskWsState.mine;
-}
-
 class DdKioskWsTexts {
   final String kicker;
   final String titleA;
   final String titleB;
   final String sub;
-  final String Function(DdKioskWsState) stateText;
+  final String Function(DdWsState) stateText;
   final String connect;
   final String hint;
   const DdKioskWsTexts(
@@ -890,7 +880,7 @@ class DdKioskWsTexts {
 /// 旧版的选机页：标题、工作站卡片（状态点：绿 = 可以连接、红 = 别人在用、灰 = 离线；别人在用和离线的点不了）、连接按钮
 class DdKioskWorkstations extends StatelessWidget {
   final DdKioskWsTexts texts;
-  final List<DdKioskWsItem> items;
+  final List<DdWs> items;
   final String? selectedId;
   final ValueChanged<String> onSelect;
   final ValueChanged<String> onConnect;
@@ -903,10 +893,10 @@ class DdKioskWorkstations extends StatelessWidget {
     required this.onConnect,
   }) : super(key: key);
 
-  Color _color(DdKioskWsState s) => switch (s) {
-        DdKioskWsState.available || DdKioskWsState.mine => _green,
-        DdKioskWsState.busy => kDdKioskRed,
-        DdKioskWsState.offline => _white(0.4),
+  Color _color(DdWsState s) => switch (s) {
+        DdWsState.available || DdWsState.mine => _green,
+        DdWsState.busy => kDdKioskRed,
+        DdWsState.offline => _white(0.4),
       };
 
   @override
@@ -954,7 +944,7 @@ class DdKioskWorkstations extends StatelessWidget {
     ]);
   }
 
-  Widget _card(int i, DdKioskWsItem w, bool sel) {
+  Widget _card(int i, DdWs w, bool sel) {
     final color = _color(w.state);
     final on = w.selectable;
     return Opacity(
@@ -983,7 +973,7 @@ class DdKioskWorkstations extends StatelessWidget {
                   decoration: BoxDecoration(
                       shape: BoxShape.circle,
                       color: color,
-                      boxShadow: w.state == DdKioskWsState.offline
+                      boxShadow: w.state == DdWsState.offline
                           ? null
                           : [BoxShadow(color: color.withOpacity(0.8), blurRadius: 8)]),
                 ),
@@ -995,7 +985,7 @@ class DdKioskWorkstations extends StatelessWidget {
               Text(w.id, style: _mono(10, color: _white(0.55))),
               const Spacer(),
               Text(texts.stateText(w.state).toUpperCase(),
-                  style: _mono(10, color: w.state == DdKioskWsState.offline ? _white(0.6) : color, em: 0.12)),
+                  style: _mono(10, color: w.state == DdWsState.offline ? _white(0.6) : color, em: 0.12)),
             ]),
           ),
         ),

@@ -1,0 +1,271 @@
+/* DreamDesk 桌面端原型共用样式：变量照「DreamDesk 桌面端界面规范」的 tokens.json，组件类照规范的 bundle.css，
+   另补设置页、普通对话框、文件传输等规范里还没有的部件（同一套变量）。 */
+:root {
+  --chrome: #f0f5f8; --pane: #f7fbfe; --surface: #ffffff; --selected: #e4e9ec; --hover: #0000000f;
+  --line: #dcdfe4; --line-strong: #8a9099; --ink: #1f2329; --ink-2: #646a73; --ink-3: #9aa0a8;
+  --accent: #2f6fea; --accent-hover: #2a63d2; --accent-press: #2457bd; --accent-soft: #e8f0fe; --on-accent: #ffffff;
+  --online: #22c55e; --mine: #14b8a6; --busy: #f97316; --offline: #9aa0a8; --danger: #e5484d; --danger-text: #d13438;
+  --pill: #1f2329; --os-windows: #3b7bf6; --os-linux: #f08a24; --os-mac: #1f2329;
+  --ball: #f1f1f2f7; --ball-band: #e3e3e6; --ball-band-hot: #b1cbff; --ball-ink: #474d57; --scrim: #00000066; --monitor-bg: #57575eb8;
+  --font-sans: "Microsoft YaHei UI", "Segoe UI", "PingFang SC", "Noto Sans CJK SC", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", Consolas, "Noto Sans Mono", monospace;
+  --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px; --space-6: 24px; --space-10: 40px;
+  --radius-sm: 4px; --radius-md: 6px; --radius-lg: 8px; --radius-xl: 10px; --radius-ball: 13px; --radius-pill: 12px;
+  --shadow-card: 0 2px 10px #00000014; --shadow-menu: 0 4px 16px #0000001f; --shadow-dialog: 0 10px 30px #00000033; --shadow-ball: 0 2px 10px #00000033;
+  --titlebar-main: 48px; --titlebar-remote: 40px; --sidebar-width: 236px; --row-height: 40px; --button-height: 36px; --ball-size: 42px;
+}
+
+.dd { font-family: var(--font-sans); color: var(--ink); font-size: 14px; line-height: 22px; }
+.dd * { box-sizing: border-box; }
+.dd button { font: inherit; }
+.dd-ico { width: 18px; height: 18px; flex: none; stroke: currentColor; fill: none; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.dd-ico--20 { width: 20px; height: 20px; }
+.dd-ico--16 { width: 16px; height: 16px; }
+/* 填色画法的图标（控制中心那个「两个开关」：Fluent UI System Icons 的 Toggle Multiple，MIT 许可；
+   20 像素用它的 20 号原图、16 像素用 16 号原图，各自按像素网格画的，不缩放） */
+.dd-ico--fill { fill: currentColor; stroke: none; }
+
+/* 按钮 */
+.dd-btn { height: var(--button-height); padding: 0 24px; border-radius: var(--radius-sm); border: 1px solid transparent; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2); white-space: nowrap; }
+.dd-btn--primary { background: var(--accent); color: var(--on-accent); }
+.dd-btn--primary:hover { background: var(--accent-hover); }
+.dd-btn--primary[disabled] { background: #c9cdd4; cursor: default; }
+.dd-btn--secondary { background: var(--surface); color: var(--ink); border-color: var(--line); }
+.dd-btn--secondary:hover { background: #f2f3f5; }
+.dd-btn--text { background: transparent; color: var(--accent); padding: 0 8px; }
+.dd-btn--danger { background: var(--surface); color: var(--danger-text); border-color: var(--line); }
+.dd-btn--small { height: 28px; padding: 0 8px; border-radius: var(--radius-md); background: transparent; color: var(--ink); font-size: 13px; }
+.dd-btn--small:hover { background: var(--hover); }
+.dd-btn--compact { height: 30px; padding: 0 14px; font-size: 13px; }
+
+/* 输入框：登录框是下划线式；设置页、对话框里是方框式 */
+.dd-field { display: flex; align-items: center; gap: var(--space-2); border-bottom: 1px solid var(--line); padding: 10px 0; }
+.dd-field--focus { border-bottom-color: var(--accent); }
+.dd-field--error { border-bottom-color: var(--danger); }
+.dd-field input { flex: 1; border: 0; outline: 0; background: transparent; font: inherit; color: var(--ink); min-width: 0; }
+.dd-field input::placeholder, .dd-input input::placeholder { color: var(--ink-3); }
+.dd-help { font-size: 12px; line-height: 18px; color: var(--danger-text); min-height: 18px; }
+.dd-input { height: 32px; display: flex; align-items: center; gap: 6px; padding: 0 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); }
+.dd-input--focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.dd-input input { flex: 1; border: 0; outline: 0; background: transparent; font: inherit; color: var(--ink); min-width: 0; }
+.dd-select { height: 32px; min-width: 160px; display: inline-flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 8px 0 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); font-size: 13px; color: var(--ink); }
+.dd-select .dd-ico { width: 16px; height: 16px; color: var(--ink-2); }
+
+/* 开关、单选、复选 */
+.dd-switch { width: 36px; height: 20px; border-radius: 10px; background: #c9cdd4; position: relative; flex: none; border: 0; padding: 0; cursor: pointer; }
+.dd-switch::after { content: ""; position: absolute; left: 2px; top: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px #00000033; }
+.dd-switch--on { background: var(--accent); }
+.dd-switch--on::after { left: 18px; }
+.dd-radio { width: 16px; height: 16px; border-radius: 50%; border: 1.5px solid var(--line-strong); flex: none; display: grid; place-items: center; }
+.dd-radio--on { border-color: var(--accent); }
+.dd-radio--on::after { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+.dd-check { width: 16px; height: 16px; border-radius: 3px; border: 1.5px solid var(--line-strong); flex: none; position: relative; }
+.dd-check--on { background: var(--accent); border-color: var(--accent); }
+.dd-check--on::after { content: ""; position: absolute; left: 4.5px; top: 1px; width: 4px; height: 8px; border: solid #fff; border-width: 0 1.8px 1.8px 0; transform: rotate(45deg); }
+.dd-opt { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.dd-opt--off { color: var(--ink-3); }
+
+/* 窗口外框（无边框窗口，自己画标题栏） */
+.dd-window { position: relative; overflow: hidden; border-radius: 8px; border: 1px solid #00000024; box-shadow: 0 8px 28px #0000002e; background: var(--chrome); display: flex; flex-direction: column; }
+.dd-mtb { height: var(--titlebar-main); display: flex; align-items: center; padding-left: 16px; flex: none; }
+.dd-mtb__brand { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 600; }
+.dd-mtb__brand img { width: 22px; height: 22px; }
+.dd-mtb__right { margin-left: auto; display: flex; align-items: center; height: 100%; }
+.dd-iconbtn { width: 40px; height: 100%; display: grid; place-items: center; color: var(--ink); background: transparent; border: 0; cursor: pointer; position: relative; isolation: isolate; }
+/* 头像、更多：悬停是一块 32 高的 6 圆角底（10-27 用户：只有窗口按钮占满标题栏高） */
+.dd-iconbtn:not(.dd-iconbtn--win):hover::before, .dd-iconbtn.is-hover:not(.dd-iconbtn--win)::before { content: ""; position: absolute; z-index: -1; left: 4px; right: 4px; top: 50%; height: 32px; transform: translateY(-50%); border-radius: var(--radius-md); background: var(--hover); }
+.dd-iconbtn--win { width: 46px; }
+.dd-iconbtn--win:hover, .dd-iconbtn--win.is-hover { background: var(--hover); }
+.dd-iconbtn--close:hover, .dd-iconbtn--close.is-hover { background: #e81123; color: #fff; }
+/* 内容区：照 UU，上边和左边一条细线和左栏分开，左上角圆角 */
+.dd-pane { background: var(--pane); border-top-left-radius: var(--radius-xl); border-top: 1px solid #eaeef1; border-left: 1px solid #eaeef1; }
+
+/* 左栏 */
+.dd-side { width: var(--sidebar-width); background: var(--chrome); padding: 6px 0; flex: none; display: flex; flex-direction: column; }
+/* 左栏一行（照 UU）：底色块从左栏边上 4 像素开始；选中时蓝竖线在底色块里面、贴最左边，4×16、两头圆、上下居中 */
+.dd-row { position: relative; height: var(--row-height); padding: 2px 4px; }
+.dd-row > a, .dd-row > span { display: flex; align-items: center; gap: var(--space-3); height: 100%; padding: 0 14px; border-radius: var(--radius-md); cursor: pointer; color: var(--ink); text-decoration: none; }
+.dd-row > a:hover, .dd-row > span:hover { background: var(--hover); }
+.dd-row--indent > a, .dd-row--indent > span { padding-left: 24px; }
+.dd-row--selected > a, .dd-row--selected > span { background: var(--selected); }
+.dd-row--selected::before { content: ""; position: absolute; z-index: 1; left: 4px; top: 12px; bottom: 12px; width: 4px; border-radius: 2px; background: var(--accent); }
+.dd-row--dim > a, .dd-row--dim > span { color: var(--ink-3); }
+.dd-dot { width: 6px; height: 6px; border-radius: 50%; flex: none; display: inline-block; }
+.dd-os { width: 20px; height: 20px; border-radius: var(--radius-sm); display: grid; place-items: center; flex: none; }
+.dd-os svg { width: 12px; height: 12px; fill: #fff; }
+.dd-pill { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 10px 0 8px; border-radius: var(--radius-pill); background: var(--pill); color: #fff; font-size: 12px; }
+
+/* 设备卡片 */
+.dd-card { width: 220px; background: var(--surface); border-radius: var(--radius-lg); box-shadow: var(--shadow-card); overflow: hidden; cursor: pointer; }
+.dd-card--on { outline: 2px solid var(--accent); }
+.dd-card__thumb { aspect-ratio: 2.2; }
+/* 设备卡片、详情大卡片的背景：按被控端系统用它的默认壁纸（10-27 用户：先按最简单的预置看效果）。
+   Windows：Windows 11 默认壁纸 Bloom（本机 C:\Windows\Web\Wallpaper\Windows\img0.jpg 缩小，版权归微软，用户知情先这样用）；
+   Linux：Ubuntu 默认壁纸 warty-final-ubuntu.png（ubuntu-wallpapers 包，CC-BY-SA-3.0）；macOS 官方壁纸没有公开原图，先用画的渐变。
+   离线一律灰 */
+.dd-wall--win { background: url(wallpapers/windows.jpg) center / cover; }
+.dd-wall--linux { background: url(wallpapers/linux.jpg) center / cover; }
+.dd-wall--mac { background:
+  radial-gradient(60% 80% at 30% 75%, #7a6cff 0%, #7a6cff00 60%),
+  linear-gradient(160deg, #24305e 0%, #1a1f3d 55%, #3b2450 100%); }
+.dd-wall--off { background: linear-gradient(135deg, #c9cdd4, #b3b8c0); }
+/* 详情大卡片上半（10-27 用户照 UU）：鼠标停上去背景放大一点、变虚，「进入桌面」不动 */
+.dd-hero { display: block; position: relative; overflow: hidden; text-decoration: none; }
+.dd-hero__bg { position: absolute; inset: 0; transition: transform .18s ease, filter .18s ease; }
+.dd-hero:hover .dd-hero__bg, .dd-hero.is-hover .dd-hero__bg { transform: scale(1.06); filter: blur(6px); }
+/* 「进入桌面」在偏下（约八成高处），悬停时往上抬一点、字和箭头之间拉开（字大小不变，10-27 用户） */
+.dd-hero__go { transform: translate(-50%, -50%); gap: 10px !important; transition: transform .18s ease, gap .18s ease; }
+.dd-hero:hover .dd-hero__go, .dd-hero.is-hover .dd-hero__go { transform: translate(-50%, calc(-50% - 8px)); gap: 20px !important; }
+.dd-card__thumb--off { background: linear-gradient(135deg, #c9cdd4, #b3b8c0); }
+.dd-card__body { display: flex; gap: var(--space-3); align-items: center; padding: 10px 12px 12px; }
+.dd-card__name { font-weight: 600; }
+.dd-card__state { font-size: 12px; line-height: 18px; color: var(--ink-2); display: flex; align-items: center; gap: 5px; }
+
+/* 远程窗口标题栏 */
+/* 远程窗口标题栏和屏幕标签（照 UU，10-27 用户给的截图）：底色比主窗口的 chrome 深一档；标签固定宽、靠左排，没选中的不加底，
+   选中的白底、上两角圆、下两角向外弯（和下面的画面连成一片，Chrome 的做法） */
+/* 10-27 用户第二次对照 UU：标题栏的字小一号（12）、更深（#111418）；字在标签上部 26 像素里居中（下面 7 像素是选中标签接画面的那段）；
+   没选中的标签悬停是一块四边各留 7 像素的 6 圆角深色底（左右和上下一样，只剩图标时是正方形）；标题栏底和悬停底比第一版深一点；窗口窄了标签缩成只剩图标（不压扁、悬停底还是圆角）；
+   竖线只在标签和信号格之间；只有最小化 / 最大化 / 关闭占满标题栏高，麦克风、控制中心还是圆角小块 */
+.dd-titlebar { height: var(--titlebar-remote); background: #cdd3d8; display: flex; align-items: center; font-size: 12px; color: #111418; padding-left: 14px; flex: none; }
+.dd-tab { position: relative; isolation: isolate; width: 230px; flex: none; height: 33px; align-self: flex-end; display: flex; align-items: center; gap: 8px; padding: 0 14px 7px; box-sizing: border-box; border-radius: var(--radius-lg) var(--radius-lg) 0 0; color: #111418; font-size: 12px; white-space: nowrap; overflow: hidden; }
+.dd-tab:not(.dd-tab--on):hover::before, .dd-tab.is-hover:not(.dd-tab--on)::before { content: ""; position: absolute; z-index: -1; left: 7px; right: 7px; top: 0; bottom: 7px; border-radius: var(--radius-md); background: #00000026; }
+/* 窗口窄了：标签只剩图标，宽 40 */
+.dd-tab--icon { width: 40px; padding: 0 0 7px; justify-content: center; }
+.dd-titlebar .dd-stat { font-family: var(--font-sans); font-variant-numeric: tabular-nums; font-size: 12px; }
+.dd-tab .dd-ico { width: 16px; height: 16px; color: #111418; }
+.dd-tab--on { background: var(--surface); overflow: visible; }
+.dd-tab--on::before, .dd-tab--on::after { content: ""; position: absolute; bottom: 0; width: 8px; height: 8px; }
+.dd-tab--on::before { left: -8px; background: radial-gradient(circle at 0 0, transparent 7.5px, var(--surface) 8px); }
+.dd-tab--on::after { right: -8px; background: radial-gradient(circle at 100% 0, transparent 7.5px, var(--surface) 8px); }
+/* 深一档的标题栏上 line 色看不见，竖线用深一点的灰 */
+.dd-sep { width: 1px; height: 16px; background: #b4bac0; margin: 0 12px; flex: none; }
+.dd-stat { font-family: var(--font-mono); font-size: 12px; color: var(--ink-2); }
+/* 窗口按钮：46 宽、占满标题栏高，悬停整块浅灰；关闭悬停红底白叉（照 UU / Windows 11） */
+.dd-win { width: 46px; height: 100%; display: grid; place-items: center; color: var(--ink); flex: none; }
+.dd-win:hover, .dd-win.is-hover { background: #00000012; }
+.dd-win--close:hover, .dd-win--close.is-hover { background: #e81123; color: #fff; }
+/* 标题栏上的麦克风、控制中心悬停底和屏幕标签悬停一样深 */
+.dd-btn--small.is-hover, .dd-titlebar .dd-btn--small:hover { background: #00000026; }
+
+/* 远程画面占位：一块深色桌面 */
+.dd-screen { flex: 1; position: relative; background: linear-gradient(160deg, #5d7f98 0%, #3d6178 45%, #23394a 100%); overflow: hidden; }
+.dd-screen__label { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); color: #ffffffb3; font-size: 13px; letter-spacing: 2px; }
+.dd-monitor { position: absolute; right: 12px; bottom: 12px; background: var(--monitor-bg); color: #fff; border-radius: 6px; padding: 8px 12px; font-family: var(--font-mono); font-size: 12px; line-height: 18px; display: grid; grid-template-columns: auto auto; column-gap: 12px; }
+.dd-monitor span:nth-child(odd) { text-align: right; color: #ffffffcc; }
+.dd-badge { position: absolute; left: 12px; top: 12px; display: flex; align-items: center; gap: 10px; height: 28px; padding: 0 6px 0 12px; border-radius: 6px; background: #d13438e6; color: #fff; font-size: 13px; }
+.dd-badge--gray { background: #57575ee6; }
+.dd-badge a { color: #fff; text-decoration: underline; }
+
+/* 菜单（控制中心、头像卡、更多、右键） */
+.dd-menu { width: 230px; background: var(--surface); border-radius: var(--radius-lg); box-shadow: var(--shadow-menu); padding: 6px 0; }
+.dd-mi { height: 36px; margin: 0 6px; padding: 0 10px; display: flex; align-items: center; gap: 10px; border-radius: var(--radius-md); cursor: pointer; white-space: nowrap; }
+.dd-mi:hover, .dd-mi--hot { background: var(--hover); }
+.dd-mi__more { margin-left: auto; color: var(--ink-2); }
+.dd-mi__key { margin-left: auto; color: var(--ink-2); font-size: 12px; }
+/* 菜单里选中的项（照 UU：不用单选框、复选框）：文字用主色，右边一个对勾；没选中的就是普通项 */
+/* 选中（10-27 用户照 UU）：单选（几个里选一个）是文字前面一个黑点，多选（开关，加 .dd-mi--check）是左边一个对勾；都不变色、右边不打勾。一个菜单里只要有能选中的项，
+   没有图标的项都往右让出点的位置，字对齐；菜单里还有带图标的项时，点和图标在同一列 */
+.dd-mi--on { color: var(--ink); position: relative; }
+.dd-mi--on::before { content: ""; position: absolute; left: 12px; top: 50%; width: 5px; height: 5px; margin-top: -2.5px; border-radius: 50%; background: var(--ink); }
+.dd-menu:has(.dd-mi--on) .dd-mi:not(:has(> svg:first-child)) { padding-left: 26px; }
+.dd-menu:has(.dd-mi--on):has(.dd-mi > svg:first-child) .dd-mi:not(:has(> svg:first-child)) { padding-left: 36px; }
+.dd-menu:has(.dd-mi > svg:first-child) .dd-mi--on::before { left: 15.5px; }
+.dd-mi__check { display: none; }
+/* 多选（开关）项（10-27 用户照 UU）：选中是左边一个对勾（Lucide check），不是黑点；位置同黑点那一列 */
+.dd-mi--check.dd-mi--on::before { width: 14px; height: 14px; margin-top: -7px; left: 8px; border-radius: 0; background: var(--ink);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E") center / contain no-repeat; }
+.dd-menu:has(.dd-mi > svg:first-child) .dd-mi--check.dd-mi--on::before { left: 11px; }
+.dd-mi--danger { color: var(--danger-text); }
+.dd-mi--danger .dd-ico { stroke: var(--danger); }
+.dd-mi--off { color: var(--ink-3); cursor: default; }
+.dd-mi--off:hover { background: transparent; }
+.dd-menu hr { border: 0; border-top: 1px solid var(--line); margin: 4px 0; }
+.dd-menu__head { padding: 6px 16px 4px; font-size: 12px; color: var(--ink-2); }
+.dd-note { padding: 0 16px 6px 42px; font-size: 12px; line-height: 18px; color: var(--ink-2); }
+
+/* 登录框 */
+.dd-dialog { width: 420px; border-radius: var(--radius-xl); box-shadow: var(--shadow-dialog); background: linear-gradient(180deg, #dce8ff 0%, var(--surface) 45%); padding: 40px 44px 22px; position: relative; }
+.dd-dialog__close { position: absolute; right: 14px; top: 14px; color: var(--ink-2); }
+.dd-brand { display: flex; align-items: center; justify-content: center; gap: 10px; font-size: 24px; line-height: 32px; font-weight: 700; }
+.dd-brand img { width: 30px; height: 30px; }
+.dd-foot { text-align: center; font-size: 11px; color: var(--ink-3); margin-top: 28px; }
+
+/* 普通对话框（确认、提示、出错、输入） */
+.dd-scrim { position: absolute; inset: 0; background: var(--scrim); display: grid; place-items: center; }
+.dd-modal { width: 400px; background: var(--surface); border-radius: var(--radius-xl); box-shadow: var(--shadow-dialog); padding: 22px 24px 20px; position: relative; }
+.dd-modal__title { font-size: 18px; line-height: 26px; font-weight: 600; display: flex; align-items: center; gap: 10px; }
+.dd-modal__body { margin-top: 12px; color: var(--ink-2); font-size: 14px; line-height: 22px; }
+.dd-modal__foot { margin-top: 22px; display: flex; justify-content: flex-end; gap: 10px; }
+.dd-modal__x { position: absolute; right: 12px; top: 12px; width: 28px; height: 28px; display: grid; place-items: center; border-radius: var(--radius-md); color: var(--ink-2); }
+.dd-state-ico { width: 22px; height: 22px; flex: none; }
+
+/* 提示条、轻提示 */
+.dd-tip { display: flex; align-items: flex-start; gap: 8px; padding: 10px 12px; border-radius: var(--radius-md); background: var(--accent-soft); color: var(--ink); font-size: 13px; line-height: 20px; }
+.dd-tip--warn { background: #fdf0e6; }
+/* 已经有列表、后台刷新连不上服务器时，内容区右下角一直挂着的提示条（10-27 用户）：暖色底、橙色断网图标、一句话 +「再试」；
+   下一次刷新成功就消失，不整页换成错误页 */
+.dd-netwarn { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 6px 0 12px; border-radius: var(--radius-md);
+  background: #fdf0e6; color: var(--ink); font-size: 12px; box-shadow: var(--shadow-card); z-index: 5; }
+/* 滚动条（10-27 用户：不要 RustDesk 的样式，照 UU / Windows 11 的细滚动条）：轨道透明、没有上下箭头，
+   滑块 6 宽圆头半透明灰，悬停加深；离边 2 */
+.dd ::-webkit-scrollbar, .dd::-webkit-scrollbar { width: 10px; height: 10px; background: transparent; }
+.dd ::-webkit-scrollbar-thumb, .dd::-webkit-scrollbar-thumb { background-color: #00000024; border-radius: 5px; border: 2px solid transparent; background-clip: content-box; }
+.dd ::-webkit-scrollbar-thumb:hover, .dd::-webkit-scrollbar-thumb:hover { background-color: #00000073; }
+.dd ::-webkit-scrollbar-button { display: none; }
+.dd ::-webkit-scrollbar-corner { background: transparent; }
+/* 远程画面上的滚动条（照 UU，10-27 用户给的截图逐像素量）：右边 / 下边各一条 10 宽的轨道 #f0f0f0，轨道正中一道 6 宽的浅槽 #fafafa，
+   滑块 6 宽圆头深灰 #898989、正好填满浅槽（离轨道两边各 2），悬停 / 拖动加深。两条在右下角让开 10。
+   画面比窗口大、滚动方式选「滚动条」时一直显示 */
+.dd-rsb-track { position: absolute; background: #f0f0f0; }
+.dd-rsb-track::before { content: ""; position: absolute; border-radius: 3px; background: #fafafa; }
+.dd-rsb-track--v { right: 0; top: 0; bottom: 10px; width: 10px; }
+.dd-rsb-track--v::before { left: 2px; right: 2px; top: 2px; bottom: 2px; }
+.dd-rsb-track--h { left: 0; right: 10px; bottom: 0; height: 10px; }
+.dd-rsb-track--h::before { top: 2px; bottom: 2px; left: 2px; right: 2px; }
+.dd-rsb-corner { position: absolute; right: 0; bottom: 0; width: 10px; height: 10px; background: #f0f0f0; }
+.dd-rsb { position: absolute; z-index: 1; border-radius: 3px; background: #b4b4b4; }
+.dd-rsb-track--v .dd-rsb { left: 2px; width: 6px; }
+.dd-rsb-track--h .dd-rsb { top: 2px; height: 6px; }
+.dd-rsb:hover, .dd-rsb.is-hover { background: #5c5c5c; }
+
+.dd-toast { display: inline-flex; align-items: center; gap: 8px; height: 38px; padding: 0 16px; border-radius: var(--radius-md); background: #1f2329e6; color: #fff; font-size: 13px; }
+
+/* 设置页 */
+.dd-set { display: flex; flex: 1; min-height: 0; }
+.dd-set__nav { width: 200px; flex: none; padding: 8px 0; }
+.dd-set__main { flex: 1; min-width: 0; padding: 24px 32px; overflow: hidden; display: flex; flex-direction: column; gap: 16px; }
+.dd-set__h { font-size: 20px; line-height: 28px; font-weight: 700; }
+.dd-group { background: var(--surface); border-radius: var(--radius-lg); padding: 4px 0; }
+.dd-group__t { padding: 12px 20px 4px; font-size: 13px; font-weight: 600; color: var(--ink-2); }
+.dd-sr { min-height: 52px; padding: 10px 20px; display: flex; align-items: center; gap: 16px; }
+.dd-sr + .dd-sr { border-top: 1px solid #eef0f3; }
+.dd-sr__l { flex: 1; min-width: 0; }
+.dd-sr__l div:first-child { font-size: 14px; }
+.dd-sr__d { font-size: 12px; line-height: 18px; color: var(--ink-2); margin-top: 2px; }
+.dd-sr--off .dd-sr__l { color: var(--ink-3); }
+.dd-sr--off .dd-sr__d { color: var(--ink-3); }
+.dd-tag { display: inline-flex; align-items: center; height: 20px; padding: 0 6px; border-radius: 4px; font-size: 11px; background: #f2f3f5; color: var(--ink-2); margin-left: 6px; vertical-align: 1px; }
+.dd-kv { display: grid; grid-template-columns: 96px 1fr; row-gap: 10px; font-size: 13px; }
+.dd-kv span:nth-child(odd) { color: var(--ink-2); }
+
+/* 文件传输 */
+.dd-ft { display: flex; flex: 1; min-height: 0; gap: 1px; background: var(--line); }
+.dd-ft__side { flex: 1; min-width: 0; background: var(--surface); display: flex; flex-direction: column; }
+.dd-ft__bar { height: 44px; display: flex; align-items: center; gap: 8px; padding: 0 12px; border-bottom: 1px solid #eef0f3; }
+.dd-ft__path { flex: 1; height: 30px; display: flex; align-items: center; padding: 0 10px; border-radius: var(--radius-sm); background: var(--pane); font-size: 13px; color: var(--ink-2); min-width: 0; overflow: hidden; white-space: nowrap; }
+.dd-ft__head, .dd-ft__row { display: grid; grid-template-columns: 1fr 120px 80px; align-items: center; padding: 0 16px; gap: 8px; font-size: 13px; }
+.dd-ft__head { height: 32px; color: var(--ink-2); font-size: 12px; }
+.dd-ft__row { height: 34px; }
+.dd-ft__row:hover { background: var(--hover); }
+.dd-ft__row--on { background: var(--accent-soft); }
+.dd-ft__name { display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; white-space: nowrap; }
+.dd-ft__row span:not(:first-child) { color: var(--ink-2); }
+.dd-bar { height: 4px; border-radius: 2px; background: #e6e8eb; overflow: hidden; }
+.dd-bar > i { display: block; height: 100%; background: var(--accent); }
+
+/* 悬浮球 */
+.dd-ball { width: var(--ball-size); height: var(--ball-size); border-radius: var(--radius-ball); background: var(--ball); border: 4px solid var(--ball-band); box-shadow: var(--shadow-ball); display: grid; place-items: center; color: var(--ball-ink); }
+.dd-ball--hot { background: var(--surface); border-color: var(--ball-band-hot); }
+.dd-ball .dd-ico { width: 22px; height: 22px; }

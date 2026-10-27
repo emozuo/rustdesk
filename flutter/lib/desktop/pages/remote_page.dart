@@ -23,7 +23,8 @@ import '../../common/shared_state.dart';
 import '../../utils/dd_kiosk.dart';
 import '../../utils/image.dart';
 import '../widgets/dd_floating_ball.dart';
-import '../widgets/dd_remote_title_bar.dart';
+import '../widgets/dd_remote_scrollbars.dart';
+import '../widgets/dd_remote_sync.dart';
 import '../widgets/remote_toolbar.dart';
 import '../widgets/kb_layout_type_chooser.dart';
 import '../widgets/tabbar_widget.dart';
@@ -1429,6 +1430,18 @@ class _ImagePaintState extends State<ImagePaint> {
           ),
           widget,
         ],
+      );
+    }
+    // DreamDesk 受管版：滚动条换成原型的样子、一直显示（dd_remote_scrollbars.dart）
+    if (kDdManaged) {
+      return SizedBox(
+        width: layoutSize.width,
+        height: layoutSize.height,
+        child: DdRemoteScrollbars(
+          horizontal: layoutSize.width < size.width ? horizontal : null,
+          vertical: layoutSize.height < size.height ? vertical : null,
+          child: widget,
+        ),
       );
     }
     if (layoutSize.width < size.width) {

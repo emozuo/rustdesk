@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>通用对话框和提示</title>
+<link rel="stylesheet" href="dd.css">
+<style>body{margin:0}
+body{margin:0;padding:24px;background:#e9ebef}
+</style>
+</head>
+<body>
+
+
+<div class="dd" style="width: 1080px; height: 700px; background: #f0f5f8; box-sizing: border-box; padding: 32px 36px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px 20px; align-content: start">
+  <div style="display: flex; flex-direction: column; gap: 8px">
+    <div style="font-size: 12px; color: #646a73">连接中</div>
+    <div class="dd-modal" style="width: auto" role="dialog" aria-label="正在连接">
+      <div class="dd-modal__title"><svg fill="none" stroke="#2f6fea" stroke-width="2" stroke-linecap="round" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 1 1-6.219-8.56"></path></svg>正在连接 VM-CESHI</div>
+      <div class="dd-modal__body">正在向服务器要连接授权…</div>
+      <div class="dd-modal__foot"><button class="dd-btn dd-btn--secondary dd-btn--compact">取消</button></div>
+    </div>
+  </div>
+  <div style="display: flex; flex-direction: column; gap: 8px">
+    <div style="font-size: 12px; color: #646a73">连接断开（自动重连倒计时）</div>
+    <div class="dd-modal" style="width: auto" role="dialog" aria-label="连接断开">
+      <div class="dd-modal__title"><svg class="dd-state-ico" style="color: #d13438" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="m15 9-6 6"></path><path d="m9 9 6 6"></path></svg>连接断开了</div>
+      <div class="dd-modal__body">网络中断，正在重新连接。</div>
+      <div class="dd-modal__foot"><button class="dd-btn dd-btn--secondary dd-btn--compact">关闭</button><button class="dd-btn dd-btn--primary dd-btn--compact">现在重连（5）</button></div>
+    </div>
+  </div>
+  <div style="display: flex; flex-direction: column; gap: 8px">
+    <div style="font-size: 12px; color: #646a73">连接授权没通过</div>
+    <div class="dd-modal" style="width: auto" role="dialog" aria-label="连接授权没通过">
+      <div class="dd-modal__title"><svg class="dd-state-ico" style="color: #d13438" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"></path><path d="M12 8v4"></path><path d="M12 16h.01"></path></svg>连接授权没通过</div>
+      <div class="dd-modal__body">无法核实对方设备的身份。</div>
+      <div class="dd-modal__foot"><button class="dd-btn dd-btn--primary dd-btn--compact">知道了</button></div>
+    </div>
+  </div>
+  <div style="display: flex; flex-direction: column; gap: 8px">
+    <div style="font-size: 12px; color: #646a73">没登录就连</div>
+    <div class="dd-modal" style="width: auto" role="dialog" aria-label="请先登录">
+      <div class="dd-modal__title"><svg class="dd-state-ico" style="color: #2f6fea" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>请先登录</div>
+      <div class="dd-modal__body">登录域账号后才能连接工作站。</div>
+      <div class="dd-modal__foot"><button class="dd-btn dd-btn--secondary dd-btn--compact">取消</button><button class="dd-btn dd-btn--primary dd-btn--compact">登录</button></div>
+    </div>
+  </div>
+  <div style="display: flex; flex-direction: column; gap: 8px">
+    <div style="font-size: 12px; color: #646a73">普通提示 / 成功</div>
+    <div class="dd-modal" style="width: auto" role="dialog" aria-label="提示">
+      <div class="dd-modal__title"><svg class="dd-state-ico" style="color: #22a35a" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="m9 12 2 2 4-4"></path></svg>已发送</div>
+      <div class="dd-modal__body">远程电脑正在重启，稍后会自动重新连接。</div>
+      <div class="dd-modal__foot"><button class="dd-btn dd-btn--primary dd-btn--compact">好的</button></div>
+    </div>
+  </div>
+  <div style="display: flex; flex-direction: column; gap: 8px">
+    <div style="font-size: 12px; color: #646a73">轻提示（画面中间下方，2 秒消失）</div>
+    <div style="display: flex; flex-direction: column; gap: 10px; align-items: flex-start; padding: 16px; border-radius: 10px; background: linear-gradient(160deg, #5d7f98 0%, #3d6178 100%)">
+      <span class="dd-toast">已复制到剪贴板</span>
+      <span class="dd-toast">已连接，正在等画面…</span>
+      <span class="dd-toast"><svg class="dd-ico dd-ico--16" style="color: #ffb4b4" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><line x1="12" x2="12" y1="8" y2="12"></line><line x1="12" x2="12.01" y1="16" y2="16"></line></svg>格式不对</span>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

@@ -10,6 +10,7 @@ import 'package:flutter_hbb/common/widgets/audio_input.dart';
 import 'package:flutter_hbb/common/widgets/setting_widgets.dart';
 import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/utils/dd_kiosk.dart';
+import 'package:flutter_hbb/desktop/widgets/dd_settings_restyle.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_home_page.dart';
 import 'package:flutter_hbb/common/widgets/keyboard_shortcuts/page_body.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_keyboard_shortcuts_page.dart';
@@ -76,7 +77,8 @@ class DesktopSettingPage extends StatefulWidget {
         bind.mainGetBuildinOption(key: kOptionHideNetworkSetting) != 'Y')
       SettingsTabKey.network,
     if (!bind.isIncomingOnly()) SettingsTabKey.display,
-    if (!bind.isDisableAccount()) SettingsTabKey.account,
+    // DreamDesk 受管版：登录入口只有首页（域账号），不留 RustDesk 的账户页
+    if (!bind.isDisableAccount() && !kDdManaged) SettingsTabKey.account,
     if (isWindows &&
         !bind.isDisableSettings() &&
         bind.mainGetBuildinOption(key: kOptionHideRemotePrinterSetting) != 'Y')
@@ -307,6 +309,7 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
   }
 
   Widget _header(BuildContext context) {
+    if (kDdManaged) return ddSettingsHeader(translate('Settings'));
     final settingsText = Text(
       translate('Settings'),
       textAlign: TextAlign.left,
@@ -354,6 +357,13 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
   }
 
   Widget _listItem({required _TabInfo tab}) {
+    if (kDdManaged) {
+      return ddSettingsTabItem(
+          label: translate(tab.label),
+          tabKey: tab.key,
+          selectedTab: selectedTab,
+          controller: controller);
+    }
     return Obx(() {
       bool selected = tab.key == selectedTab.value;
       return SizedBox(
@@ -1988,7 +1998,7 @@ class _DisplayState extends State<_Display> {
   @override
   Widget build(BuildContext context) {
     final scrollController = ScrollController();
-    final cards = [
+    return ListView(controller: scrollController, children: [
       viewStyle(context),
       scrollStyle(context),
       imageQuality(context),
@@ -1996,21 +2006,6 @@ class _DisplayState extends State<_Display> {
       if (isDesktop) trackpadSpeed(context),
       if (!isWeb) privacyModeImpl(context),
       other(context),
-    ];
-    // DreamDesk 受管版：远程相关的设置改在每台机器的「控制中心」里、按机器记（用户 10-26 定，照 UU），这一页要去掉；
-    // 用户想先留着对照，所以先置灰、不能改，顶上说明
-    return ListView(controller: scrollController, children: [
-      if (kDdManaged) ...[
-        _Card(title: 'Display', children: [
-          Text(
-                  translate(
-                      'These settings will be removed: remote settings are now changed in each machine\'s Control center and remembered per machine. They are kept here, read-only, for comparison.'),
-                  style: const TextStyle(height: 1.6))
-              .marginOnly(left: 4, right: 4, bottom: 8),
-        ]),
-        IgnorePointer(child: Opacity(opacity: 0.45, child: Column(children: cards))),
-      ] else
-        ...cards,
     ]).marginOnly(bottom: _kListViewBottomMargin);
   }
 
@@ -2670,6 +2665,15 @@ Widget _Card(
     {required String title,
     required List<Widget> children,
     List<Widget>? title_suffix}) {
+  if (kDdManaged) {
+    return ddSettingsCard(
+        title: translate(title),
+        children: children,
+        titleSuffix: title_suffix,
+        width: _kCardFixedWidth,
+        leftMargin: _kCardLeftMargin,
+        hMargin: _kContentHMargin);
+  }
   return Row(
     children: [
       Flexible(
@@ -2748,6 +2752,15 @@ Widget _OptionCheckBox(
     enabled = false;
   }
 
+  if (kDdManaged) {
+    return ddOptionRow(
+      label: translate(label),
+      value: ref,
+      onChanged: enabled && !isOptFixed ? (v) => onChanged(v) : null,
+      enabled: enabled,
+      trailing: trailing,
+    ).marginOnly(left: _kContentHMargin);
+  }
   return GestureDetector(
     child: Obx(
       () => Row(
@@ -2982,6 +2995,11 @@ class _WaylandCardState extends State<WaylandCard> {
 // ignore: non_constant_identifier_names
 Widget _Button(String label, Function() onPressed,
     {bool enabled = true, String? tip, ButtonStyle? style}) {
+  if (kDdManaged) {
+    return ddSettingsButton(translate(label), enabled ? onPressed : null,
+            tip: tip == null ? null : translate(tip), style: style)
+        .marginOnly(left: _kContentHMargin);
+  }
   var button = ElevatedButton(
     onPressed: enabled ? onPressed : null,
     child: Text(
@@ -3002,6 +3020,10 @@ Widget _Button(String label, Function() onPressed,
 
 // ignore: non_constant_identifier_names
 Widget _SubButton(String label, Function() onPressed, [bool enabled = true]) {
+  if (kDdManaged) {
+    return ddSettingsButton(translate(label), enabled ? onPressed : null)
+        .marginOnly(left: _kContentHSubMargin);
+  }
   return Row(
     children: [
       ElevatedButton(
@@ -3036,6 +3058,12 @@ Widget _lock(
   String label,
   Function() onUnlock,
 ) {
+  if (kDdManaged) {
+    return Offstage(
+        offstage: !locked,
+        child: ddUnlockTip(label, onUnlock,
+            width: _kCardFixedWidth, leftMargin: _kCardLeftMargin));
+  }
   return Offstage(
       offstage: !locked,
       child: Row(

@@ -3,9 +3,11 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common.dart';
+import 'package:flutter_hbb/desktop/widgets/dd_port_forward_view.dart';
 import 'package:flutter_hbb/desktop/widgets/tabbar_widget.dart';
 import 'package:flutter_hbb/models/model.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
+import 'package:flutter_hbb/utils/dd_kiosk.dart';
 import 'package:get/get.dart';
 
 const double _kColumn1Width = 30;
@@ -100,6 +102,23 @@ class _PortForwardPageState extends State<PortForwardPage>
         }
       }(), builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.done) {
+          // onAdd / onRemove 拷贝了下面原来添加 / 删除按钮的调用：上游改了这里要同步（dreamdesk/docs/合并上游检查清单.md 第 1 节）
+          if (kDdManaged) {
+            return Obx(() => DdPortForwardView(
+                  isRDP: widget.isRDP,
+                  rows: [for (final p in pfs) (p.localPort, p.remoteHost, p.remotePort)],
+                  onAdd: (localPort, remoteHost, remotePort) async {
+                    await bind.sessionAddPortForward(
+                        sessionId: _ffi.sessionId, localPort: localPort, remoteHost: remoteHost, remotePort: remotePort);
+                    refreshTunnelConfig();
+                  },
+                  onRemove: (localPort) async {
+                    await bind.sessionRemovePortForward(sessionId: _ffi.sessionId, localPort: localPort);
+                    refreshTunnelConfig();
+                  },
+                  onNewRdp: () => bind.sessionNewRdp(sessionId: _ffi.sessionId),
+                ));
+          }
           return Container(
             decoration: BoxDecoration(
                 border: Border.all(

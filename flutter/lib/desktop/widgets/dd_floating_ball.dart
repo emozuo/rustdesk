@@ -6,13 +6,13 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_hbb/desktop/widgets/dd_control_menu.dart';
 import 'package:flutter_hbb/desktop/widgets/dd_icons.dart';
 import 'package:flutter_hbb/desktop/widgets/dd_theme.dart';
-import 'package:flutter_hbb/desktop/widgets/dd_remote_title_bar.dart';
+import 'package:flutter_hbb/desktop/widgets/dd_titlebar_common.dart';
 import 'package:flutter_hbb/models/model.dart';
 
-const _kBall = 42.0;
-const _kRadius = 13.0;
+const _kBall = DdSize.ballSize;
 const _kBorder = 4.0;
 /// 缩进时边上留多宽的感应带：鼠标进来就把球滑出来
 const _kPeek = 15.0;
@@ -23,14 +23,12 @@ const _kSnap = 42.0;
 const _kReveal = 24.0;
 const _kIdleDock = Duration(seconds: 1);
 const _kSlide = Duration(milliseconds: 150);
-// 配色照专业窗口的球
-const _kBallBg = DdColors.ball;
-const _kBallBgHot = DdColors.surface;
-const _kBand = DdColors.ballBand;
-const _kBandHot = DdColors.ballBandHot;
-const _kBallFg = DdColors.ballInk;
 
 enum _Edge { top, left, right }
+
+/// 每台机器的球停在哪（贴哪条边、沿边的位置），按窗口记（这个 Dart 环境就是一个窗口）。球会被卸掉再挂上：
+/// 开 / 关远程鼠标、退出再进全屏、重连时远程页面把它整层换掉，不记的话每次都回到默认的顶边右侧
+final Map<String, (_Edge, double?)> _places = {};
 
 class DdFloatingBall extends StatefulWidget {
   final String id;
@@ -49,20 +47,38 @@ class _DdFloatingBallState extends State<DdFloatingBall> {
   bool _revealed = false;
   bool _hover = false;
   bool _dragging = false;
+
+  /// 按下以来的累计位移和按下时球的位置。挪不到 kDdClickSlop 算点击、球不动（Flutter 对鼠标 2 像素就判成拖动，
+  /// 点的时候手一抖菜单就不开、球还会离开边）；超过了才算拖
   bool _moved = false;
+  Offset _pan = Offset.zero;
+  Offset _panFrom = Offset.zero;
   Timer? _idle;
   Timer? _hide;
-  final _menu = MenuController();
-  /// 菜单开没开自己记（MenuAnchor 的 onOpen / onClose）：不能在画的时候问 `_menu.isOpen`——第一次画时菜单还没挂上，
+  /// 菜单开没开自己记（MenuAnchor 的 onOpen / onClose）：不能在画的时候问 `MenuController.isOpen`——第一次画时菜单还没挂上，
   /// 一问就抛错，发布版把整个球（铺满画面的那一层）画成灰色的出错块，全屏画面蒙一层灰白
   bool _menuOpen = false;
-  List<Widget> _children = const [];
+
+  @override
+  void initState() {
+    super.initState();
+    final place = _places[widget.id];
+    if (place != null) {
+      _edge = place.$1;
+      _along = place.$2;
+    }
+  }
 
   @override
   void dispose() {
     _idle?.cancel();
     _hide?.cancel();
     super.dispose();
+  }
+
+  void _remember() {
+    final edge = _edge;
+    if (edge != null) _places[widget.id] = (edge, _along);
   }
 
   bool get _busy => _hover || _dragging || _menuOpen;
@@ -76,6 +92,15 @@ class _DdFloatingBallState extends State<DdFloatingBall> {
     });
   }
 
+  /// 球没人碰了（鼠标离开、菜单关了、拖完松手）：贴边的缩回去，停在中间的过一会儿回到顶边
+  void _settle() {
+    if (_edge == null) {
+      _scheduleIdleDock();
+    } else {
+      _scheduleTuck();
+    }
+  }
+
   void _scheduleIdleDock() {
     _idle?.cancel();
     _idle = Timer(_kIdleDock, () {
@@ -85,6 +110,7 @@ class _DdFloatingBallState extends State<DdFloatingBall> {
         _along = _free.dx;
         _revealed = false;
       });
+      _remember();
     });
   }
 
@@ -138,20 +164,8 @@ class _DdFloatingBallState extends State<DdFloatingBall> {
       }
       _revealed = true;
     });
-    if (_edge == null) {
-      _scheduleIdleDock();
-    } else {
-      _scheduleTuck();
-    }
-  }
-
-  void _toggleMenu() {
-    if (_menuOpen) {
-      _menu.close();
-      return;
-    }
-    setState(() => _children = ddControlMenu(context, widget.id, widget.ffi, fullscreen: true));
-    _menu.open();
+    _remember();
+    _settle();
   }
 
   @override
@@ -166,67 +180,74 @@ class _DdFloatingBallState extends State<DdFloatingBall> {
             rect: zone,
             child: MouseRegion(
               opaque: false,
-              onEnter: (_) => setState(() => _revealed = true),
+              // 鼠标进了感应带但没落到球上：球滑出来后也要缩回去（落到球上则 _busy，缩回的定时器到点会放弃）
+              onEnter: (_) {
+                setState(() => _revealed = true);
+                _scheduleTuck();
+              },
             ),
           ),
         AnimatedPositioned(
           duration: _dragging ? Duration.zero : _kSlide,
           left: ball.dx,
           top: ball.dy,
-          child: ddMenuTheme(
-            context,
-            child: MenuAnchor(
-              controller: _menu,
-              style: ddMenuStyle,
-              alignmentOffset: const Offset(0, 6),
-              menuChildren: _children,
-              onOpen: () => setState(() => _menuOpen = true),
-              onClose: () {
-                setState(() => _menuOpen = false);
-                if (_edge == null) {
-                  _scheduleIdleDock();
-                } else {
-                  _scheduleTuck();
-                }
+          child: DdControlMenuAnchor(
+            id: widget.id,
+            ffi: widget.ffi,
+            fullscreen: true,
+            onOpen: () => setState(() => _menuOpen = true),
+            onClose: () {
+              // 球被卸掉（退出全屏）时菜单也跟着关，这时不再画
+              if (!mounted) return;
+              setState(() => _menuOpen = false);
+              _settle();
+            },
+            builder: (context, toggle) => MouseRegion(
+              cursor: SystemMouseCursors.click,
+              onEnter: (_) => setState(() {
+                _hover = true;
+                _revealed = true;
+              }),
+              onExit: (_) {
+                setState(() => _hover = false);
+                _settle();
               },
-              child: MouseRegion(
-                cursor: SystemMouseCursors.click,
-                onEnter: (_) => setState(() {
-                  _hover = true;
-                  _revealed = true;
+              child: GestureDetector(
+                // 松开时才算点击（拖动过就不算），和专业窗口的球一样
+                onPanStart: (_) => setState(() {
+                  _dragging = true;
+                  _moved = false;
+                  _pan = Offset.zero;
+                  _panFrom = ball;
                 }),
-                onExit: (_) {
-                  setState(() => _hover = false);
-                  if (_edge == null) {
-                    _scheduleIdleDock();
+                onPanUpdate: (d) {
+                  _pan += d.delta;
+                  if (!_moved && _pan.distance < kDdClickSlop) return;
+                  setState(() {
+                    _moved = true;
+                    _edge = null;
+                    _free = Offset(_fit(_panFrom.dx + _pan.dx, size.width - _kBall),
+                        _fit(_panFrom.dy + _pan.dy, size.height - _kBall));
+                  });
+                },
+                onPanEnd: (_) {
+                  if (_moved) {
+                    _onDragEnd(size);
                   } else {
-                    _scheduleTuck();
+                    setState(() => _dragging = false);
+                    toggle();
                   }
                 },
-                child: GestureDetector(
-                  // 松开时才算点击（拖动过就不算），和专业窗口的球一样
-                  onPanStart: (_) => setState(() {
-                    _dragging = true;
-                    _moved = false;
-                    _free = ball;
-                    _edge = null;
-                  }),
-                  onPanUpdate: (d) => setState(() {
-                    _moved = true;
-                    _free = Offset(_fit(_free.dx + d.delta.dx, size.width - _kBall),
-                        _fit(_free.dy + d.delta.dy, size.height - _kBall));
-                  }),
-                  onPanEnd: (_) {
-                    if (_moved) {
-                      _onDragEnd(size);
-                    } else {
-                      setState(() => _dragging = false);
-                      _toggleMenu();
-                    }
-                  },
-                  onTap: _toggleMenu,
-                  child: _BallFace(hot: _hover || _menuOpen || _dragging),
-                ),
+                // 拖动被打断（比如窗口失去焦点）：不收尾的话「正在拖」一直为真，球再也缩不回去
+                onPanCancel: () {
+                  if (_moved) {
+                    _onDragEnd(size);
+                  } else {
+                    setState(() => _dragging = false);
+                  }
+                },
+                onTap: toggle,
+                child: _BallFace(hot: _busy),
               ),
             ),
           ),
@@ -246,14 +267,15 @@ class _BallFace extends StatelessWidget {
       width: _kBall,
       height: _kBall,
       decoration: BoxDecoration(
-        color: hot ? _kBallBgHot : _kBallBg,
-        borderRadius: BorderRadius.circular(_kRadius),
-        border: Border.all(color: hot ? _kBandHot : _kBand, width: _kBorder),
+        // 配色照专业窗口的球
+        color: hot ? DdColors.surface : DdColors.ball,
+        borderRadius: BorderRadius.circular(DdRadius.ball),
+        border: Border.all(color: hot ? DdColors.ballBandHot : DdColors.ballBand, width: _kBorder),
         boxShadow: DdShadow.ball,
       ),
       alignment: Alignment.center,
       // 图标照专业窗口的球：两条上下叠的胶囊，各带一个错开的小圆点
-      child: ddIcon(DdIcon.controlCenter, size: 20, color: _kBallFg),
+      child: ddIcon(DdIcon.controlCenter, size: 20, color: DdColors.ballInk),
     );
   }
 }

@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>被控端 · 连接管理小窗</title>
+<link rel="stylesheet" href="dd.css">
+<style>body{margin:0}.dd-cm{height:32px;padding:0;border-radius:4px;border:1px solid #dcdfe4;background:#fff;color:#9aa0a8;font-size:12px;cursor:pointer}.dd-cm--on{background:#e8f0fe;border-color:#b9cdf7;color:#2f6fea}
+body{margin:0;padding:24px;background:#e9ebef}
+</style>
+</head>
+<body>
+
+
+<div class="dd" style="width: 1080px; height: 700px; position: relative; overflow: hidden; background: linear-gradient(160deg, #5d7f98 0%, #3d6178 45%, #23394a 100%)">
+  <div class="dd-window" style="position: absolute; right: 24px; bottom: 24px; width: 340px; height: 560px; background: #f7f8fa">
+    <div class="dd-titlebar" style="background: #f0f5f8">
+      <img src="icon.png" alt="" style="width: 18px; height: 18px; margin-right: 8px">
+      <span style="font-weight: 600">DreamDesk</span>
+      <div style="flex: 1"></div>
+      <span class="dd-win" aria-hidden="true"><svg class="dd-ico" style="width: 16px; height: 16px; transform: translate(0.5px, 0.5px)" viewBox="0 0 24 24"><path d="M5 12h14"/></svg></span>
+    </div>
+    <div style="padding: 18px; display: flex; flex-direction: column; gap: 14px; flex: 1">
+      <div style="font-size: 12px; color: #646a73">有人正在远程使用这台电脑</div>
+      <div style="background: #fff; border-radius: 8px; box-shadow: 0 2px 10px #00000014; padding: 16px; display: flex; flex-direction: column; gap: 12px">
+        <div style="display: flex; align-items: center; gap: 12px">
+          <span style="width: 40px; height: 40px; border-radius: 50%; background: #2f6fea; color: #fff; display: grid; place-items: center">庞</span>
+          <div style="flex: 1; min-width: 0"><div style="font-weight: 600">庞超成</div><div style="font-size: 12px; color: #646a73">pangchaocheng · 从 WS-THIN-01</div></div>
+          <span class="dd-stat">00:12:38</span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 6px; font-size: 12px; color: #646a73"><i class="dd-dot" style="background: #22c55e"></i>经服务器授权 · 专业模式</div>
+      </div>
+      <div style="font-size: 12px; color: #646a73">允许对方</div>
+      <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px">
+        
+          <button class="dd-cm dd-cm--on" aria-pressed="true">键鼠</button>
+        
+          <button class="dd-cm dd-cm--on" aria-pressed="true">剪贴板</button>
+        
+          <button class="dd-cm dd-cm--on" aria-pressed="true">声音</button>
+        
+          <button class="dd-cm dd-cm--on" aria-pressed="true">文件</button>
+        
+          <button class="dd-cm dd-cm--on" aria-pressed="true">重启</button>
+        
+          <button class="dd-cm" aria-pressed="false">录屏</button>
+        
+          <button class="dd-cm dd-cm--on" aria-pressed="true">终端</button>
+        
+          <button class="dd-cm dd-cm--on" aria-pressed="true">打印</button>
+        
+      </div>
+      <div style="flex: 1"></div>
+      <button class="dd-btn dd-btn--danger" style="width: 100%">断开连接</button>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

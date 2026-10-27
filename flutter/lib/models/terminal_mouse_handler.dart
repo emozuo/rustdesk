@@ -29,6 +29,7 @@ class TerminalMouseInteraction extends StatefulWidget {
     this.backgroundOpacity = 1,
     this.padding,
     this.onSecondaryTapDown,
+    this.theme,
   });
 
   final Terminal terminal;
@@ -43,6 +44,7 @@ class TerminalMouseInteraction extends StatefulWidget {
   final double backgroundOpacity;
   final EdgeInsets? padding;
   final void Function(TapDownDetails, CellOffset)? onSecondaryTapDown;
+  final TerminalTheme? theme;
 
   @override
   State<TerminalMouseInteraction> createState() =>
@@ -284,6 +286,7 @@ class _TerminalMouseInteractionState extends State<TerminalMouseInteraction> {
         textStyle: widget.textStyle,
         deleteDetection: widget.deleteDetection,
         backgroundOpacity: widget.backgroundOpacity,
+        theme: widget.theme ?? TerminalThemes.defaultTheme,
         padding: widget.padding,
         shortcuts: widget.shortcuts ?? platformTerminalShortcuts(),
         onKeyEvent: widget.onKeyEvent ??

@@ -7,8 +7,11 @@ import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common/shared_state.dart';
 import 'package:flutter_hbb/common/widgets/setting_widgets.dart';
 import 'package:flutter_hbb/consts.dart';
+import 'package:flutter_hbb/desktop/widgets/dd_icons.dart';
+import 'package:flutter_hbb/desktop/widgets/dd_theme.dart';
 import 'package:flutter_hbb/desktop/widgets/tabbar_widget.dart';
 import 'package:flutter_hbb/models/peer_model.dart';
+import 'package:flutter_hbb/utils/dd_kiosk.dart';
 import 'package:flutter_hbb/models/peer_tab_model.dart';
 import 'package:flutter_hbb/models/state_model.dart';
 import 'package:get/get.dart';
@@ -1405,6 +1408,9 @@ void showRestartRemoteDevice(PeerInfo pi, String id, SessionID sessionId,
   final res = await dialogManager
       .show<bool>((setState, close, context) => CustomAlertDialog(
             title: Row(children: [
+              if (kDdManaged)
+                ddIcon(DdIcon.triangleAlert, size: 22, color: DdColors.busy)
+              else
               Icon(Icons.warning_rounded, color: Colors.redAccent, size: 28),
               Flexible(
                   child: Text(translate("Restart remote device"))

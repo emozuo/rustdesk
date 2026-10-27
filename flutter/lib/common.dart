@@ -16,6 +16,8 @@ import 'package:flutter_hbb/models/peer_model.dart';
 import 'package:flutter_hbb/models/peer_tab_model.dart';
 import 'package:flutter_hbb/models/state_model.dart';
 import 'package:flutter_hbb/utils/dd_kiosk.dart';
+import 'package:flutter_hbb/desktop/widgets/dd_restyle.dart';
+import 'package:flutter_hbb/desktop/widgets/dd_remote_dialogs.dart';
 import 'package:flutter_hbb/utils/multi_window_manager.dart';
 import 'package:flutter_hbb/utils/platform_channel.dart';
 import 'package:flutter_svg/flutter_svg.dart';
@@ -1026,6 +1028,7 @@ makeMobileActionsOverlayEntry(VoidCallback? onHide, {FFI? ffi}) {
 void showToast(String text,
     {Duration timeout = const Duration(seconds: 3),
     Alignment alignment = const Alignment(0.0, 0.8)}) {
+  if (kDdManaged) return ddShowToast(text, timeout: timeout, alignment: alignment);
   final overlayState = globalKey.currentState?.overlay;
   if (overlayState == null) return;
   final entry = OverlayEntry(builder: (context) {
@@ -1374,6 +1377,7 @@ Widget msgboxContent(String type, String title, String text) {
     return text;
   }
 
+  if (kDdManaged) return ddMsgboxContent(type, title, translateText(text));
   return Row(
     children: [
       msgboxIcon(type),
@@ -1399,7 +1403,8 @@ void msgBoxCommon(OverlayDialogManager dialogManager, String title,
   dialogManager.show((setState, close, context) => CustomAlertDialog(
         title: Text(
           translate(title),
-          style: TextStyle(fontSize: 21),
+          // 受管版用主题的弹窗标题（18 号粗体）
+          style: kDdManaged ? null : TextStyle(fontSize: 21),
         ),
         content: content,
         actions: buttons,
@@ -2982,6 +2987,10 @@ Widget dialogButton(String text,
     Widget? icon,
     TextStyle? style,
     ButtonStyle? buttonStyle}) {
+  if (kDdManaged) {
+    return ddDialogButton(text,
+        onPressed: onPressed, isOutline: isOutline, style: style, buttonStyle: buttonStyle);
+  }
   if (isDesktop || isWebDesktop) {
     if (isOutline) {
       return icon == null
@@ -3673,6 +3682,7 @@ class ComboBox extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (kDdManaged) return ddComboBox(this);
     var index = keys.indexOf(initialKey);
     if (index < 0) {
       index = 0;
