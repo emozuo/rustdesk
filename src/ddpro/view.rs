@@ -12,7 +12,7 @@
 //! - 主线程：窗口事件、解码、转 RGB、提交、键鼠。
 
 use crate::ddpro::{
-    ball::{Action, Ball},
+    ball::{Action, Ball, MenuInit},
     view_lossless::{self, Decoders},
     wire::PEER_LOG_INTERVAL,
 };
@@ -24,8 +24,8 @@ use ddpro::{
         display_check::{Cards, Issue},
         now_ns, premultiplied_bgra, CursorImage, Event, LayerImage, Window,
     },
-    view_action, view_down, view_ended::Kind, view_up, ViewAction, ViewDown, ViewEnded, ViewKey, ViewMouse,
-    ViewResolution, ViewStart, ViewUp,
+    view_action, view_down, view_ended::Kind, view_up, ViewAction, ViewDown, ViewEnded, ViewKey, ViewMenu, ViewMouse,
+    ViewResolution, ViewStart, ViewToggle, ViewUp,
 };
 use hbb_common::{anyhow::anyhow, bail, log, protobuf::Message as _, throttled_log, ResultType};
 use std::{
@@ -76,6 +76,7 @@ const MOUSE_TYPE_MOVE: i32 = 0;
 const MOUSE_TYPE_DOWN: i32 = 1;
 const MOUSE_TYPE_UP: i32 = 2;
 const MOUSE_TYPE_WHEEL: i32 = 3;
+const MOUSE_TYPE_MOVE_RELATIVE: i32 = 5;
 
 // XKB 的标准修饰位（Wayland 键盘事件里的掩码）
 const XKB_SHIFT: u32 = 1 << 0;
@@ -105,8 +106,8 @@ struct Times {
 /// 读标准输入的线程交给主线程的
 enum FromSession {
     Cursor(CursorImage),
-    /// 被控端的光标被别的东西挪到了这里（远程桌面坐标），见 [`RemoteCursor`]
-    CursorPos(i32, i32),
+    /// 被控端的光标被别的东西挪到了这里（远程桌面坐标），见 [`RemoteCursor`]；第三项是被控端程序把光标藏起来了
+    CursorPos(i32, i32, bool),
     /// 远程这块屏的新位置和尺寸（被控端切了分辨率等），和它支持的分辨率、原始分辨率（悬浮球「分辨率」菜单用；
     /// 消息里没带列表时为空）
     Display {
@@ -114,6 +115,8 @@ enum FromSession {
         resolutions: Vec<(u32, u32)>,
         original: (u32, u32),
     },
+    /// 鼠标模式的最新情况（会话进程处理完菜单里的选择、或远程鼠标不能用了）
+    MouseMode { remote: bool, unavailable: String },
 }
 
 /// 收包线程的累计统计，给主线程更新悬浮球状态块用（收包线程每收一轮照抄一遍）
@@ -371,6 +374,14 @@ fn view_action(a: Action) -> Option<ViewAction> {
             height,
             ..Default::default()
         }),
+        Action::Toggle(kind, on) => view_action::Union::Toggle(ViewToggle {
+            kind: kind.into(),
+            on,
+            ..Default::default()
+        }),
+        Action::MouseRemote(on) => view_action::Union::MouseRemote(on),
+        Action::OpenTool(tool) => view_action::Union::OpenTool(tool.into()),
+        Action::RestartRemote => view_action::Union::RestartRemote(true),
         Action::Disconnect => return None,
     };
     Some(ViewAction {
@@ -465,7 +476,17 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
         start.mic,
         start.format.hdr,
         start.hdr_capable && super::hdr_client::available(),
+        MenuInit {
+            label: start.display_label.clone(),
+            menu: {
+                // 「铺满我所有显示器」：对方多屏（会话进程查的）还要本机有两块屏以上（只有这里知道）
+                let mut menu = ViewMenu::clone(&start.menu);
+                menu.has_all_displays &= win.screen_count() >= 2;
+                menu
+            },
+        },
     );
+    let mut mouse = MouseLock::new(&start.menu);
     let mut ledger = Ledger::default();
     let mut shown: HashMap<usize, Shown> = HashMap::new();
     let mut last_report = Instant::now();
@@ -576,6 +597,8 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
                                 throttled_log!(PEER_LOG_INTERVAL, warn, "ddpro: pro view cannot restore the pointer: {e}");
                             }
                         }
+                        // 放开指针锁后点一下画面再锁（远程鼠标）：这一下点击只用来重新锁，不发给远程
+                        let relock_click = mouse.released && matches!(other, Event::PointerButton { down: true, .. });
                         // 鼠标、按键先给悬浮球：落在球 / 菜单上的不发给远程
                         let (mine, action) = match &other {
                             Event::PointerMotion { x, y } => (ball.pointer_motion(*x, *y), None),
@@ -590,13 +613,28 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
                             _ => (false, None),
                         };
                         let mut ups = if mine { vec![] } else { input.handle(other) };
+                        // 远程鼠标锁着时按下 Ctrl+Alt：临时放开（不改记住的值），和通用模式一样
+                        if mouse.locked(&win) && input.ctrl_alt_down() {
+                            mouse.released = true;
+                        }
+                        if relock_click && !mine {
+                            mouse.released = false;
+                            ups.clear();
+                        }
                         match action {
                             // 菜单里的「断开连接」：和用户关掉专业窗口一样，结束这次远程
                             Some(Action::Disconnect) => {
                                 bye.store(true, Ordering::Release);
                                 quit.store(true, Ordering::Release);
                             }
-                            Some(a) => ups.extend(view_action(a).map(view_up::Union::Action)),
+                            Some(a) => {
+                                // 菜单里选了本地 / 远程鼠标：本窗口马上跟着锁 / 放（会话进程按通用模式的规则存值，之后回报最终值）
+                                if let Action::MouseRemote(on) = &a {
+                                    mouse.remote = *on;
+                                    mouse.released = false;
+                                }
+                                ups.extend(view_action(a).map(view_up::Union::Action));
+                            }
                             None => {}
                         }
                         for up_msg in ups {
@@ -607,6 +645,7 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
                     }
                 }
             }
+            mouse.sync(&mut win, &mut ball);
             ball.tick(Instant::now());
             for (index, image) in ball.render() {
                 // 叠加图层出错只影响悬浮球，不中断画面
@@ -636,8 +675,8 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
                             );
                         }
                     }
-                    Ok(FromSession::CursorPos(x, y)) => {
-                        if let Err(e) = remote_cursor.moved(&mut win, &input, x, y) {
+                    Ok(FromSession::CursorPos(x, y, hidden)) => {
+                        if let Err(e) = remote_cursor.moved(&mut win, &input, x, y, hidden) {
                             throttled_log!(PEER_LOG_INTERVAL, warn, "ddpro: pro view cannot draw the remote cursor: {e}");
                         }
                     }
@@ -654,6 +693,11 @@ fn run_(up: &mut File) -> ResultType<(Kind, String)> {
                         );
                         input.set_remote(x, y, w, h);
                         ball.set_resolutions((w.max(0) as u32, h.max(0) as u32), resolutions, original);
+                    }
+                    Ok(FromSession::MouseMode { remote, unavailable }) => {
+                        mouse.remote = remote;
+                        mouse.unavailable = unavailable.clone();
+                        ball.set_mouse_mode(remote, unavailable);
                     }
                     Err(_) => break,
                 }
@@ -1176,8 +1220,21 @@ fn read_session(
                 break;
             }
         };
-        let Some(view_down::Union::Rustdesk(bytes)) = msg.union else {
-            continue;
+        let bytes = match msg.union {
+            Some(view_down::Union::Rustdesk(bytes)) => bytes,
+            Some(view_down::Union::MouseMode(m)) => {
+                if to_main
+                    .send(FromSession::MouseMode {
+                        remote: m.remote,
+                        unavailable: m.unavailable.clone(),
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+                continue;
+            }
+            _ => continue,
         };
         let m = match Message::parse_from_bytes(&bytes) {
             Ok(m) => m,
@@ -1208,7 +1265,7 @@ fn read_session(
                 Some(c) => FromSession::Cursor(c.clone()),
                 None => continue,
             },
-            Some(message::Union::CursorPosition(p)) => FromSession::CursorPos(p.x, p.y),
+            Some(message::Union::CursorPosition(p)) => FromSession::CursorPos(p.x, p.y, p.dd_hidden),
             Some(message::Union::Misc(misc)) => match misc.union {
                 Some(misc::Union::SwitchDisplay(s)) => FromSession::Display {
                     rect: (s.x, s.y, s.width, s.height),
@@ -1240,12 +1297,16 @@ const LAYER_REMOTE_CURSOR: usize = 3;
 
 /// 被控端的光标被别的东西挪动（USB 透传的数位板、别的连接、程序自己挪）时，在窗口里画出远程光标、藏起本机指针；
 /// 本机鼠标一动就换回本机指针。和 RustDesk Flutter 窗口的做法一致：被控端只报「不是本连接挪的」光标位置
-/// （`input_service` 排除了本连接自己注入的移动），所以收到位置就说明是别的东西在动。Wayland 下窗口挪不了系统指针，只能画
+/// （`input_service` 排除了本连接自己注入的移动），所以收到位置就说明是别的东西在动。Wayland 下窗口挪不了系统指针，只能画。
+/// 远程鼠标（相对鼠标）锁定期间本机指针也是藏着的，被控端（`ddpro/cursor.rs`）会把本连接自己挪动后的实际位置也报回来，
+/// 同样画在这里；被控端程序把光标藏了（三维软件拖动旋转）时报 `hidden`，不画，松手后位置再来就又画出来
 #[derive(Default)]
 struct RemoteCursor {
     image: Option<CursorImage>,
     /// 正画着远程光标（本机指针藏着）
     shown: bool,
+    /// 被控端程序把光标藏起来了：本机指针照样藏着，但不画远程光标
+    hidden: bool,
     pos: (f64, f64),
 }
 
@@ -1261,10 +1322,11 @@ impl RemoteCursor {
     }
 
     /// 被控端报来光标位置（远程桌面坐标）
-    fn moved(&mut self, win: &mut Window, input: &Input, x: i32, y: i32) -> ddpro::view::Result<()> {
+    fn moved(&mut self, win: &mut Window, input: &Input, x: i32, y: i32, hidden: bool) -> ddpro::view::Result<()> {
         match input.window_pos(x, y) {
             Some(p) => {
                 self.pos = p;
+                self.hidden = hidden;
                 if !self.shown {
                     self.shown = true;
                     // 笔和本机鼠标同时动时会来回切，节流
@@ -1288,6 +1350,7 @@ impl RemoteCursor {
             return Ok(());
         }
         self.shown = false;
+        self.hidden = false;
         throttled_log!(PEER_LOG_INTERVAL, info, "ddpro: pro view: back to the local pointer");
         // 先把本机指针放出来：撤图层失败时指针也不至于一直藏着
         let shown = win.set_cursor(self.image.clone());
@@ -1296,6 +1359,9 @@ impl RemoteCursor {
     }
 
     fn draw(&self, win: &mut Window) -> ddpro::view::Result<()> {
+        if self.hidden {
+            return win.set_layer(LAYER_REMOTE_CURSOR, None);
+        }
         let Some(c) = &self.image else {
             return Ok(());
         };
@@ -1326,6 +1392,67 @@ fn cursor_image(cd: CursorData) -> ResultType<CursorImage> {
     })
 }
 
+/// 远程鼠标（相对鼠标）：指针锁在窗口里、只发相对位移，和通用模式共用按机器记的 dd-mouse-mode。
+/// 锁着时球和菜单收起（免得指针跑到球上）；按 Ctrl+Alt 临时放开（不改记住的值，和通用模式一样），放开后点一下画面再锁；
+/// 通用窗口是「指针重新进入窗口就再锁」，专业窗口全屏、指针一直在窗口里，照搬会放开又立刻锁回。
+/// 会话进程说用不了（键鼠权限被收回、重连等）、或合成器不支持指针锁定，就一律放开
+struct MouseLock {
+    /// 记住的是不是远程鼠标（会话进程回报的最终值）
+    remote: bool,
+    /// 用不了的原因；非空时不锁
+    unavailable: String,
+    /// 用户按 Ctrl+Alt 放开了，要点一下画面才再锁
+    released: bool,
+    /// 合成器不支持指针锁定
+    unsupported: bool,
+}
+
+impl MouseLock {
+    fn new(menu: &ViewMenu) -> Self {
+        Self {
+            remote: menu.mouse_remote,
+            unavailable: menu.mouse_unavailable.clone(),
+            released: false,
+            unsupported: false,
+        }
+    }
+
+    fn wanted(&self) -> bool {
+        self.remote && self.unavailable.is_empty() && !self.released && !self.unsupported
+    }
+
+    /// 现在锁着（或锁的请求还在）
+    fn locked(&self, win: &Window) -> bool {
+        win.pointer_lock_requested()
+    }
+
+    /// 每轮把窗口的锁定状态对齐到「该不该锁」；指针还没出现（座位能力还没到）时下一轮再试
+    fn sync(&mut self, win: &mut Window, ball: &mut Ball) {
+        let want = self.wanted();
+        if want == win.pointer_lock_requested() {
+            return;
+        }
+        match win.set_pointer_lock(want) {
+            Ok(true) => {}
+            Ok(false) if want && !win.pointer_lock_supported() => {
+                self.unsupported = true;
+                log::warn!("ddpro: pro view: the desktop does not support pointer lock, the remote mouse is off");
+                ball.set_mouse_mode(
+                    false,
+                    crate::lang::translate("The desktop does not support locking the pointer".to_owned()),
+                );
+            }
+            // 指针还没出现，下一轮再试
+            Ok(false) => {}
+            Err(e) => throttled_log!(PEER_LOG_INTERVAL, warn, "ddpro: pro view cannot change the pointer lock: {e}"),
+        }
+        let locked = win.pointer_lock_requested();
+        if ball.pointer_locked() != locked {
+            ball.set_pointer_locked(locked);
+        }
+    }
+}
+
 /// 窗口里的键鼠 → 交给会话进程的消息（和 Flutter 窗口交给 RustDesk 的值一致）。
 struct Input {
     /// 本机窗口尺寸
@@ -1346,6 +1473,8 @@ struct Input {
     /// （坐标超出窗口，2026-10-21 瘦客户机实测），照同样的比例延伸到远程相邻的屏，远程那边拖着的窗口才能跟到别的屏上
     /// （两边按位置对应，见 `screen_rank`）。窗口里（含缩放留的黑边）照旧夹在这块屏以内
     spill: bool,
+    /// 远程鼠标的位移不足一个像素的余数：留到下一次，不丢
+    rel_rest: (f64, f64),
 }
 
 impl Input {
@@ -1360,6 +1489,7 @@ impl Input {
             buttons: HashSet::new(),
             pos: (start.remote_x, start.remote_y),
             spill,
+            rel_rest: (0.0, 0.0),
         };
         input.set_remote(
             start.remote_x,
@@ -1434,6 +1564,11 @@ impl Input {
         })
     }
 
+    /// Ctrl 和 Alt 都按着（任一侧）：远程鼠标锁着时用来放开指针
+    fn ctrl_alt_down(&self) -> bool {
+        self.depressed & XKB_CONTROL != 0 && self.depressed & XKB_MOD1_ALT != 0
+    }
+
     fn key(&self, evdev: u32, down: bool) -> view_up::Union {
         view_up::Union::Key(ViewKey {
             // X 键码 = evdev + 8，和 Flutter 在 Linux 上给的位置码相同
@@ -1466,6 +1601,17 @@ impl Input {
             Event::PointerMotion { x, y } => {
                 self.pos = self.remote_pos(x, y);
                 vec![self.mouse(MOUSE_TYPE_MOVE, self.pos)]
+            }
+            // 远程鼠标：指针锁着时只有相对位移，原样当成 RustDesk 的相对移动（被控端直接把位移加到光标上）
+            Event::RelativeMotion { dx, dy } => {
+                let (fx, fy) = (dx + self.rel_rest.0, dy + self.rel_rest.1);
+                let (ix, iy) = (fx.trunc(), fy.trunc());
+                self.rel_rest = (fx - ix, fy - iy);
+                if ix == 0.0 && iy == 0.0 {
+                    vec![]
+                } else {
+                    vec![self.mouse(MOUSE_TYPE_MOVE_RELATIVE, (ix as i32, iy as i32))]
+                }
             }
             Event::PointerButton { button, down, x, y } => {
                 // Linux BTN_LEFT / RIGHT / MIDDLE / SIDE / EXTRA → RustDesk 左 / 右 / 中 / 后退 / 前进

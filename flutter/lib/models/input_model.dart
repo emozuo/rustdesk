@@ -22,7 +22,9 @@ import 'input_modifier_utils.dart';
 import 'local_flutter_shortcuts.dart';
 import 'relative_mouse_model.dart';
 import '../common.dart';
+import '../common/shared_state.dart';
 import '../consts.dart';
+import '../utils/dd_kiosk.dart';
 
 /// Mouse button enum.
 enum MouseButtons { left, right, wheel, back, forward }
@@ -526,6 +528,12 @@ class InputModel {
       final peerId = id;
       if (peerId.isNotEmpty) {
         stateGlobal.relativeMouseModeState[peerId] = value;
+      }
+      // 受管版「使用被控端鼠标」期间画着被控端报回来的指针（remote_page.dart）；退出后本机指针接回，不留一个画着的
+      if (kDdManaged && !value && peerId.isNotEmpty) {
+        try {
+          RemoteCursorMovedState.find(peerId).value = false;
+        } catch (_) {}
       }
     });
   }

@@ -12,6 +12,7 @@ import 'package:get/get.dart';
 
 import '../common.dart';
 import '../consts.dart';
+import '../utils/dd_kiosk.dart';
 import 'platform_model.dart';
 
 class RelativeMouseModel {
@@ -485,7 +486,9 @@ class RelativeMouseModel {
     // Show toast notification so user knows how to exit relative mouse mode (desktop only).
     if (isDesktop) {
       showToast(
-          translate('rel-mouse-exit-{${isMacOS ? "Cmd+G" : "Ctrl+Alt"}}-tip'),
+          translate(kDdManaged
+              ? "Press {${isMacOS ? 'Cmd+G' : 'Ctrl+Alt'}} to exit the controlled side's mouse"
+              : 'rel-mouse-exit-{${isMacOS ? "Cmd+G" : "Ctrl+Alt"}}-tip'),
           alignment: Alignment.center);
     }
 

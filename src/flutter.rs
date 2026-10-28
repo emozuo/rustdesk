@@ -698,7 +698,12 @@ impl InvokeUiSession for FlutterHandler {
     fn set_cursor_position(&self, cp: CursorPosition) {
         self.push_event(
             "cursor_position",
-            &[("x", &cp.x.to_string()), ("y", &cp.y.to_string())],
+            &[
+                ("x", &cp.x.to_string()),
+                ("y", &cp.y.to_string()),
+                // DreamDesk：被控端程序把光标藏起来了（相对鼠标时才会置位），界面不画远程光标
+                ("hidden", &cp.dd_hidden.to_string()),
+            ],
             &[],
         );
     }

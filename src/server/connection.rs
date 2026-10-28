@@ -387,6 +387,9 @@ pub struct Connection {
     network_delay: u32,
     lock_after_session_end: bool,
     show_remote_cursor: bool,
+    // DreamDesk：这条连接正在发相对移动、光标位置服务因此订阅着（见 `dd_follow_cursor`）
+    #[cfg(all(feature = "dd-pro", windows))]
+    dd_rel_cursor: bool,
     // by peer
     ip: String,
     // by peer
@@ -601,6 +604,8 @@ impl Connection {
             network_delay: 0,
             lock_after_session_end: false,
             show_remote_cursor: false,
+            #[cfg(all(feature = "dd-pro", windows))]
+            dd_rel_cursor: false,
             follow_remote_cursor: false,
             follow_remote_window: false,
             multi_ui_session: false,
@@ -2458,6 +2463,27 @@ impl Connection {
             .ok();
     }
 
+    /// DreamDesk 远程鼠标（相对鼠标）要把被控端光标的实际位置报回主控端（`ddpro/cursor.rs`），光标位置服务得订阅着；
+    /// 它默认不订阅（没开「显示远程光标」时，见 `try_sub_monitor_services`），没订阅者服务不跑、`send_to` 也不发给非订阅者。
+    /// 所以连接开始发相对移动时订阅、改回绝对移动时退订（「显示远程光标」开着就一直订）；只在状态变化时调一次
+    #[cfg(all(feature = "dd-pro", windows))]
+    fn dd_follow_cursor(&mut self, me: &MouseEvent) {
+        let relative = match me.mask & crate::input::MOUSE_TYPE_MASK {
+            crate::input::MOUSE_TYPE_MOVE_RELATIVE => true,
+            crate::input::MOUSE_TYPE_MOVE => false,
+            _ => return,
+        };
+        if relative == self.dd_rel_cursor {
+            return;
+        }
+        self.dd_rel_cursor = relative;
+        if let Some(s) = self.server.upgrade() {
+            s.write()
+                .unwrap()
+                .subscribe(NAME_POS, self.inner.clone(), relative || self.show_remote_cursor);
+        }
+    }
+
     #[inline]
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     fn input_pointer(&self, msg: PointerDeviceEvent, conn_id: i32) {
@@ -3241,6 +3267,8 @@ impl Connection {
                     }
                     #[cfg(not(any(target_os = "android", target_os = "ios")))]
                     if self.peer_keyboard_enabled() {
+                        #[cfg(all(feature = "dd-pro", windows))]
+                        self.dd_follow_cursor(&me);
                         if is_left_up(&me) {
                             CLICK_TIME.store(get_time(), Ordering::SeqCst);
                         } else {

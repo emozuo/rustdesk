@@ -405,6 +405,8 @@ class FfiModel with ChangeNotifier {
         onDdproModeEvent(sessionId, evt);
       } else if (name == 'ddpro_window') {
         onDdproWindowEvent(sessionId, peerId, evt, parent.target);
+      } else if (name == 'ddpro_tool') {
+        onDdproToolEvent(peerId, evt);
       } else if (name == 'update_privacy_mode') {
         updatePrivacyMode(evt, sessionId, peerId);
       } else if (name == 'show_elevation') {
@@ -3133,6 +3135,8 @@ class CursorModel with ChangeNotifier {
   Rect? _windowRect;
   List<RemoteWindowCoords> _remoteWindowCoords = [];
   bool gotMouseControl = true;
+  /// DreamDesk：被控端程序把光标藏起来了（三维软件拖动旋转；只在相对鼠标时由被控端报），不画远程光标
+  bool ddHidden = false;
   DateTime _lastPeerMouse = DateTime.now()
       .subtract(Duration(milliseconds: 3000 * kMouseControlTimeoutMSec));
   String peerId = '';
@@ -3836,6 +3840,7 @@ class CursorModel with ChangeNotifier {
     }
     _x = double.parse(evt['x']);
     _y = double.parse(evt['y']);
+    ddHidden = evt['hidden'] == 'true';
     try {
       RemoteCursorMovedState.find(id).value = true;
     } catch (e) {

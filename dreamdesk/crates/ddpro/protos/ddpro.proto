@@ -237,7 +237,16 @@ message ViewDown {
     // RustDesk 连接里收到的、专业窗口要用的消息（RustDesk Message：光标 CursorData / CursorId，
     // 本屏的显示变化 Misc.SwitchDisplay），原样转发
     bytes rustdesk = 2;
+    // 鼠标模式的最新情况（会话进程处理完菜单里的选择、或远程鼠标不能用了——键鼠权限被收回、重连等）
+    ViewMouseMode mouse_mode = 3;
   }
+}
+
+message ViewMouseMode {
+  // 现在该不该是远程鼠标（记住的值；开不成时为 false）
+  bool remote = 1;
+  // 非空：远程鼠标用不了，这是原因；专业窗口要立刻放开指针锁
+  string unavailable = 2;
 }
 
 message ViewStart {
@@ -265,6 +274,35 @@ message ViewStart {
   bool hdr_capable = 14;
   // RustDesk 连接已经连了多少秒：悬浮球状态块的连接时长（专业窗口比连接晚开，换屏重开不清零）
   uint32 connected_secs = 15;
+  // 这个窗口看的那块远程屏的型号（「显示屏 1（VX2723）」里括号里的）；被控端没报时为空
+  string display_label = 16;
+  // 悬浮球菜单里各开关的现值和出现条件（打开专业窗口时的快照；之后在菜单里点了专业窗口自己记着，会话进程不回写）
+  ViewMenu menu = 17;
+}
+
+// 悬浮球菜单的初值和出现条件，和通用模式控制中心的同一批选项、同样的出现条件
+message ViewMenu {
+  bool mute = 1;
+  bool lock_after_end = 2;
+  bool block_input = 3;
+  // 允许同步剪贴板（RustDesk 的选项是反过来的 disable-clipboard，这里已经换成正向）
+  bool clipboard = 4;
+  bool file_paste = 5;
+  bool reverse_wheel = 6;
+  bool swap_buttons = 7;
+  // 连接时铺满我所有显示器
+  bool all_displays = 8;
+  // 哪些项出现：块输入只有 Windows 被控端且有键鼠权限；剪贴板、文件粘贴、反转滚轮 / 交换左右键要有键鼠权限；
+  // 铺满所有显示器要本机两块屏以上且对方支持多屏；重启要对方允许
+  bool has_block_input = 9;
+  bool has_clipboard = 10;
+  bool has_file_paste = 11;
+  bool has_mouse_options = 12;
+  bool has_all_displays = 13;
+  bool has_restart = 14;
+  // 鼠标模式：记住的是不是远程鼠标；远程鼠标用不了时写原因（对方版本太旧 / 对方是 Linux / 没有键鼠权限），空串表示能用
+  bool mouse_remote = 15;
+  string mouse_unavailable = 16;
 }
 
 message ViewPoint {
@@ -305,7 +343,35 @@ message ViewAction {
     bool mic = 7;
     // HDR 开 / 关（整个会话）：会话进程请被控端切它的屏、再切本机的屏，专业窗口重开、重新谈判
     bool hdr = 8;
+    // 悬浮球菜单里的开关（静音、剪贴板等）：会话进程改 RustDesk 的会话选项，和通用模式控制中心里同一项做的事一样
+    ViewToggle toggle = 9;
+    // 鼠标模式：true = 远程鼠标。会话进程按通用模式的规则存进按机器记的 dd-mouse-mode（开不成不记），再用 ViewDown.mouse_mode 回报
+    bool mouse_remote = 10;
+    // 开文件传输 / 终端窗口：会话进程推事件给它的 Flutter 界面去开（专业窗口自己开不了）
+    ViewTool open_tool = 11;
+    // 重启远程电脑（菜单里已经点过「确认」）
+    bool restart_remote = 12;
   }
+}
+
+message ViewToggle {
+  enum Kind {
+    MUTE = 0;
+    LOCK_AFTER_END = 1;
+    BLOCK_INPUT = 2;
+    CLIPBOARD = 3;
+    FILE_PASTE = 4;
+    REVERSE_WHEEL = 5;
+    SWAP_BUTTONS = 6;
+    ALL_DISPLAYS = 7;
+  }
+  Kind kind = 1;
+  bool on = 2;
+}
+
+enum ViewTool {
+  VIEW_TOOL_FILE_TRANSFER = 0;
+  VIEW_TOOL_TERMINAL = 1;
 }
 
 message ViewResolution {

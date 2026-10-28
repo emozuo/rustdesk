@@ -354,6 +354,8 @@ fn update_last_cursor_pos(x: i32, y: i32) {
 }
 
 fn run_pos(sp: EmptyExtraFieldService, state: &mut StatePos) -> ResultType<()> {
+    #[cfg(all(feature = "dd-pro", windows))]
+    crate::ddpro::cursor::tick(&sp);
     let (_, (x, y)) = *LATEST_SYS_CURSOR_POS.lock().unwrap();
     if x == INVALID_CURSOR_POS || y == INVALID_CURSOR_POS {
         return Ok(());
@@ -375,6 +377,8 @@ fn run_pos(sp: EmptyExtraFieldService, state: &mut StatePos) -> ResultType<()> {
                 0
             }
         };
+        #[cfg(all(feature = "dd-pro", windows))]
+        crate::ddpro::cursor::mark_hidden(&mut msg_out);
         sp.send_without(msg_out, exclude);
     }
     state.cursor_pos = (x, y);
@@ -616,6 +620,12 @@ fn set_relative_mouse_active(conn: i32, active: bool) {
 #[inline]
 fn is_relative_mouse_active(conn: i32) -> bool {
     RELATIVE_MOUSE_CONNS.lock().unwrap().contains(&conn)
+}
+
+/// 现在开着相对鼠标的连接（DreamDesk 专业会话远程鼠标的光标回报用，`ddpro/cursor.rs`）
+#[cfg(all(feature = "dd-pro", windows))]
+pub(crate) fn relative_mouse_conns() -> Vec<i32> {
+    RELATIVE_MOUSE_CONNS.lock().unwrap().iter().copied().collect()
 }
 
 /// Clears the relative mouse mode state for a connection.

@@ -629,8 +629,9 @@ class _RelativeMouseModeHint extends StatelessWidget {
             ),
             const SizedBox(width: 4),
             Text(
-              translate(
-                  'rel-mouse-exit-{${isMacOS ? "Cmd+G" : "Ctrl+Alt"}}-tip'),
+              translate(kDdManaged
+                  ? "Press {${isMacOS ? 'Cmd+G' : 'Ctrl+Alt'}} to exit the controlled side's mouse"
+                  : 'rel-mouse-exit-{${isMacOS ? "Cmd+G" : "Ctrl+Alt"}}-tip'),
               style: TextStyle(
                 fontSize: 11,
                 color: Colors.orange[700],

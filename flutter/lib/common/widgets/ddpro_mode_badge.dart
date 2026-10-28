@@ -72,6 +72,15 @@ void onDdproWindowEvent(
   }
 }
 
+/// `ddpro_tool`：专业窗口悬浮球「工具」里点了文件传输 / 终端。专业窗口自己开不了窗口，会话进程把事件推到显示这块屏的
+/// 这个（藏着的）窗口来，开法和控制中心「工具」里一样（`connect()`）；`tool` 为 `file` / `terminal`
+void onDdproToolEvent(String peerId, Map<String, dynamic> evt) {
+  final context = globalKey.currentContext;
+  if (context == null) return;
+  final tool = evt['tool'] as String? ?? '';
+  connect(context, peerId, isFileTransfer: tool == 'file', isTerminal: tool == 'terminal');
+}
+
 class DdproModeBadge extends StatelessWidget {
   final SessionID sessionId;
   const DdproModeBadge({Key? key, required this.sessionId}) : super(key: key);

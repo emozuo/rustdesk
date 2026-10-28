@@ -1008,7 +1008,10 @@ class _RemotePageState extends State<RemotePage>
 
     if (!_ffi.canvasModel.cursorEmbedded) {
       paints
-          .add(Obx(() => _showRemoteCursor.isFalse || _remoteCursorMoved.isFalse
+          .add(Obx(() => (_showRemoteCursor.isFalse &&
+                      // 受管版「使用被控端鼠标」：本机指针锁住藏起来了，不看「显示远程光标」的开关，画被控端报回来的指针
+                      !(kDdManaged && _ffi.inputModel.relativeMouseMode.value)) ||
+                  _remoteCursorMoved.isFalse
               ? Offstage()
               : CursorPaint(
                   id: widget.id,
@@ -1498,6 +1501,8 @@ class CursorPaint extends StatelessWidget {
   Widget build(BuildContext context) {
     final m = Provider.of<CursorModel>(context);
     final c = Provider.of<CanvasModel>(context);
+    // 被控端程序把光标藏了（三维软件拖动旋转）：不画
+    if (kDdManaged && m.ddHidden) return const SizedBox.shrink();
     double hotx = m.hotx;
     double hoty = m.hoty;
     if (m.image == null) {

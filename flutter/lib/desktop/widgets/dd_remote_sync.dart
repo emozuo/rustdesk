@@ -32,16 +32,16 @@ bool ddHandleRemoteWindowCall(MethodCall call, DesktopTabController tabControlle
     // 同一台机器的另一个窗口改了设置（[ddSyncPeerWindows]）
     _handleSettingsSync(call, tabController) || ddHandleDisplayCall(call, tabController);
 
-/// 鼠标模式按机器记（dreamdesk/docs/M-菜单设置方案.md）：本地鼠标 = RustDesk 原来的绝对坐标；远程鼠标 = RustDesk 的相对鼠标模式
-/// （本机指针锁在窗口里藏起来，只发移动量）。记在这台机器的配置里，每次连上（含重连）按记住的值打开（[ddApplyRememberedMouseMode]）。
+/// 鼠标模式按机器记（dreamdesk/docs/M-菜单设置方案.md）：使用主控端鼠标 = RustDesk 原来的绝对坐标；使用被控端鼠标 = RustDesk 的相对鼠标模式
+/// （本机指针锁在窗口里藏起来，只发移动量，画面上画出被控端报回来的指针）。记在这台机器的配置里，每次连上（含重连）按记住的值打开（[ddApplyRememberedMouseMode]）。
 /// RustDesk 自己在出错、重连、键盘权限被收回时会关掉相对模式，Ctrl+Alt 也能临时退出（防鼠标被锁死）——这些都不改记住的值，
 /// 只有在菜单里切换才改
 const kDdMouseMode = 'dd-mouse-mode';
 
-/// 不能用远程鼠标的原因；空串表示能用
+/// 不能用被控端鼠标的原因；空串表示能用
 String ddRemoteMouseUnavailable(FFI ffi) {
-  if (!ffi.inputModel.isRelativeMouseModeSupported) return translate('The remote side is too old for the remote mouse');
-  if (isLinux && bind.mainCurrentIsWayland()) return translate('The remote mouse does not work on a Wayland desktop');
+  if (!ffi.inputModel.isRelativeMouseModeSupported) return translate("The remote side is too old for the controlled side's mouse");
+  if (isLinux && bind.mainCurrentIsWayland()) return translate("The controlled side's mouse does not work on a Wayland desktop");
   if (!ffi.ffiModel.keyboard || ffi.ffiModel.viewOnly) return translate('No keyboard and mouse permission');
   return '';
 }

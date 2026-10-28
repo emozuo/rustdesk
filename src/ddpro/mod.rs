@@ -82,6 +82,9 @@ mod wire;
 // 虚拟麦克风（P2 第 2 项）：只在被控端 Windows（驱动 dreamdesk/driver/mic）
 #[cfg(all(feature = "dd-pro", windows))]
 pub mod mic;
+// 远程鼠标（相对鼠标）期间把被控端光标的实际位置 / 被程序藏起来回报给专业窗口（被控端 Windows）
+#[cfg(all(feature = "dd-pro", windows))]
+pub mod cursor;
 // USB 透传（P2 第 1 项）：被控端只有 Windows（usbip-win2），主控端只有 Linux（内核 usbip-host，root 服务代做特权操作）
 #[cfg(all(feature = "dd-pro", windows))]
 mod usb_server;

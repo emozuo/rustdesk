@@ -17,7 +17,8 @@ use base::message_proto::{
 };
 use ddpro::{
     dd_pro, reject, stopped, view_action, view_down, view_ended::Kind, view_up, Chroma, DisplayCaps, FormatCaps,
-    MediaChannel, Reject, SetHdr, Stopped, VideoFormat, ViewDown, ViewEnded, ViewPoint, ViewStart, ViewUp,
+    MediaChannel, Reject, SetHdr, Stopped, VideoFormat, ViewDown, ViewEnded, ViewMenu, ViewMouseMode, ViewPoint, ViewStart,
+    ViewToggle, ViewTool, ViewUp,
 };
 use hbb_common::{log, protobuf::Message as _, throttled_log, tokio::sync::mpsc::UnboundedSender};
 use std::{
@@ -44,6 +45,8 @@ struct Link {
     /// 远程各块屏的位置尺寸：对端信息里的显示列表，之后被控端每次报显示变化就更新那一块。
     /// 用户切屏时新屏的尺寸当场就有，不必等被控端回显示变化
     rects: HashMap<i32, (i32, i32, u32, u32)>,
+    /// 远程各块屏的显示器型号（对端信息里的 dd_label，被控端没报的没有）：悬浮球菜单写「显示屏 1（VX2723）」
+    labels: HashMap<i32, String>,
     /// 远程各块屏支持的分辨率和原始分辨率（悬浮球「分辨率」菜单用）：RustDesk 自己收到的那份（对端信息里只有当前屏的列表，
     /// 之后被控端每次报显示变化都带上那块屏的），和它工具栏「分辨率」菜单用的同一份
     resolutions: HashMap<i32, (Vec<(i32, i32)>, (i32, i32))>,
@@ -553,6 +556,11 @@ pub fn remember_display<T: InvokeUiSession>(pi: &PeerInfo, session: &Session<T>)
         .zip(&pi.displays)
         .map(|(i, d)| (i, (d.x, d.y, d.width.max(0) as u32, d.height.max(0) as u32)))
         .collect();
+    link.labels = (0..)
+        .zip(&pi.displays)
+        .filter(|(_, d)| !d.dd_label.is_empty())
+        .map(|(i, d)| (i, d.dd_label.clone()))
+        .collect();
     let list: Vec<_> = pi.resolutions.resolutions.iter().map(|r| (r.width, r.height)).collect();
     for (i, d) in (0..).zip(&pi.displays) {
         let original = (d.original_resolution.width, d.original_resolution.height);
@@ -742,6 +750,118 @@ pub fn display_caps() -> DisplayCaps {
     .clone()
 }
 
+/// 通用模式控制中心「鼠标模式」按机器记的值（flutter/lib/desktop/widgets/dd_remote_sync.dart 的 kDdMouseMode）：「remote」或空
+const MOUSE_MODE_OPTION: &str = "dd-mouse-mode";
+
+/// 远程鼠标用不了的原因（空串 = 能用），条件和通用模式一样（dd_remote_sync.dart 的 ddRemoteMouseUnavailable）：
+/// 对方版本太旧或是 Linux、没有键鼠权限；通用窗口还有一条「Wayland 桌面不能用」，专业窗口自己锁指针，没有这一条
+fn mouse_unavailable<T: InvokeUiSession>(session: &Session<T>) -> String {
+    mouse_unavailable_with(session, keyboard_allowed(session))
+}
+
+/// 同上，键鼠权限由调用方给（收到权限变更的消息时 RustDesk 还没更新它自己存的那份）
+fn mouse_unavailable_with<T: InvokeUiSession>(session: &Session<T>, keyboard: bool) -> String {
+    let min = hbb_common::get_version_number("1.4.5");
+    if session.peer_platform() == crate::PLATFORM_LINUX || session.get_peer_version() < min {
+        return crate::lang::translate("The remote side is too old for the controlled side's mouse".to_owned());
+    }
+    if !keyboard || session.lc.read().unwrap().view_only.v {
+        return crate::lang::translate("No keyboard and mouse permission".to_owned());
+    }
+    String::new()
+}
+
+/// 被控端收回 / 放开了键鼠权限：告诉开着的专业窗口，收回时它立刻放开指针锁（防止指针被锁死），放开后按记住的值再锁
+fn mouse_permission_changed<T: InvokeUiSession>(session: &Session<T>, keyboard_enabled: bool) {
+    let unavailable = mouse_unavailable_with(session, keyboard_enabled);
+    let remote = unavailable.is_empty() && session.get_flutter_option(MOUSE_MODE_OPTION.to_owned()) == "remote";
+    let links = links().lock().unwrap();
+    let Some(link) = links.get(&key(session)) else {
+        return;
+    };
+    for (_, down) in link.views.values().filter_map(|v| v.down.as_ref()) {
+        down.send(ViewDown {
+            union: Some(view_down::Union::MouseMode(ViewMouseMode {
+                remote,
+                unavailable: unavailable.clone(),
+                ..Default::default()
+            })),
+            ..Default::default()
+        })
+        .ok();
+    }
+}
+
+fn keyboard_allowed<T: InvokeUiSession>(session: &Session<T>) -> bool {
+    *session.server_keyboard_enabled.read().unwrap() && !session.lc.read().unwrap().view_only.v
+}
+
+/// 悬浮球菜单里选了本地 / 远程鼠标：和通用模式一样，远程鼠标开不成就不记（免得以后每次连上都再试），本地鼠标总是能记。
+/// 返回最终该不该是远程鼠标和（用不了时的）原因
+fn apply_mouse_mode<T: InvokeUiSession>(session: &Session<T>, on: bool) -> (bool, String) {
+    let unavailable = mouse_unavailable(session);
+    let remote = on && unavailable.is_empty();
+    if !on || remote {
+        session.save_flutter_option(MOUSE_MODE_OPTION.to_owned(), if remote { "remote" } else { "" }.to_owned());
+    }
+    (remote, unavailable)
+}
+
+/// 悬浮球菜单各开关的现值和出现条件（出现条件同通用模式控制中心）
+fn menu_snapshot<T: InvokeUiSession>(session: &Session<T>) -> ViewMenu {
+    let keyboard = keyboard_allowed(session);
+    let platform = session.peer_platform();
+    let unavailable = mouse_unavailable(session);
+    ViewMenu {
+        mute: session.get_toggle_option("disable-audio".to_owned()),
+        lock_after_end: session.get_toggle_option("lock-after-session-end".to_owned()),
+        // 屏蔽输入是这次会话的运行状态，不是存下来的选项
+        block_input: false,
+        clipboard: !session.get_toggle_option("disable-clipboard".to_owned()),
+        file_paste: session.get_toggle_option("enable-file-copy-paste".to_owned()),
+        reverse_wheel: session.get_reverse_mouse_wheel() == "Y",
+        swap_buttons: session.get_toggle_option("swap-left-right-mouse".to_owned()),
+        all_displays: session.get_use_all_my_displays_for_the_remote_session() == "Y",
+        has_block_input: keyboard && platform == crate::PLATFORM_WINDOWS,
+        has_clipboard: keyboard,
+        has_file_paste: keyboard && *session.server_file_transfer_enabled.read().unwrap(),
+        has_mouse_options: keyboard,
+        has_all_displays: false,
+        has_restart: keyboard
+            && [crate::PLATFORM_WINDOWS, crate::PLATFORM_LINUX, crate::PLATFORM_MACOS].contains(&platform.as_str()),
+        mouse_remote: unavailable.is_empty() && session.get_flutter_option(MOUSE_MODE_OPTION.to_owned()) == "remote",
+        mouse_unavailable: unavailable,
+        ..Default::default()
+    }
+}
+
+/// 悬浮球菜单里的开关：改 RustDesk 的会话选项，和通用模式控制中心里同一项（`toolbar.dart`）做的事一样
+fn menu_toggle<T: InvokeUiSession>(session: &Session<T>, t: &ViewToggle) {
+    use ddpro::view_toggle::Kind;
+    let on = t.on;
+    // 会话选项是翻转式的：和想要的值不同才翻
+    let set = |name: &str, want: bool| {
+        if session.get_toggle_option(name.to_owned()) != want {
+            session.toggle_option(name.to_owned());
+        }
+    };
+    log::info!("ddpro: floating menu: {:?} {}", t.kind, if on { "on" } else { "off" });
+    match t.kind.enum_value() {
+        Ok(Kind::MUTE) => set("disable-audio", on),
+        Ok(Kind::LOCK_AFTER_END) => set("lock-after-session-end", on),
+        Ok(Kind::BLOCK_INPUT) => session.toggle_option(if on { "block-input" } else { "unblock-input" }.to_owned()),
+        // 菜单里写正向的「同步剪贴板」，RustDesk 的选项是反过来的 disable-clipboard
+        Ok(Kind::CLIPBOARD) => set("disable-clipboard", !on),
+        Ok(Kind::FILE_PASTE) => set("enable-file-copy-paste", on),
+        Ok(Kind::REVERSE_WHEEL) => session.save_reverse_mouse_wheel(if on { "Y" } else { "N" }.to_owned()),
+        Ok(Kind::SWAP_BUTTONS) => set("swap-left-right-mouse", on),
+        Ok(Kind::ALL_DISPLAYS) => {
+            session.save_use_all_my_displays_for_the_remote_session(if on { "Y" } else { "N" }.to_owned())
+        }
+        Err(_) => {}
+    }
+}
+
 /// 被控端同意后为远程屏 `display_index` 拉起专业窗口。`rustdesk` 是 RustDesk 消息循环的发送端，它关了说明会话已结束。
 /// `format` 是谈成的画面格式（位深、HDR）。
 pub fn start<T: InvokeUiSession>(
@@ -753,7 +873,7 @@ pub fn start<T: InvokeUiSession>(
     display_index: i32,
 ) {
     let k = key(session);
-    let (shown, is_main, display, origins, mic) = links()
+    let (shown, is_main, display, origins, mic, label, remote_displays) = links()
         .lock()
         .unwrap()
         .get(&k)
@@ -766,9 +886,14 @@ pub fn start<T: InvokeUiSession>(
                 l.rects.get(&display_index).copied().unwrap_or_default(),
                 origins,
                 l.mic,
+                l.labels.get(&display_index).cloned().unwrap_or_default(),
+                l.rects.len(),
             )
         })
         .unwrap_or_default();
+    // 悬浮球菜单的初值：和通用模式控制中心同一批选项；「铺满我所有显示器」还要本机两块屏以上，那条由专业窗口自己加（它知道本机有几块屏）
+    let mut menu = menu_snapshot(session);
+    menu.has_all_displays = remote_displays > 1;
     // 同意晚到：主控端在这之间切走了这块屏（被控端等不到专业窗口打招呼，会自己结束这次专业会话）
     if !shown {
         log::info!("ddpro: not starting a pro view for remote display {display_index}: no window shows it now");
@@ -836,6 +961,8 @@ pub fn start<T: InvokeUiSession>(
         all_displays: session.get_use_all_my_displays_for_the_remote_session() == "Y",
         hdr_capable,
         connected_secs: super::stats::connected_secs(session),
+        display_label: label,
+        menu: Some(menu).into(),
         ..Default::default()
     })))
     .ok();
@@ -878,6 +1005,8 @@ pub fn start<T: InvokeUiSession>(
         }
     }
     let pid = child.id();
+    // 菜单里的鼠标模式处理完后回报给专业窗口
+    let reply = tx.clone();
     {
         let mut links = links().lock().unwrap();
         let view = links.entry(k).or_default().views.entry(display_index).or_default();
@@ -1014,6 +1143,30 @@ pub fn start<T: InvokeUiSession>(
                         log::info!("ddpro: floating menu: change display {display_index} to {}x{}", r.width, r.height);
                         session.change_resolution(display_index, r.width as i32, r.height as i32);
                     }
+                    Some(view_action::Union::Toggle(t)) => menu_toggle(&session, &t),
+                    Some(view_action::Union::MouseRemote(on)) => {
+                        let (remote, unavailable) = apply_mouse_mode(&session, on);
+                        reply
+                            .send(ViewDown {
+                                union: Some(view_down::Union::MouseMode(ViewMouseMode {
+                                    remote,
+                                    unavailable,
+                                    ..Default::default()
+                                })),
+                                ..Default::default()
+                            })
+                            .ok();
+                    }
+                    // 文件传输 / 终端窗口由会话进程里的 Flutter 开（专业窗口开不了）：推给显示这块屏的那个窗口
+                    Some(view_action::Union::OpenTool(t)) => {
+                        let tool = if t.enum_value() == Ok(ViewTool::VIEW_TOOL_TERMINAL) { "terminal" } else { "file" };
+                        log::info!("ddpro: floating menu: open {tool}");
+                        push(&session, Some(display_index), "ddpro_tool", &[("tool", tool)]);
+                    }
+                    Some(view_action::Union::RestartRemote(_)) => {
+                        log::info!("ddpro: floating menu: restart the remote computer");
+                        session.restart_remote_device();
+                    }
                     _ => {}
                 },
                 Some(view_up::Union::Ready(_)) => {
@@ -1096,6 +1249,14 @@ pub fn start<T: InvokeUiSession>(
 /// - 显示变化：记下那块屏的新位置尺寸；那块屏开着专业窗口的，原样转给它。被控端发这条消息不只在用户切屏时
 ///   （别的屏改了分辨率、主控端查询显示信息时也发），所以不从它推断「用户切了屏」——切屏看 [`on_switch_display`]。
 pub fn on_rustdesk_message<T: InvokeUiSession>(msg: &Message, session: &Session<T>) {
+    if let Some(message::Union::Misc(m)) = &msg.union {
+        if let Some(misc::Union::PermissionInfo(p)) = &m.union {
+            if p.permission.enum_value() == Ok(base::message_proto::permission_info::Permission::Keyboard) {
+                mouse_permission_changed(session, p.enabled);
+            }
+            return;
+        }
+    }
     let switch = match &msg.union {
         Some(message::Union::CursorData(_))
         | Some(message::Union::CursorId(_))

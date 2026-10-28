@@ -35,7 +35,15 @@ use sctk::{
                 zwp_linux_buffer_params_v1::{self, Flags},
                 zwp_linux_dmabuf_feedback_v1::{self, TrancheFlags},
             },
+            pointer_constraints::zv1::client::{
+                zwp_locked_pointer_v1::{self, ZwpLockedPointerV1},
+                zwp_pointer_constraints_v1::{self, ZwpPointerConstraintsV1},
+            },
             presentation_time::client::wp_presentation_feedback::{self, Kind},
+            relative_pointer::zv1::client::{
+                zwp_relative_pointer_manager_v1::{self, ZwpRelativePointerManagerV1},
+                zwp_relative_pointer_v1::{self, ZwpRelativePointerV1},
+            },
             color_management::v1::client::{
                 wp_color_management_output_v1::WpColorManagementOutputV1,
                 wp_color_management_surface_v1::WpColorManagementSurfaceV1,
@@ -160,6 +168,11 @@ pub enum Event {
     /// 合成器报告系统快捷键是否已经让给本窗口（Win、Alt+Tab 等发给远程）：用户在合成器的确认框里允许、
     /// 窗口拿到键盘焦点时为 true；拒绝或失去焦点时为 false
     ShortcutsInhibited(bool),
+    /// 指针锁定（[`Window::set_pointer_lock`]）生效了 / 被合成器解除了（窗口失去焦点、系统对话框等；
+    /// 请求还在，合成器会在条件满足时再锁、再报一次 true）
+    PointerLocked(bool),
+    /// 锁定期间指针的相对位移（逻辑像素，带加速）；锁定期间不再有 [`Event::PointerMotion`]
+    RelativeMotion { dx: f64, dy: f64 },
 }
 
 /// 一个光标图案（RGBA，未预乘）。
@@ -231,6 +244,11 @@ struct State {
     shortcuts_manager: Option<ZwpKeyboardShortcutsInhibitManagerV1>,
     shortcuts_inhibitor: Option<ZwpKeyboardShortcutsInhibitorV1>,
     keyboard_seat: Option<wl_seat::WlSeat>,
+    /// 指针锁定（远程鼠标）：合成器不支持时两个管理器都是 None，[`Window::set_pointer_lock`] 报「不支持」
+    constraints: Option<ZwpPointerConstraintsV1>,
+    relative_manager: Option<ZwpRelativePointerManagerV1>,
+    /// 现在的锁定请求（含合成器还没批准的）和它的相对位移对象；锁着时本机指针藏起来
+    lock: Option<(ZwpLockedPointerV1, ZwpRelativePointerV1)>,
     size: Option<(u32, u32)>,
     /// 收到过几次窗口配置：换全屏目标后等合成器的下一次配置用（两块屏一样大时尺寸不变，只能数次数）
     configures: u64,
@@ -358,6 +376,9 @@ impl Window {
         let shortcuts_manager = globals
             .bind::<ZwpKeyboardShortcutsInhibitManagerV1, _, _>(&qh, 1..=1, ())
             .ok();
+        // 远程鼠标（相对位移）用；GNOME 都有，没有时菜单里远程鼠标点了没有效果、不影响别的
+        let constraints = globals.bind::<ZwpPointerConstraintsV1, _, _>(&qh, 1..=1, ()).ok();
+        let relative_manager = globals.bind::<ZwpRelativePointerManagerV1, _, _>(&qh, 1..=1, ()).ok();
         // 叠加图层用；合成器都支持，万一不支持就没有悬浮球，画面照常
         let subcompositor = SubcompositorState::bind(compositor.wl_compositor().clone(), &globals, &qh).ok();
         // HDR 输出用（GNOME 48 起有）；没有就只能显示普通画面，下面等窗口配置的同时收它报的能力
@@ -377,6 +398,9 @@ impl Window {
                 shortcuts_manager,
                 shortcuts_inhibitor: None,
                 keyboard_seat: None,
+                constraints,
+                relative_manager,
+                lock: None,
                 size: None,
                 configures: 0,
                 closed: false,
@@ -539,6 +563,54 @@ impl Window {
         self.state.cursor = cursor;
         self.state.apply_cursor()?;
         self.conn.flush().map_err(err("send the cursor to the compositor"))
+    }
+
+    /// 远程鼠标：把指针锁在窗口里，只收相对位移（[`Event::RelativeMotion`]）；锁着时本机指针藏起来。
+    /// 返回合成器支持不支持（不支持时什么也没做）。锁是请求式的：合成器等指针在窗口里、窗口有焦点时才批准，
+    /// 批准了发 [`Event::PointerLocked`]；请求用持久的，被临时解除（失去焦点）后条件满足会自己再锁。
+    /// `on = false` 立即解除，并补一个 `PointerLocked(false)`
+    pub fn set_pointer_lock(&mut self, on: bool) -> Result<bool> {
+        let (Some(constraints), Some(manager)) = (self.state.constraints.clone(), self.state.relative_manager.clone())
+        else {
+            return Ok(false);
+        };
+        if on {
+            let Some(pointer) = self.state.pointer.clone() else {
+                return Ok(false);
+            };
+            if self.state.lock.is_none() {
+                let qh = self.queue.handle();
+                let locked = constraints.lock_pointer(
+                    self.state.window.wl_surface(),
+                    &pointer,
+                    None,
+                    zwp_pointer_constraints_v1::Lifetime::Persistent,
+                    &qh,
+                    (),
+                );
+                let relative = manager.get_relative_pointer(&pointer, &qh, ());
+                self.state.lock = Some((locked, relative));
+                // 锁着时藏本机指针（apply_cursor 看 lock）
+                self.state.apply_cursor().ok();
+            }
+        } else if let Some((locked, relative)) = self.state.lock.take() {
+            relative.destroy();
+            locked.destroy();
+            self.state.events.push(Event::PointerLocked(false));
+            self.state.apply_cursor().ok();
+        }
+        self.conn.flush().map_err(err("send the pointer lock to the compositor"))?;
+        Ok(true)
+    }
+
+    /// 有没有锁定请求在（含合成器还没批准的）
+    pub fn pointer_lock_requested(&self) -> bool {
+        self.state.lock.is_some()
+    }
+
+    /// 合成器有没有指针锁定（两个协议都有）
+    pub fn pointer_lock_supported(&self) -> bool {
+        self.state.constraints.is_some() && self.state.relative_manager.is_some()
     }
 
     /// 合成器的格式反馈；合成器不支持 dmabuf v4 时为 None。
@@ -758,7 +830,7 @@ impl State {
         let (Some(pointer), Some(serial)) = (self.pointer.clone(), self.pointer_serial) else {
             return Ok(());
         };
-        let Some(c) = self.cursor.clone() else {
+        let Some(c) = self.cursor.clone().filter(|_| self.lock.is_none()) else {
             pointer.set_cursor(serial, None, 0, 0);
             return Ok(());
         };
@@ -984,6 +1056,63 @@ impl Dispatch<ZwpKeyboardShortcutsInhibitorV1, ()> for State {
             zwp_keyboard_shortcuts_inhibitor_v1::Event::Active => state.events.push(Event::ShortcutsInhibited(true)),
             zwp_keyboard_shortcuts_inhibitor_v1::Event::Inactive => state.events.push(Event::ShortcutsInhibited(false)),
             _ => {}
+        }
+    }
+}
+
+// 远程鼠标的几个对象：两个管理器没有事件；锁定对象报「生效 / 解除」，相对指针对象报位移
+impl Dispatch<ZwpPointerConstraintsV1, ()> for State {
+    fn event(
+        _: &mut Self,
+        _: &ZwpPointerConstraintsV1,
+        _: zwp_pointer_constraints_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<ZwpRelativePointerManagerV1, ()> for State {
+    fn event(
+        _: &mut Self,
+        _: &ZwpRelativePointerManagerV1,
+        _: zwp_relative_pointer_manager_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<ZwpLockedPointerV1, ()> for State {
+    fn event(
+        state: &mut Self,
+        _: &ZwpLockedPointerV1,
+        event: zwp_locked_pointer_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        match event {
+            zwp_locked_pointer_v1::Event::Locked => state.events.push(Event::PointerLocked(true)),
+            zwp_locked_pointer_v1::Event::Unlocked => state.events.push(Event::PointerLocked(false)),
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<ZwpRelativePointerV1, ()> for State {
+    fn event(
+        state: &mut Self,
+        _: &ZwpRelativePointerV1,
+        event: zwp_relative_pointer_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let zwp_relative_pointer_v1::Event::RelativeMotion { dx, dy, .. } = event {
+            state.events.push(Event::RelativeMotion { dx, dy });
         }
     }
 }

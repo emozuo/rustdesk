@@ -327,6 +327,8 @@ message CursorData {
 message CursorPosition {
   sint32 x = 1;
   sint32 y = 2;
+  // DreamDesk: the controlled side's cursor is hidden by a program (3D software while dragging); only set while a pro session uses relative mouse
+  bool dd_hidden = 1001;
 }
 
 message Hash {

@@ -200,7 +200,7 @@ Widget _mouseMode(FFI ffi) {
   final reason = ddRemoteMouseUnavailable(ffi);
   return Builder(
     builder: (_) {
-      // 按此刻实际在用的标（不是记住的）：记住远程鼠标、这次却没打开（用不了、按 Ctrl+Alt 临时退出、出错被 RustDesk 关掉）时实际是本地鼠标
+      // 按此刻实际在用的标（不是记住的）：记住被控端鼠标、这次却没打开（用不了、按 Ctrl+Alt 临时退出、出错被 RustDesk 关掉）时实际是主控端鼠标
       final remote = ffi.inputModel.relativeMouseMode.value;
       void choose(bool? v) async {
         if (v == null) return;
@@ -210,26 +210,28 @@ Widget _mouseMode(FFI ffi) {
         ddSyncPeerWindows(ffi.id);
       }
 
+      // 每项下面一行说明（照原型）。外面的 width: 0 让说明不把菜单撑宽：量宽度时它算 0，排版时被 stretch 拉到菜单宽、按菜单宽折行
+      Widget note(String text) => SizedBox(
+            width: 0,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(_kItemTextIndent, 0, 10, 6),
+              child: Text(text, style: const TextStyle(fontSize: 12, height: 1.5, color: _kText2)),
+            ),
+          );
+
       return _group([
         _head(translate('Mouse mode')),
-        _pick(ffi, on: !remote, onPressed: () => choose(false), child: Text(translate('Local mouse'))),
+        _pick(ffi, on: !remote, onPressed: () => choose(false), child: Text(translate("Use the controller's mouse"))),
+        note(translate('Better pointer response; some software or games may not work')),
         _pick(ffi,
-            on: remote, onPressed: reason.isEmpty ? () => choose(true) : null, child: Text(translate('Remote mouse'))),
-        // 能用时说明什么时候用、怎么退出；用不了时写原因（照原型）。外面的 width: 0 让这段说明不把菜单撑宽：
-        // 量宽度时它算 0，排版时被上面的 stretch 拉到菜单宽、按菜单宽折行
-        SizedBox(
-          width: 0,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(_kItemTextIndent, 0, 10, 6),
-            child: Text(
-                reason.isNotEmpty
-                    ? reason
-                    // 退出远程鼠标的快捷键照 RustDesk（relative_mouse_model.dart）：macOS 是 Cmd+G，其它是 Ctrl+Alt
-                    : translate(
-                        'Use the remote mouse to turn the view in games and 3D software; press {${isMacOS ? 'Cmd+G' : 'Ctrl+Alt'}} to exit'),
-                style: const TextStyle(fontSize: 12, height: 1.5, color: _kText2)),
-          ),
-        ),
+            on: remote,
+            onPressed: reason.isEmpty ? () => choose(true) : null,
+            child: Text(translate("Use the controlled side's mouse"))),
+        // 能用时说明特点、怎么退出；用不了时写原因。退出的快捷键照 RustDesk（relative_mouse_model.dart）：macOS 是 Cmd+G，其它是 Ctrl+Alt
+        note(reason.isNotEmpty
+            ? reason
+            : translate(
+                'Better compatibility, but the pointer display is affected by network latency; press {${isMacOS ? 'Cmd+G' : 'Ctrl+Alt'}} to exit')),
       ]);
     },
   );
