@@ -986,5 +986,6 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Software encoding", "软编"),
         ("Hardware decoding", "硬解"),
         ("Software decoding", "软解"),
+        ("Cannot connect to this computer itself", "不能连接本机"),
     ].iter().cloned().collect();
 }

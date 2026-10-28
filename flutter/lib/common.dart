@@ -2603,6 +2603,11 @@ connect(BuildContext context, String id,
   id = id.replaceAll(' ', '');
   final oldId = id;
   id = await bind.mainHandleRelayId(id: id);
+  // DreamDesk 受管版：不许连本机（网关列出的工作站里可能就有自己这台，连上去是画面套画面）
+  if (kDdManaged && id == await bind.mainGetMyId()) {
+    showToast(translate('Cannot connect to this computer itself'));
+    return;
+  }
   forceRelay = id != oldId || forceRelay;
   assert(!(isFileTransfer && isTcpTunneling && isRDP),
       "more than one connect type");
