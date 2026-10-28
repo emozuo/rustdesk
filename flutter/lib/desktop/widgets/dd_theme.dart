@@ -32,9 +32,10 @@ class DdColors {
   static const ink = Color(0xFF1F2329);
   static const ink2 = Color(0xFF4E5560);
   static const ink3 = Color(0xFF9AA0A8);
-  static const accent = Color(0xFF2F6FEA);
-  static const accentHover = Color(0xFF2A63D2);
-  static const accentPress = Color(0xFF2457BD);
+  // 10-28 取自 UU 截图的按钮蓝；悬停 / 按下照原来的比例压暗
+  static const accent = Color(0xFF3A7BFB);
+  static const accentHover = Color(0xFF346FE2);
+  static const accentPress = Color(0xFF2E62C9);
   static const accentSoft = Color(0xFFE8F0FE);
   /// 浅蓝底（accentSoft）上的细边（控制中心「允许对方」里开着的那几个；原型 dd-cm--on）
   static const accentBorder = Color(0xFFB9CDF7);

@@ -3,7 +3,7 @@
 :root {
   --chrome: #f0f5f8; --pane: #f7fbfe; --surface: #ffffff; --selected: #e4e9ec; --hover: #0000000f;
   --line: #dcdfe4; --line-strong: #8a9099; --ink: #1f2329; --ink-2: #4e5560; --ink-3: #9aa0a8;
-  --accent: #2f6fea; --accent-hover: #2a63d2; --accent-press: #2457bd; --accent-soft: #e8f0fe; --on-accent: #ffffff;
+  --accent: #3a7bfb; --accent-hover: #346fe2; --accent-press: #2e62c9; --accent-soft: #e8f0fe; --on-accent: #ffffff;
   --online: #22c55e; --mine: #14b8a6; --busy: #f97316; --offline: #9aa0a8; --danger: #e5484d; --danger-text: #d13438;
   --pill: #1f2329; --os-windows: #3b7bf6; --os-linux: #f08a24; --os-mac: #1f2329;
   --ball: #f1f1f2f7; --ball-band: #e3e3e6; --ball-band-hot: #b1cbff; --ball-ink: #474d57; --scrim: #00000066; --monitor-bg: #57575eb8;
