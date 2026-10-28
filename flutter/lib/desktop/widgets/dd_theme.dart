@@ -37,8 +37,6 @@ class DdColors {
   static const accentHover = Color(0xFF346FE2);
   static const accentPress = Color(0xFF2E62C9);
   static const accentSoft = Color(0xFFE8F0FE);
-  /// 浅蓝底（accentSoft）上的细边（控制中心「允许对方」里开着的那几个；原型 dd-cm--on）
-  static const accentBorder = Color(0xFFB9CDF7);
   static const onAccent = Color(0xFFFFFFFF);
   /// 主按钮禁用时的底
   static const disabledFill = Color(0xFFC9CDD4);

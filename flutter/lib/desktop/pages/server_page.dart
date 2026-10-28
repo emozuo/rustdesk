@@ -6,11 +6,9 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter_hbb/common/widgets/audio_input.dart';
 import 'package:flutter_hbb/consts.dart';
-import 'package:flutter_hbb/desktop/widgets/dd_cm_view.dart';
 import 'package:flutter_hbb/desktop/widgets/tabbar_widget.dart';
 import 'package:flutter_hbb/models/chat_model.dart';
 import 'package:flutter_hbb/models/cm_file_model.dart';
-import 'package:flutter_hbb/utils/dd_kiosk.dart';
 import 'package:flutter_hbb/utils/platform_channel.dart';
 import 'package:get/get.dart';
 import 'package:percent_indicator/linear_percent_indicator.dart';
@@ -457,25 +455,6 @@ class _CmHeaderState extends State<_CmHeader>
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    // 拷贝了下面原来聊天按钮的条件和动作：上游改了这里要同步（dreamdesk/docs/合并上游检查清单.md 第 1 节）
-    if (kDdManaged) {
-      return DdCmHeader(
-        client: client,
-        time: _time,
-        onChat: !client.authorized ||
-                (client.type_() != ClientType.remote &&
-                    client.type_() != ClientType.file &&
-                    client.type_() != ClientType.camera)
-            ? null
-            : () => checkClickTime(client.id, () {
-                  if (client.type_() == ClientType.file) {
-                    gFFI.chatModel.toggleCMFilePage();
-                  } else {
-                    gFFI.chatModel.toggleCMChatPage(MessageKey(client.peerId, client.id));
-                  }
-                }),
-      );
-    }
     return Container(
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(10.0),
@@ -687,17 +666,6 @@ class _PrivilegeBoardState extends State<_PrivilegeBoard> {
     final canModifyPermission =
         bind.mainGetBuildinOption(key: kOptionEnablePermChangeInAcceptWindow) !=
             'N';
-    // onToggle 拷贝了下面原来权限按钮 onTap 的调用：上游改了这里要同步（dreamdesk/docs/合并上游检查清单.md 第 1 节）
-    if (kDdManaged) {
-      return DdCmPermissions(
-        client: client,
-        canModify: canModifyPermission,
-        onToggle: (name, enabled, apply) => checkClickTime(client.id, () {
-          bind.cmSwitchPermission(connId: client.id, name: name, enabled: enabled);
-          apply();
-        }),
-      );
-    }
     return Container(
       width: double.infinity,
       height: 160.0,
@@ -1175,15 +1143,6 @@ class _CmControlPanel extends StatelessWidget {
       String? tooltip,
       GestureTapDownCallback? onTapDown}) {
     assert(!(onClick == null && onTapDown == null));
-    if (kDdManaged) {
-      return ddCmButton(
-        color: color,
-        text: text,
-        tooltip: tooltip,
-        onClick: onClick == null ? null : () => checkClickTime(client.id, onClick),
-        onTapDown: onTapDown == null ? null : (d) => checkClickTime(client.id, () => onTapDown(d)),
-      );
-    }
     Widget textWidget;
     if (icon != null) {
       textWidget = Text(

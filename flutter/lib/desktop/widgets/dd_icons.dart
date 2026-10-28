@@ -67,7 +67,6 @@ enum DdIcon {
   hardDrive,
   plus,
   triangleAlert,
-  messageSquare,
   signalBars,
   winMinimize,
   winMaximize,
@@ -206,8 +205,6 @@ const Map<DdIcon, String> _stroke = {
   DdIcon.plus: '<path d="M5 12h14"/><path d="M12 5v14"/>',
   // lucide: triangle-alert
   DdIcon.triangleAlert: '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
-  // lucide: message-square
-  DdIcon.messageSquare: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
   // lucide: chart-no-axes-column-increasing
   DdIcon.signalBars: '<line x1="12" x2="12" y1="20" y2="10"/><line x1="18" x2="18" y1="20" y2="4"/><line x1="6" x2="6" y1="20" y2="16"/>',
   // lucide: minus

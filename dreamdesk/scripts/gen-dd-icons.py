@@ -25,7 +25,6 @@ STROKE = [  # Lucide
     ('chevronLeft', 'chevron-left'), ('chevronRight', 'chevron-right'), ('house', 'house'),
     ('folderPlus', 'folder-plus'), ('trash', 'trash-2'), ('search', 'search'), ('folder', 'folder'),
     ('file', 'file'), ('hardDrive', 'hard-drive'), ('plus', 'plus'), ('triangleAlert', 'triangle-alert'),
-    ('messageSquare', 'message-square'),
     # 照 UU 的信号格（三根竖条）
     ('signalBars', 'chart-no-axes-column-increasing'),
     # 窗口按钮（10-27 用户选：和标题栏上别的图标同一家，不用 Fluent）
