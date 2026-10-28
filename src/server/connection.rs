@@ -2388,6 +2388,12 @@ impl Connection {
             block_input: self.block_input,
             privacy_mode: self.privacy_mode,
             from_switch: self.from_switch,
+            #[cfg(feature = "dd-managed")]
+            dd_account: crate::ddpro::ticket_conns::account(self.inner.id()).unwrap_or_default(),
+            #[cfg(not(feature = "dd-managed"))]
+            dd_account: String::new(),
+            dd_device: self.lr.dd_device.clone(),
+            dd_platform: self.lr.my_platform.clone(),
         });
     }
 

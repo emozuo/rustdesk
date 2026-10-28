@@ -295,7 +295,8 @@ void runConnectionManagerScreen() async {
     const DesktopServerPage(),
     MyTheme.currentThemeMode(),
   );
-  final hide = await bind.cmGetConfig(name: "hide_cm") == 'true';
+  // 受管版：连接管理小窗永远藏着（面板在主窗口里），进程照常跑，它还管收文件、剪贴板、语音通话
+  final hide = kDdManaged || await bind.cmGetConfig(name: "hide_cm") == 'true';
   gFFI.serverModel.hideCm = hide;
   if (hide) {
     await hideCmWindow(isStartup: true);

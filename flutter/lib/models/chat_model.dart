@@ -19,6 +19,7 @@ import '../consts.dart';
 import '../common.dart';
 import '../common/widgets/overlay.dart';
 import '../main.dart';
+import '../utils/dd_kiosk.dart';
 import 'model.dart';
 
 class MessageKey {
@@ -370,7 +371,8 @@ class ChatModel with ChangeNotifier {
       return;
     }
     if (text.isEmpty) return;
-    if (desktopType == DesktopType.cm) {
+    // 受管版的连接管理小窗永远藏着，聊天消息也不把它弹出来
+    if (desktopType == DesktopType.cm && !kDdManaged) {
       await showCmWindow();
     }
     String? peerId;

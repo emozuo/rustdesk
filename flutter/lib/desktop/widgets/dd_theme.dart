@@ -57,6 +57,11 @@ class DdColors {
   static const controlBadge = Color(0xFF8FB6F2);
   /// 会话类型小标签的灰框（原型 HomeControllingOpen）
   static const tagBorder = Color(0xFFC9CDD4);
+  /// 「本机被控中」面板（被控端，原型 HostPanel / HostCollapsed）：展开的大面板底、收起的左栏卡片横向渐变两端、连接行的细边
+  static const hostBlue = Color(0xFF3183FF);
+  static const hostCardFrom = Color(0xFF338BFF);
+  static const hostCardTo = Color(0xFF4B99FF);
+  static const hostRowBorder = Color(0xFFEBEEF3);
   /// 远程画面左上角模式提示条的灰底（通用模式，原型 RemoteDialogs）
   static const modeBadge = Color(0xFF57575E);
   /// 文件传输列表里的文件夹图标（原型 FileTransfer）

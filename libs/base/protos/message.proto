@@ -88,6 +88,8 @@ message LoginRequest {
   string avatar = 17;
   // DreamDesk connection ticket (dreamdesk-gateway docs/协议-连接票与设备签名.md); far from upstream numbers
   bytes dd_ticket = 1001;
+  // DreamDesk controller computer name, shown in the controlled-side panel only; self-reported, never used for any decision
+  string dd_device = 1002;
 }
 
 message Terminal {

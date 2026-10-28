@@ -343,7 +343,17 @@ pub enum Data {
         block_input: bool,
         privacy_mode: bool,
         from_switch: bool,
+        // DreamDesk 受管版被控端面板用：票里签名的账号名、对方自报的电脑名和系统（只显示）。老消息没有就是空
+        #[serde(default)]
+        dd_account: String,
+        #[serde(default)]
+        dd_device: String,
+        #[serde(default)]
+        dd_platform: String,
     },
+    // DreamDesk 受管版被控端面板：主窗口经 `_cm_panel` 通道向连接管理器要连接列表（None 是请求，Some 是回复）/ 断开某个连接（-1 是全部）
+    DdHostList(Option<String>),
+    DdHostClose(i32),
     ChatMessage {
         text: String,
     },

@@ -2745,6 +2745,12 @@ pub fn main_get_common(key: String) -> String {
         };
         #[cfg(not(target_os = "linux"))]
         return String::new();
+    } else if key == "dd-host-list" {
+        // DreamDesk 受管版主窗口的「本机被控中」面板：问连接管理器现在谁连着（src/ddpro/host_panel.rs）
+        #[cfg(all(feature = "dd-managed", not(any(target_os = "android", target_os = "ios"))))]
+        return crate::ddpro::host_panel::list();
+        #[cfg(not(all(feature = "dd-managed", not(any(target_os = "android", target_os = "ios")))))]
+        return "[]".to_owned();
     } else if key == "permanent-password-set" {
         return ui_interface::is_permanent_password_set().to_string();
     } else if key == "local-permanent-password-set" {
@@ -2827,6 +2833,20 @@ fn verified_update_artifact_for_release_page_url(
 }
 
 pub fn main_set_common(_key: String, _value: String) {
+    // DreamDesk 受管版被控端面板（src/ddpro/host_panel.rs）：主窗口让连接管理器断开连接（-1 是全部）；连接管理器让主窗口出来
+    #[cfg(all(feature = "dd-managed", not(any(target_os = "android", target_os = "ios"))))]
+    {
+        if _key == "dd-host-close" {
+            if let Ok(id) = _value.parse::<i32>() {
+                crate::ddpro::host_panel::request_close(id);
+            }
+            return;
+        }
+        if _key == "dd-host-open-main" {
+            crate::ddpro::host_panel::open_main_window();
+            return;
+        }
+    }
     #[cfg(target_os = "windows")]
     if _key == "install-printer" && crate::platform::is_win_10_or_greater() {
         std::thread::spawn(move || {

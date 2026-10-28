@@ -124,6 +124,8 @@ async fn send_ticket_login(lc: &Arc<RwLock<LoginConfigHandler>>, ticket: Vec<u8>
         .create_login_msg(String::new(), String::new(), Vec::new());
     if let Some(message::Union::LoginRequest(lr)) = msg.union.as_mut() {
         lr.dd_ticket = ticket.into();
+        // 只给被控端面板显示用的电脑名，被控端不据此做任何判断
+        lr.dd_device = crate::whoami_hostname();
     }
     allow_err!(peer.send(&msg).await);
 }

@@ -6,20 +6,28 @@ use std::{collections::HashMap, sync::Mutex};
 
 lazy_static::lazy_static! {
     static ref TICKETS: Mutex<HashMap<i32, String>> = Default::default();
+    // 票里签名的账号显示名（`sub_name`），给被控端面板显示
+    static ref ACCOUNTS: Mutex<HashMap<i32, String>> = Default::default();
 }
 
 /// 验票通过、开始走认证成功的后续之前记下（审计在后续里发）
-pub fn insert(conn_id: i32, jti: String) {
+pub fn insert(conn_id: i32, jti: String, account: String) {
     TICKETS.lock().unwrap().insert(conn_id, jti);
+    ACCOUNTS.lock().unwrap().insert(conn_id, account);
 }
 
 /// 认证没走成，或者连接关了
 pub fn remove(conn_id: i32) {
     TICKETS.lock().unwrap().remove(&conn_id);
+    ACCOUNTS.lock().unwrap().remove(&conn_id);
 }
 
 pub fn get(conn_id: i32) -> Option<String> {
     TICKETS.lock().unwrap().get(&conn_id).cloned()
+}
+
+pub fn account(conn_id: i32) -> Option<String> {
+    ACCOUNTS.lock().unwrap().get(&conn_id).cloned()
 }
 
 /// 心跳请求体加 `dd_tickets`：只列 `conns`（还连着的）里凭票认证的。没有也带空对象：带了就是完整状态，服务端据此清掉

@@ -16,6 +16,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common.dart' hide Dialog;
 import 'package:flutter_hbb/desktop/pages/desktop_setting_page.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_tab_page.dart';
+import 'package:flutter_hbb/desktop/widgets/dd_host_model.dart';
+import 'package:flutter_hbb/desktop/widgets/dd_host_panel.dart';
 import 'package:flutter_hbb/desktop/widgets/dd_icons.dart';
 import 'package:flutter_hbb/desktop/widgets/dd_local_sessions.dart';
 import 'package:flutter_hbb/desktop/widgets/dd_titlebar_common.dart';
@@ -271,7 +273,13 @@ class _DdHomePageState extends State<DdHomePage> with WidgetsBindingObserver {
           child: Column(children: [
             _TitleBar(onAbout: () => _openSettings(SettingsTabKey.about)),
             Expanded(
-              child: Row(children: [
+              // 本机被别人控制、被控面板展开着：标题栏以下整块是被控面板，左栏也不要；没登录时同样盖住登录页
+              // （dd_host_panel.dart；收起时左栏最上面是「本机被控中」小卡片）
+              child: ListenableBuilder(
+                listenable: ddHost,
+                builder: (context, _) => ddHost.expanded && ddHost.hasClients
+                    ? const DdHostPanel()
+                    : Row(children: [
                   SizedBox(width: DdSize.sidebarWidth, child: _sidebar()),
                   // 内容区照 UU：上边、左边一条细线和左栏分开，左上角圆角（外层是线的颜色，里层错开 1 像素铺内容区的底）
                   Expanded(
@@ -306,6 +314,7 @@ class _DdHomePageState extends State<DdHomePage> with WidgetsBindingObserver {
                     ),
                   ),
                 ]),
+              ),
             ),
           ]),
         ),
@@ -324,6 +333,8 @@ class _DdHomePageState extends State<DdHomePage> with WidgetsBindingObserver {
   Widget _sidebar() {
     final signedIn = _signedIn;
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      // 本机被别人控制、被控面板收起时的「本机被控中」小卡片（没人连进来、或面板展开着时它自己不占地方）
+      const DdHostCard(),
       const SizedBox(height: 6),
       _SideRow(
         icon: ddIcon(DdIcon.devices),

@@ -34,6 +34,8 @@ STROKE = [  # Lucide
     ('sliders', 'sliders-horizontal'), ('network', 'network'), ('printer', 'printer'),
     # 首页「被控中」（本机正连着这台；10-28 原型 HomeControlling）
     ('screenShare', 'screen-share'),
+    # 本机被控面板的收起 / 展开（原型 HostPanel）
+    ('minimize2', 'minimize-2'), ('maximize2', 'maximize-2'),
 ]
 FILL = [  # (枚举名, 前缀, 原文件名)
     ('menu', 'fluent', 'navigation_20_regular'),

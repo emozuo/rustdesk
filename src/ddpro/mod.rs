@@ -57,6 +57,9 @@ pub mod clone_check;
 // 受管模式：凭票认证的连接 → 票编号，连接审计和每拍心跳都带
 #[cfg(feature = "dd-managed")]
 pub mod ticket_conns;
+// 受管模式：被控端面板的数据（连接管理器 ↔ 主窗口），连接管理器窗口藏起来后由主窗口里的「本机被控中」面板代替
+#[cfg(all(feature = "dd-managed", feature = "flutter", not(any(target_os = "android", target_os = "ios"))))]
+pub mod host_panel;
 // 受管模式：座位（kiosk 瘦客户机）不当被控端
 #[cfg(all(feature = "dd-managed", target_os = "linux"))]
 pub mod seat;

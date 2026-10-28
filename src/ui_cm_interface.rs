@@ -554,8 +554,12 @@ impl<T: InvokeUiCM> IpcTaskRunner<T> {
                         }
                         Ok(Some(data)) => {
                             match data {
-                                Data::Login{id, is_file_transfer, is_view_camera, is_terminal, port_forward, peer_id, name, avatar, authorized, keyboard, clipboard, audio, file, file_transfer_enabled: _file_transfer_enabled, restart, recording, block_input, privacy_mode, from_switch} => {
+                                Data::Login{id, is_file_transfer, is_view_camera, is_terminal, port_forward, peer_id, name, avatar, authorized, keyboard, clipboard, audio, file, file_transfer_enabled: _file_transfer_enabled, restart, recording, block_input, privacy_mode, from_switch, dd_account, dd_device, dd_platform} => {
                                     log::debug!("conn_id: {}", id);
+                                    #[cfg(all(feature = "dd-managed", feature = "flutter"))]
+                                    crate::ddpro::host_panel::on_login(id, dd_account, dd_device, dd_platform);
+                                    #[cfg(not(all(feature = "dd-managed", feature = "flutter")))]
+                                    let _ = (dd_account, dd_device, dd_platform);
                                     self.cm.add_connection(id, is_file_transfer, is_view_camera, is_terminal, port_forward, peer_id, name, avatar, authorized, keyboard, clipboard, audio, file, restart, recording, block_input, privacy_mode, from_switch, self.tx.clone());
                                     self.conn_id = id;
                                     #[cfg(target_os = "windows")]
@@ -854,6 +858,9 @@ pub async fn start_ipc<T: InvokeUiCM>(cm: ConnectionManager<T>) {
         ContextSend::enable(enabled);
         *lock = Some(enabled);
     }
+    // 受管版被控端面板：主窗口经另一条通道看连接列表、断开连接
+    #[cfg(all(feature = "dd-managed", feature = "flutter"))]
+    tokio::spawn(crate::ddpro::host_panel::serve());
     match ipc::new_listener("_cm").await {
         Ok(mut incoming) => {
             while let Some(result) = incoming.next().await {

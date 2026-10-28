@@ -13,8 +13,10 @@ import 'package:window_manager/window_manager.dart';
 import '../common.dart';
 import '../common/formatter/id_formatter.dart';
 import '../desktop/pages/server_page.dart' as desktop;
+import '../desktop/widgets/dd_host_model.dart';
 import '../desktop/widgets/tabbar_widget.dart';
 import '../mobile/pages/server_page.dart';
+import '../utils/dd_kiosk.dart';
 import 'model.dart';
 
 const kLoginDialogTag = "LOGIN";
@@ -157,6 +159,7 @@ class ServerModel with ChangeNotifier {
       }
 
       if (desktopType == DesktopType.cm) {
+        if (kDdManaged) DdHostCm.onTick(_clients.where((c) => !c.disconnected).length);
         final res = await bind.cmCheckClientsLength(length: _clients.length);
         if (res != null) {
           debugPrint("clients not match!");
@@ -559,6 +562,8 @@ class ServerModel with ChangeNotifier {
       if (desktopType == DesktopType.cm && !hideCm) {
         showCmWindow();
       }
+      // 受管版没有小窗：把主窗口拉出来，由主窗口里的「本机被控中」面板显示
+      if (kDdManaged && desktopType == DesktopType.cm) DdHostCm.onClientAdded();
       scrollToBottom();
       notifyListeners();
       if (isAndroid && !client.authorized) showLoginDialog(client);
@@ -752,7 +757,10 @@ class ServerModel with ChangeNotifier {
         _clients[index].inVoiceCall = client.inVoiceCall;
         _clients[index].incomingVoiceCall = client.incomingVoiceCall;
         if (client.incomingVoiceCall) {
-          if (isAndroid) {
+          if (kDdManaged) {
+            // 受管版没有小窗，来电自动接听，与专业模式一致
+            DdHostCm.onIncomingVoiceCall(client.id);
+          } else if (isAndroid) {
             showVoiceCallDialog(client);
           } else {
             // Has incoming phone call, let's set the window on top.

@@ -53,7 +53,7 @@ impl Connection {
         );
         let id = self.inner.id();
         // 连着期间一直记着（连接审计和每拍心跳都带），连接关闭时在 ddpro::server::on_conn_closed 里删
-        crate::ddpro::ticket_conns::insert(id, jti);
+        crate::ddpro::ticket_conns::insert(id, jti, t.sub_name.clone());
         // 票由服务端在 AD 登录、授权检查之后才签发，二次验证不再单独要
         self.require_2fa = None;
         let keep = self.send_logon_response_and_keep_alive().await;
