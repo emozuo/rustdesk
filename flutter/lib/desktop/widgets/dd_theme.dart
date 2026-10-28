@@ -46,6 +46,17 @@ class DdColors {
   static const mine = Color(0xFF14B8A6);
   static const busy = Color(0xFFF97316);
   static const offline = Color(0xFF9AA0A8);
+  /// 用不了的操作（本机详情里的文件传输 / 终端 / 端口映射，UU 的灰；原型 HostCollapsed）
+  static const unavailable = Color(0xFF9B9DA1);
+  /// 首页「被控中」（本机正连着这台，UU 的蓝；原型 HomeControlling）：横条底、边、主字、副字和中间竖线，左栏会话数角标的框
+  static const controlBg = Color(0xFFDEEFFF);
+  static const controlBorder = Color(0xFFC4DEFD);
+  static const controlText = Color(0xFF2B7AF0);
+  static const controlSub = Color(0xFF4A8EF0);
+  static const controlDivider = Color(0xFFB3D2FB);
+  static const controlBadge = Color(0xFF8FB6F2);
+  /// 会话类型小标签的灰框（原型 HomeControllingOpen）
+  static const tagBorder = Color(0xFFC9CDD4);
   /// 远程画面左上角模式提示条的灰底（通用模式，原型 RemoteDialogs）
   static const modeBadge = Color(0xFF57575E);
   /// 文件传输列表里的文件夹图标（原型 FileTransfer）

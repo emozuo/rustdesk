@@ -8,7 +8,9 @@ import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/common/widgets/dialog.dart';
 import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/models/state_model.dart';
+import 'package:flutter_hbb/desktop/widgets/dd_local_sessions.dart';
 import 'package:flutter_hbb/desktop/widgets/tabbar_widget.dart';
+import 'package:flutter_hbb/utils/dd_kiosk.dart';
 import 'package:flutter_hbb/utils/multi_window_manager.dart';
 import 'package:flutter_hbb/models/model.dart';
 import 'package:flutter_hbb/models/terminal_copy_shortcut.dart';
@@ -504,6 +506,10 @@ class _TerminalTabPageState extends State<TerminalTabPage> {
     rustDeskWinManager.setMethodHandler((call, fromWindowId) async {
       print(
           "[Remote Terminal] call ${call.method} with args ${call.arguments} from window $fromWindowId");
+      // DreamDesk 受管版：首页的「断开远控」，照这里关标签的做法关（dd_local_sessions.dart）
+      if (kDdManaged && await ddHandleSessionCall(call, tabController, DdSessionKind.terminal, close: _closeTab)) {
+        return true;
+      }
       if (call.method == kWindowEventNewTerminal) {
         final args = jsonDecode(call.arguments);
         final id = args['id'];

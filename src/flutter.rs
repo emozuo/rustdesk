@@ -1373,6 +1373,8 @@ pub fn session_add(
         conn_token,
     );
 
+    #[cfg(feature = "dd-pro")]
+    crate::ddpro::sessions::on_added(&session.get_id(), conn_type);
     let session = Arc::new(session.clone());
     sessions::insert_session(session_id.to_owned(), conn_type, session.clone());
 
@@ -2273,6 +2275,12 @@ pub mod sessions {
                 break;
             }
         }
+    }
+
+    /// DreamDesk：主窗口首页列本机正开着的会话（src/ddpro/sessions.rs）
+    #[cfg(feature = "dd-pro")]
+    pub fn dd_keys() -> Vec<(String, ConnType)> {
+        SESSIONS.read().unwrap().keys().cloned().collect()
     }
 
     #[inline]

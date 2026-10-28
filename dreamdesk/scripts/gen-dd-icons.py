@@ -32,6 +32,8 @@ STROKE = [  # Lucide
     ('winMinimize', 'minus'), ('winMaximize', 'square'), ('winClose', 'x'),
     # 设置页左侧分类（10-27 用户：Material 换成 Lucide；安全、显示、账户、关于用已有的 shield / monitor / user / info）
     ('sliders', 'sliders-horizontal'), ('network', 'network'), ('printer', 'printer'),
+    # 首页「被控中」（本机正连着这台；10-28 原型 HomeControlling）
+    ('screenShare', 'screen-share'),
 ]
 FILL = [  # (枚举名, 前缀, 原文件名)
     ('menu', 'fluent', 'navigation_20_regular'),

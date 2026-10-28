@@ -31,6 +31,23 @@ class DdDot extends StatelessWidget {
       Container(width: size, height: size, decoration: BoxDecoration(color: color, shape: BoxShape.circle));
 }
 
+/// 名字后面的小标签（原型 dd.css 的 dd-tag，如「本机」）：浅蓝底、主色字、高 20、4 圆角，和前面的名字隔 6
+class DdTag extends StatelessWidget {
+  final String text;
+  final double fontSize;
+  const DdTag({super.key, required this.text, this.fontSize = 11});
+
+  @override
+  Widget build(BuildContext context) => Container(
+        height: 20,
+        margin: const EdgeInsets.only(left: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 6),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(color: DdColors.accentSoft, borderRadius: BorderRadius.circular(DdRadius.sm)),
+        child: Text(text, style: TextStyle(fontSize: fontSize, fontWeight: FontWeight.w400, color: DdColors.accent)),
+      );
+}
+
 /// 登录用户的头像：主色圆、白字写名字的首字
 class DdAvatar extends StatelessWidget {
   final String name;

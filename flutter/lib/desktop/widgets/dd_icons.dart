@@ -75,6 +75,7 @@ enum DdIcon {
   sliders,
   network,
   printer,
+  screenShare,
   winRestore,
   screen,
   allScreens,
@@ -219,6 +220,8 @@ const Map<DdIcon, String> _stroke = {
   DdIcon.network: '<rect x="16" y="16" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="9" y="2" width="6" height="6" rx="1"/><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3"/><path d="M12 12V8"/>',
   // lucide: printer
   DdIcon.printer: '<path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><path d="M6 9V3a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v6"/><rect x="6" y="14" width="12" height="8" rx="1"/>',
+  // lucide: screen-share
+  DdIcon.screenShare: '<path d="M13 3H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-3"/><path d="M8 21h8"/><path d="M12 17v4"/><path d="m17 8 5-5"/><path d="M17 3h5v5"/>',
 };
 
 /// 填色图标：(viewBox, 内容)。Fluent 的 20 号按 20 像素用

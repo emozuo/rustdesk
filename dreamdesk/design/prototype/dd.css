@@ -246,7 +246,7 @@
 .dd-sr__d { font-size: 12px; line-height: 18px; color: var(--ink-2); margin-top: 2px; }
 .dd-sr--off .dd-sr__l { color: var(--ink-3); }
 .dd-sr--off .dd-sr__d { color: var(--ink-3); }
-.dd-tag { display: inline-flex; align-items: center; height: 20px; padding: 0 6px; border-radius: 4px; font-size: 11px; background: #f2f3f5; color: var(--ink-2); margin-left: 6px; vertical-align: 1px; }
+.dd-tag { display: inline-flex; align-items: center; height: 20px; padding: 0 6px; border-radius: 4px; font-size: 11px; background: var(--accent-soft); color: var(--accent); margin-left: 6px; vertical-align: 1px; }
 .dd-kv { display: grid; grid-template-columns: 96px 1fr; row-gap: 10px; font-size: 13px; }
 .dd-kv span:nth-child(odd) { color: var(--ink-2); }
 

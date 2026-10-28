@@ -65,6 +65,9 @@ pub mod server;
 // 主控端的连接详情（信号格详情里的 IP、采集方式、硬编 / 硬解），界面经 `sessionGetCommon("dd-net-stats")` 查
 #[cfg(feature = "dd-pro")]
 pub mod stats;
+// 主窗口首页的「本机正开着的会话」，界面经 `mainGetCommonSync("dd-sessions")` 查
+#[cfg(all(feature = "dd-pro", feature = "flutter"))]
+pub mod sessions;
 // 专业视频要采集模块直接输出显卡纹理，这在 RustDesk 里绑在 vram 功能上（官方 Windows 版本来就开着）
 #[cfg(all(feature = "dd-pro", windows, feature = "vram"))]
 mod video;

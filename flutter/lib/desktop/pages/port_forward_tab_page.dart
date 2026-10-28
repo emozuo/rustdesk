@@ -6,7 +6,9 @@ import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/models/state_model.dart';
 import 'package:flutter_hbb/desktop/pages/port_forward_page.dart';
+import 'package:flutter_hbb/desktop/widgets/dd_local_sessions.dart';
 import 'package:flutter_hbb/desktop/widgets/tabbar_widget.dart';
+import 'package:flutter_hbb/utils/dd_kiosk.dart';
 import 'package:flutter_hbb/utils/multi_window_manager.dart';
 import 'package:get/get.dart';
 
@@ -59,6 +61,8 @@ class _PortForwardTabPageState extends State<PortForwardTabPage> {
     rustDeskWinManager.setMethodHandler((call, fromWindowId) async {
       debugPrint(
           "[Port Forward] call ${call.method} with args ${call.arguments} from window $fromWindowId");
+      // DreamDesk 受管版：首页的「断开远控」（dd_local_sessions.dart）
+      if (kDdManaged && await ddHandleSessionCall(call, tabController, DdSessionKind.port)) return;
       // for simplify, just replace connectionId
       if (call.method == kWindowEventNewPortForward) {
         final args = jsonDecode(call.arguments);

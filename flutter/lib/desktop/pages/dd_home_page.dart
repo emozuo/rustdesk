@@ -6,6 +6,7 @@
 // RustDesk 原来的首页（DesktopTabPage）照样建起来、只是不显示：远程窗口要它应答主窗口的那套请求（屏幕列表、窗口激活登记等），
 // 设置页也要它登记的东西。
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
@@ -16,6 +17,7 @@ import 'package:flutter_hbb/common.dart' hide Dialog;
 import 'package:flutter_hbb/desktop/pages/desktop_setting_page.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_tab_page.dart';
 import 'package:flutter_hbb/desktop/widgets/dd_icons.dart';
+import 'package:flutter_hbb/desktop/widgets/dd_local_sessions.dart';
 import 'package:flutter_hbb/desktop/widgets/dd_titlebar_common.dart';
 import 'package:flutter_hbb/desktop/widgets/dd_restyle.dart';
 import 'package:flutter_hbb/desktop/widgets/dd_theme.dart';
@@ -25,6 +27,7 @@ import 'package:flutter_hbb/utils/dd_gateway.dart';
 import 'package:get/get.dart';
 import 'package:window_manager/window_manager.dart';
 
+part 'dd_home_controlling.dart';
 part 'dd_home_login.dart';
 part 'dd_home_title_bar.dart';
 part 'dd_home_widgets.dart';
@@ -88,6 +91,17 @@ class _DdHomePageState extends State<DdHomePage> with WidgetsBindingObserver {
   /// 窗口藏起来（最小化、收到托盘）：不刷新；回来时马上刷一次
   bool _hidden = false;
 
+  /// 本机的设备号：列表里这台挂「本机」（连不了自己，点了由 connect() 提示）
+  String _myId = '';
+  late final _LocalDevice _local = _LocalDevice.read();
+
+  /// 本机开着的会话（每秒读一次，变了才重画）：连着的那台挂角标、详情页挂「被控中」
+  List<DdLocalSession> _sessions = const [];
+  Timer? _sessionTimer;
+
+  /// 「被控中」横条展开着（看正在连接的设备）
+  bool _sessionsOpen = false;
+
   static bool _readSignedIn() => bind.mainGetLocalOption(key: 'access_token').isNotEmpty;
 
   @override
@@ -100,13 +114,34 @@ class _DdHomePageState extends State<DdHomePage> with WidgetsBindingObserver {
       if (!_hidden) _fetch();
     });
     WidgetsBinding.instance.addPostFrameCallback((_) => _fetch());
+    bind.mainGetMyId().then((id) {
+      if (mounted && id != _myId) setState(() => _myId = id);
+    });
+    _readSessions();
+    _sessionTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!_hidden) _readSessions();
+    });
   }
+
+  void _readSessions() {
+    final s = ddReadLocalSessions();
+    if (!ddSameSessions(s, _sessions)) setState(() => _sessions = s);
+  }
+
+  List<DdLocalSession> _sessionsOf(DdWs w) => [for (final s in _sessions) if (s.id == w.id) s];
+
+  bool _isSelf(DdWs w) => _myId.isNotEmpty && w.id == _myId;
+
+  /// 网关说「我在别处连着」，其实就是本机连着：照原型写「在线」
+  DdWsState _shownState(DdWs w) =>
+      w.state == DdWsState.mine && _sessions.any((s) => s.id == w.id) ? DdWsState.available : w.state;
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _loginWorker.dispose();
     _timer?.cancel();
+    _sessionTimer?.cancel();
     super.dispose();
   }
 
@@ -306,6 +341,8 @@ class _DdHomePageState extends State<DdHomePage> with WidgetsBindingObserver {
                   dot: w.online ? DdColors.online : null,
                   icon: _OsBadge(os: w.os, online: w.online, size: 20),
                   label: _title(w),
+                  labelSuffix: _isSelf(w) ? DdTag(text: translate('This computer')) : null,
+                  trailing: _sessionsOf(w).isEmpty ? null : _SessionBadge(count: _sessionsOf(w).length),
                   dim: !w.online,
                   selected: _selected == w.id,
                   onTap: () => setState(() => _selected = w.id),
@@ -420,8 +457,9 @@ class _DdHomePageState extends State<DdHomePage> with WidgetsBindingObserver {
           for (final w in _items)
             _DeviceTile(
               ws: w,
-              stateText: _stateText(w.state),
-              stateColor: _stateColor(w.state),
+              stateText: _stateText(_shownState(w)),
+              stateColor: _stateColor(_shownState(w)),
+              self: _isSelf(w),
               onTap: () => setState(() => _selected = w.id),
             ),
         ]),
@@ -443,6 +481,11 @@ class _DdHomePageState extends State<DdHomePage> with WidgetsBindingObserver {
 
   Widget _detail(DdWs w) {
     final on = w.selectable;
+    final self = _isSelf(w);
+    final state = _shownState(w);
+    final sessions = _sessionsOf(w);
+    // 本机：文件传输、终端、端口映射置灰（连不了自己）；「进入桌面」照常，点了由 connect() 提示不能连本机
+    final actionsOn = on && !self;
     final actions = [
       (DdIcon.folderUp, translate('File transfer'), () => _connect(w, fileTransfer: true)),
       (DdIcon.terminal, translate('Terminal'), () => _connect(w, terminal: true)),
@@ -450,12 +493,13 @@ class _DdHomePageState extends State<DdHomePage> with WidgetsBindingObserver {
     ];
     return _page(
       title: Row(children: [
-        _StatePill(text: _stateText(w.state), color: _stateColor(w.state)),
+        _StatePill(text: _stateText(state), color: _stateColor(state)),
         const SizedBox(width: 12),
         // 名字后面灰字写系统，「更多」按钮靠右、浅灰底（照原型）
         Expanded(
           child: Row(children: [
             Flexible(child: _heading(_title(w))),
+            if (self) DdTag(text: translate('This computer'), fontSize: 12),
             if (ddOsShort(w.os).isNotEmpty) ...[
               const SizedBox(width: 12),
               Text(ddOsShort(w.os), style: const TextStyle(fontSize: 13, color: DdColors.ink2)),
@@ -477,10 +521,10 @@ class _DdHomePageState extends State<DdHomePage> with WidgetsBindingObserver {
             for (final (i, a) in actions.indexed)
               PopupMenuItem<int>(
                 value: i,
-                enabled: on,
+                enabled: actionsOn,
                 height: 36,
                 child: Row(children: [
-                  ddIcon(a.$1, color: on ? DdColors.ink : DdColors.ink3),
+                  ddIcon(a.$1, color: actionsOn ? DdColors.ink : DdColors.unavailable),
                   const SizedBox(width: 10),
                   Text(a.$2, style: const TextStyle(fontSize: 14)),
                 ]),
@@ -493,6 +537,16 @@ class _DdHomePageState extends State<DdHomePage> with WidgetsBindingObserver {
       ]),
       child: SingleChildScrollView(
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          if (sessions.isNotEmpty) ...[
+            _ControlBanner(
+              sessions: sessions,
+              open: _sessionsOpen,
+              onToggle: () => setState(() => _sessionsOpen = !_sessionsOpen),
+              local: _local,
+              account: gFFI.userModel.userName.value,
+            ),
+            const SizedBox(height: 18),
+          ],
           // 一张卡片：上面是「进入桌面」（能用专业模式时自动是专业模式），下面一条白色的操作栏。
           // 白底用 Material：操作栏格子的悬停底色画在最近的 Material 上，白底是普通 Container 的话会被它挡住、看不见
           Container(
@@ -504,20 +558,23 @@ class _DdHomePageState extends State<DdHomePage> with WidgetsBindingObserver {
               child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
               SizedBox(
                 height: 220,
-                child: _EnterDesktop(
-                  label: on ? translate('Enter desktop') : _stateText(w.state),
-                  arrow: on,
-                  os: w.os,
-                  online: w.online,
-                  onTap: on ? () => _connect(w) : null,
-                ),
+                // 本机开着到这台的远程控制：不再是「进入桌面」，改成把那个远程窗口提到前面（只开着文件传输等时照常）
+                child: sessions.any((s) => s.kind == DdSessionKind.remote)
+                    ? _ControllingHero(os: w.os, onShow: () => ddShowSessionWindow(w.id))
+                    : _EnterDesktop(
+                        label: on ? translate('Enter desktop') : _stateText(state),
+                        arrow: on,
+                        os: w.os,
+                        online: w.online,
+                        onTap: on ? () => _connect(w) : null,
+                      ),
               ),
               SizedBox(
                 height: 52,
                 child: Row(children: [
                   for (final (i, a) in actions.indexed) ...[
                     if (i > 0) Container(width: 1, height: 18, color: DdColors.line),
-                    Expanded(child: _ActionCell(icon: a.$1, label: a.$2, onTap: on ? a.$3 : null)),
+                    Expanded(child: _ActionCell(icon: a.$1, label: a.$2, onTap: actionsOn ? a.$3 : null)),
                   ],
                 ]),
               ),

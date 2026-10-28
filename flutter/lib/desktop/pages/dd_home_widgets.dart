@@ -5,6 +5,8 @@ part of 'dd_home_page.dart';
 class _SideRow extends StatelessWidget {
   final Widget icon;
   final String label;
+  /// 紧跟在名字后面的（「本机」标签）；[trailing] 靠右
+  final Widget? labelSuffix;
   final Widget? trailing;
   final Color? dot;
   final bool selected;
@@ -17,6 +19,7 @@ class _SideRow extends StatelessWidget {
   const _SideRow(
       {required this.icon,
       required this.label,
+      this.labelSuffix,
       this.trailing,
       this.dot,
       this.selected = false,
@@ -61,9 +64,14 @@ class _SideRow extends StatelessWidget {
                   icon,
                   const SizedBox(width: 12),
                   Expanded(
-                    child: Text(label,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(fontSize: 14, color: dim ? DdColors.ink3 : DdColors.ink)),
+                    child: Row(children: [
+                      Flexible(
+                        child: Text(label,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(fontSize: 14, color: dim ? DdColors.ink3 : DdColors.ink)),
+                      ),
+                      if (labelSuffix != null) labelSuffix!,
+                    ]),
                   ),
                   if (trailing != null) trailing!,
                 ]),
@@ -347,14 +355,18 @@ class _ActionCell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = onTap == null ? DdColors.ink3 : DdColors.ink;
+    // 用不了（离线、别人在用、本机）是 UU 的灰，也没有悬停底色（InkWell 没有 onTap 时不画）
+    final color = onTap == null ? DdColors.unavailable : DdColors.ink;
     return InkWell(
       onTap: onTap,
-      child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-        ddIcon(icon, color: color),
-        const SizedBox(width: 8),
-        Text(label, style: TextStyle(fontSize: 14, color: color)),
-      ]),
+      // 撑满这一格（操作栏整行高）：悬停底色占满高度，下沿跟着卡片的圆角裁掉
+      child: SizedBox.expand(
+        child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+          ddIcon(icon, color: color),
+          const SizedBox(width: 8),
+          Text(label, style: TextStyle(fontSize: 14, color: color)),
+        ]),
+      ),
     );
   }
 }
@@ -448,8 +460,11 @@ class _DeviceTile extends StatelessWidget {
   final DdWs ws;
   final String stateText;
   final Color stateColor;
+  /// 这台就是本机：名字后面挂「本机」
+  final bool self;
   final VoidCallback onTap;
-  const _DeviceTile({required this.ws, required this.stateText, required this.stateColor, required this.onTap});
+  const _DeviceTile(
+      {required this.ws, required this.stateText, required this.stateColor, required this.self, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -478,9 +493,15 @@ class _DeviceTile extends StatelessWidget {
                 const SizedBox(width: 12),
                 Expanded(
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text(_title(ws),
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: ws.online ? DdColors.ink : DdColors.ink3)),
+                    Row(children: [
+                      Flexible(
+                        child: Text(_title(ws),
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                                fontSize: 14, fontWeight: FontWeight.w600, color: ws.online ? DdColors.ink : DdColors.ink3)),
+                      ),
+                      if (self) DdTag(text: translate('This computer')),
+                    ]),
                     const SizedBox(height: 2),
                     Row(children: [
                       DdDot(color: stateColor),

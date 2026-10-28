@@ -2782,6 +2782,11 @@ pub fn main_get_common_sync(key: String) -> SyncReturn<String> {
     if key == "dd-managed" {
         return SyncReturn("Y".to_owned());
     }
+    // DreamDesk：主窗口首页的「本机正开着的会话」（src/ddpro/sessions.rs）
+    #[cfg(feature = "dd-pro")]
+    if key == "dd-sessions" {
+        return SyncReturn(crate::ddpro::sessions::list());
+    }
     if let Some(args) = key.strip_prefix("resolve-api-server:") {
         let response = match serde_json::from_str::<(String, String)>(args) {
             Ok((api, custom)) => serde_json::json!({"url": crate::get_api_server(api, custom)}),

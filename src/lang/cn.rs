@@ -992,5 +992,15 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("This screen does not support HDR", "这块屏不支持"),
         ("Confirm restart remote device", "确认重启远程电脑"),
         ("The desktop does not support locking the pointer", "桌面不支持锁定指针"),
+        ("Disconnect all remote controls", "断开所有远控"),
+        ("Disconnect remote control", "断开远控"),
+        ("Connected devices", "正在连接的设备"),
+        ("Remote control", "远程控制"),
+        ("Connection time", "连接时长"),
+        ("This computer", "本机"),
+        ("Being controlled", "被控中"),
+        ("This computer is controlling it", "本机正在控制此电脑"),
+        ("Remote connection established", "已建立远程连接"),
+        ("Show remote window", "显示远控窗口"),
     ].iter().cloned().collect();
 }

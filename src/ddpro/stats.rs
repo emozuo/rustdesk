@@ -54,12 +54,13 @@ impl Peer {
 /// 这次连接连了多少秒；还没连上为 0（专业窗口的悬浮球状态块；通用窗口经 [`query`] 读同一个）
 #[cfg(all(feature = "flutter", target_os = "linux"))]
 pub fn connected_secs<T: InvokeUiSession>(session: &Session<T>) -> u32 {
-    PEERS
-        .lock()
-        .unwrap()
-        .get(&session.get_id())
-        .and_then(Peer::connected_secs)
-        .map_or(0, |s| s.min(u32::MAX as u64) as u32)
+    connected_secs_of(&session.get_id()).map_or(0, |s| s.min(u32::MAX as u64) as u32)
+}
+
+/// 按对端设备号查这次连接连了多少秒（主窗口首页的会话列表用，见 [`super::sessions`]）；没连上过为空
+#[cfg(feature = "flutter")]
+pub(super) fn connected_secs_of(id: &str) -> Option<u64> {
+    PEERS.lock().unwrap().get(id).and_then(Peer::connected_secs)
 }
 
 /// 被控端报的这块屏的采集方式、是不是硬编
