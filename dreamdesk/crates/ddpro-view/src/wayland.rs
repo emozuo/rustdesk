@@ -7,7 +7,7 @@
 use crate::hdr::{ColorData, HasColor};
 use ddpro_dec::Exported;
 use sctk::{
-    compositor::{CompositorHandler, CompositorState},
+    compositor::{CompositorHandler, CompositorState, Region},
     delegate_compositor, delegate_dmabuf, delegate_output, delegate_pointer, delegate_presentation_time,
     delegate_registry, delegate_seat, delegate_shm, delegate_subcompositor, delegate_xdg_shell, delegate_xdg_window,
     dmabuf::{DmabufFeedback, DmabufHandler, DmabufState},
@@ -161,7 +161,7 @@ pub enum Event {
     PointerMotion { x: f64, y: f64 },
     /// 鼠标按键（Linux BTN_* 码），带按下时的窗口坐标
     PointerButton { button: u32, down: bool, x: f64, y: f64 },
-    /// 指针离开窗口或某个叠加图层。按着键时合成器把指针抢走（比如弹出系统对话框）也是这个，之后收不到那次松开
+    /// 指针离开窗口（叠加图层不接收指针）。按着键时合成器把指针抢走（比如弹出系统对话框）也是这个，之后收不到那次松开
     PointerLeave,
     /// 滚轮格数（往下 / 往右为正，和 Wayland 一致）
     Wheel { dx: i32, dy: i32 },
@@ -229,7 +229,7 @@ struct Commit {
 struct State {
     registry: RegistryState,
     outputs: OutputState,
-    _compositor: CompositorState,
+    compositor: CompositorState,
     _xdg: XdgShell,
     dmabuf: DmabufState,
     presentation: PresentationTimeState,
@@ -294,16 +294,9 @@ impl HasColor for State {
 }
 
 impl State {
-    /// 鼠标事件发生在哪：窗口本身，或某块叠加图层（换算回窗口坐标）。别的表面（光标）返回 None。
-    fn window_pos(&self, surface: &wl_surface::WlSurface, (x, y): (f64, f64)) -> Option<(f64, f64)> {
-        if surface == self.window.wl_surface() {
-            return Some((x, y));
-        }
-        self.layers
-            .iter()
-            .flatten()
-            .find(|l| &l.surface == surface)
-            .map(|l| (x + l.pos.0 as f64, y + l.pos.1 as f64))
+    /// 鼠标事件发生在哪：窗口本身（叠加图层不接收指针，见 [`Window::set_layer`]，事件坐标就是窗口坐标）。别的表面（光标）返回 None。
+    fn window_pos(&self, surface: &wl_surface::WlSurface, pos: (f64, f64)) -> Option<(f64, f64)> {
+        (surface == self.window.wl_surface()).then_some(pos)
     }
 }
 
@@ -389,7 +382,7 @@ impl Window {
             state: State {
                 registry: RegistryState::new(&globals),
                 outputs: OutputState::new(&globals, &qh),
-                _compositor: compositor,
+                compositor,
                 _xdg: xdg,
                 dmabuf,
                 presentation,
@@ -505,6 +498,11 @@ impl Window {
         if s.layers[index].is_none() {
             let (subsurface, surface) = sub.create_subsurface(s.window.wl_surface().clone(), &qh);
             subsurface.set_desync();
+            // 叠加图层不接收指针：设成空输入区域，指针事件一律落在窗口主表面、坐标恒为窗口坐标。图层要是接收，事件坐标是相对
+            // 图层的，换算要加上图层的位置，而拖悬浮球时图层每帧都在挪、新位置要等父表面提交才生效，路上的旧事件会按新位置换算，
+            // 算出的指针位置往前冲一截（滑得快时球越跳越远、停住不跟）；图层滑到静止的指针下面时合成器还会补发离开 / 进入
+            let none = Region::new(&s.compositor).map_err(err("create an empty input region"))?;
+            surface.set_input_region(Some(none.wl_region()));
             let pool = SlotPool::new(w * h * 4, &s.shm).map_err(err("create an overlay buffer pool"))?;
             s.layers[index] = Some(Layer {
                 surface,
